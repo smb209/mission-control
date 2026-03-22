@@ -164,11 +164,6 @@ function checkDb(): DbHealth {
 
 function checkGateway(): GatewayHealth {
   try {
-    const hasUrl = !!process.env.OPENCLAW_GATEWAY_URL || !!process.env.OPENCLAW_GATEWAY_TOKEN;
-    if (!hasUrl && !process.env.OPENCLAW_GATEWAY_TOKEN) {
-      // Check if defaults would work (client defaults to ws://127.0.0.1:18789)
-      // Still report as configured since the client has defaults
-    }
     const client = getOpenClawClient();
     const connected = client.isConnected();
     return { status: connected ? 'ok' : 'error', connected };
@@ -253,9 +248,10 @@ function checkResearch(): ResearchHealth {
       completed_at: string | null;
       status: string | null;
     }>(
-      `SELECT product_id, current_phase, started_at, completed_at, status
-       FROM research_cycles
-       WHERE id IN (SELECT MAX(id) FROM research_cycles GROUP BY product_id)`
+      `SELECT rc.product_id, rc.current_phase, rc.started_at, rc.completed_at, rc.status
+       FROM research_cycles rc
+       INNER JOIN (SELECT product_id, MAX(started_at) as max_start FROM research_cycles GROUP BY product_id) latest
+       ON rc.product_id = latest.product_id AND rc.started_at = latest.max_start`
     );
     const products: ResearchProductHealth[] = rows.map((r) => ({
       product_id: r.product_id,
