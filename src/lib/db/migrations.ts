@@ -1471,6 +1471,37 @@ const migrations: Migration[] = [
         console.log('[Migration 025] Added batch_review_threshold to products');
       }
     }
+  },
+  {
+    id: '026',
+    name: 'add_rollback_history',
+    up: (db) => {
+      console.log('[Migration 026] Adding rollback history table...');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rollback_history (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id),
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('health_check', 'ci_failure', 'manual')),
+          trigger_details TEXT NOT NULL,
+          merged_pr_url TEXT NOT NULL,
+          merged_commit_sha TEXT NOT NULL,
+          revert_pr_url TEXT,
+          revert_pr_status TEXT NOT NULL DEFAULT 'pending' CHECK (revert_pr_status IN ('pending', 'created', 'merged', 'failed')),
+          previous_automation_tier TEXT,
+          acknowledged INTEGER NOT NULL DEFAULT 0,
+          acknowledged_at TEXT,
+          acknowledged_by TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec('CREATE INDEX IF NOT EXISTS idx_rollback_history_product ON rollback_history(product_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_rollback_history_unack ON rollback_history(acknowledged, product_id)');
+
+      console.log('[Migration 026] Rollback history table created');
+    }
   }
 ];
 
