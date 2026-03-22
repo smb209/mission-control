@@ -14,6 +14,7 @@
     "db:reset": "rm -f mission-control.db mission-control.db-* && npm run db:seed"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
     "@hello-pangea/dnd": "^17.0.0",
     "better-sqlite3": "^12.6.2",
     "clsx": "^2.1.1",

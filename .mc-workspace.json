@@ -1,0 +1,12 @@
+{
+  "taskId": "5279c9e5-c1de-4d59-807c-118f2a5224ed",
+  "productId": "c3b16bed-2c2c-4da5-a00f-433668df00d8",
+  "createdAt": "2026-03-22T03:43:18.361Z",
+  "strategy": "worktree",
+  "branch": "autopilot/database-backup-api-with-scheduled-snapshots",
+  "baseBranch": "main",
+  "baseCommit": "28cdabf9c935fcc020785be90bca4fdb99a55e5d",
+  "status": "active",
+  "agentId": "dac83b25-387d-4c5b-baa4-108b80580df6",
+  "isolatedPort": 4200
+}
