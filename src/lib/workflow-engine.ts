@@ -262,7 +262,14 @@ export async function handleStageTransition(
 
     if (!dispatchRes.ok) {
       const errorText = await dispatchRes.text();
-      const error = `Auto-dispatch to ${roleAgent.name} failed (${dispatchRes.status}): ${errorText}`;
+      // Try to pull a clean message out of the JSON body; many routes return
+      // { error: "..." }. Fall back to the raw text if it isn't JSON.
+      let parsedMessage = errorText;
+      try {
+        const parsed = JSON.parse(errorText);
+        if (parsed?.error) parsedMessage = parsed.error;
+      } catch { /* not JSON — use raw */ }
+      const error = `Dispatch to ${roleAgent.name} failed (HTTP ${dispatchRes.status}): ${parsedMessage}`;
       console.error(`[Workflow] ${error}`);
       run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [error, now, taskId]);
       return { success: false, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
@@ -271,8 +278,17 @@ export async function handleStageTransition(
     console.log(`[Workflow] Dispatched task ${taskId} to ${roleAgent.name} (role: ${targetStage.role})`);
     return { success: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
   } catch (err) {
-    const error = `Dispatch error: ${(err as Error).message}`;
-    console.error(`[Workflow] ${error}`);
+    // Node's global fetch throws `TypeError: fetch failed` and stashes the
+    // real reason on `err.cause` (ECONNREFUSED, DNS, TLS, timeout, etc).
+    // Without this the operator sees "Dispatch error: fetch failed" and has
+    // no idea whether the gateway is down, the MC URL is wrong, or the
+    // internal route is broken. Surface the cause so the card's Blocked
+    // badge can actually diagnose the problem.
+    const e = err as Error & { cause?: { code?: string; message?: string } };
+    const causeMsg = e.cause?.message || e.cause?.code;
+    const reason = causeMsg ? `${e.message} (${causeMsg})` : e.message;
+    const error = `Dispatch error: ${reason}`;
+    console.error(`[Workflow] ${error}`, e.cause || '');
     run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [error, now, taskId]);
     return { success: false, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
   }
