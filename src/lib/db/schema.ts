@@ -736,6 +736,29 @@ CREATE TABLE IF NOT EXISTS skill_reports (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Debug console: opt-in capture of MC↔agent traffic (dispatch payloads).
+-- Gated by debug_config.collection_enabled; operator toggles from /debug UI.
+CREATE TABLE IF NOT EXISTS debug_events (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  event_type TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('outbound', 'inbound', 'internal')),
+  task_id TEXT,
+  agent_id TEXT,
+  session_key TEXT,
+  duration_ms INTEGER,
+  request_body TEXT,
+  response_body TEXT,
+  error TEXT,
+  metadata TEXT
+);
+
+CREATE TABLE IF NOT EXISTS debug_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  collection_enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
@@ -798,4 +821,7 @@ CREATE INDEX IF NOT EXISTS idx_user_task_reads_user_task ON user_task_reads(user
 CREATE INDEX IF NOT EXISTS idx_product_skills_product ON product_skills(product_id, skill_type, status);
 CREATE INDEX IF NOT EXISTS idx_product_skills_confidence ON product_skills(confidence DESC);
 CREATE INDEX IF NOT EXISTS idx_skill_reports_skill ON skill_reports(skill_id);
+CREATE INDEX IF NOT EXISTS idx_debug_events_created ON debug_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_debug_events_task ON debug_events(task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_debug_events_agent ON debug_events(agent_id, created_at DESC);
 `;

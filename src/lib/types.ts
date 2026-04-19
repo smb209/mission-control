@@ -851,7 +851,10 @@ export type SSEEventType =
   | 'ab_test_cancelled'
   | 'skill_created'
   | 'skill_promoted'
-  | 'skills_extracted';
+  | 'skills_extracted'
+  | 'debug_event_logged'
+  | 'debug_collection_toggled'
+  | 'debug_events_cleared';
 
 export interface SSEEvent {
   type: SSEEventType;

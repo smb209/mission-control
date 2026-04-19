@@ -10,6 +10,7 @@ import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { pickDynamicAgent } from '@/lib/task-governance';
 import { buildCheckpointContext, saveCheckpoint, getLatestCheckpoint } from '@/lib/checkpoint';
 import { clearStallFlag } from '@/lib/stall-detection';
+import { logDebugEvent } from '@/lib/debug-log';
 import { formatMailForDispatch } from '@/lib/mailbox';
 import { getPendingNotesForDispatch } from '@/lib/task-notes';
 import { createTaskWorkspace, determineIsolationStrategy } from '@/lib/workspace-isolation';
@@ -440,11 +441,42 @@ If you need help or clarification, ask the orchestrator.`;
       // Format: {prefix}{openclaw_session_id} where prefix defaults to 'agent:main:'
       const prefix = agent.session_key_prefix || 'agent:main:';
       const sessionKey = `${prefix}${session.openclaw_session_id}`;
-      await client.call('chat.send', {
-        sessionKey,
-        message: finalMessage,
-        idempotencyKey: `dispatch-${task.id}-${Date.now()}`
-      });
+      const idempotencyKey = `dispatch-${task.id}-${Date.now()}`;
+      const chatSendStart = Date.now();
+      let chatSendResponse: unknown;
+      let chatSendError: string | null = null;
+      try {
+        chatSendResponse = await client.call('chat.send', {
+          sessionKey,
+          message: finalMessage,
+          idempotencyKey,
+        });
+      } catch (err) {
+        chatSendError = (err as Error).message;
+        throw err; // preserve existing error-path behavior below
+      } finally {
+        // Debug console capture. No-op unless collection is enabled. Stores
+        // the full dispatch payload so operators can see exactly what the
+        // agent was asked to do — including injected knowledge, checkpoint
+        // context, and planning spec.
+        logDebugEvent({
+          type: 'chat.send',
+          direction: 'outbound',
+          taskId: task.id,
+          agentId: agent.id,
+          sessionKey,
+          durationMs: Date.now() - chatSendStart,
+          requestBody: { sessionKey, message: finalMessage, idempotencyKey },
+          responseBody: chatSendResponse,
+          error: chatSendError,
+          metadata: {
+            agent_name: agent.name,
+            agent_role: (agent as { role?: string }).role ?? null,
+            message_length: finalMessage.length,
+            task_status: task.status,
+          },
+        });
+      }
 
       // Only move to in_progress for builder dispatch (task is in 'assigned' status)
       // For tester/reviewer/verifier, the task status is already correct
