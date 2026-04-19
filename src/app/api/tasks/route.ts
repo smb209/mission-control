@@ -22,6 +22,8 @@ export async function GET(request: NextRequest) {
         t.*,
         aa.name as assigned_agent_name,
         aa.avatar_emoji as assigned_agent_emoji,
+        aa.status as assigned_agent_status,
+        aa.role as assigned_agent_role,
         ca.name as created_by_agent_name
       FROM tasks t
       LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
@@ -56,9 +58,17 @@ export async function GET(request: NextRequest) {
 
     sql += ' ORDER BY t.created_at DESC';
 
-    const tasks = queryAll<Task & { assigned_agent_name?: string; assigned_agent_emoji?: string; created_by_agent_name?: string }>(sql, params);
+    const tasks = queryAll<Task & {
+      assigned_agent_name?: string;
+      assigned_agent_emoji?: string;
+      assigned_agent_status?: string;
+      assigned_agent_role?: string;
+      created_by_agent_name?: string;
+    }>(sql, params);
 
-    // Transform to include nested agent info
+    // Transform to include nested agent info. `status` and `role` are needed
+    // client-side so the Blocked badge can distinguish "agent went offline
+    // mid-task" from other block conditions — see src/lib/blocked-state.ts.
     const transformedTasks = tasks.map((task) => ({
       ...task,
       assigned_agent: task.assigned_agent_id
@@ -66,6 +76,8 @@ export async function GET(request: NextRequest) {
             id: task.assigned_agent_id,
             name: task.assigned_agent_name,
             avatar_emoji: task.assigned_agent_emoji,
+            status: task.assigned_agent_status,
+            role: task.assigned_agent_role,
           }
         : undefined,
     }));

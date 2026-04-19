@@ -8,6 +8,7 @@ import { getConfig } from '@/lib/config';
 import { useUnreadCounts } from '@/hooks/useUnreadCounts';
 import type { Task, TaskStatus } from '@/lib/types';
 import { TaskModal } from './TaskModal';
+import { BlockedBadge } from './BlockedBadge';
 import { formatDistanceToNow } from 'date-fns';
 
 interface MissionQueueProps {
@@ -462,36 +463,17 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
           </div>
         )}
 
-        {isAssigned && dispatchError && (
-          <div className={`flex items-start gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-red-500/10 rounded-md border border-red-500/30`}>
-            <div className="w-2 h-2 bg-red-400 rounded-full mt-1 flex-shrink-0" />
-            <span className="text-xs text-red-300">Assigned, but blocked: {dispatchError}</span>
-          </div>
-        )}
+        {/* Single source of truth for all block / queue / offline-agent
+            indicators. Previously spread across four render blocks that
+            each read a different slice of task state — see
+            src/lib/blocked-state.ts for the consolidated logic. */}
+        <BlockedBadge task={task} portraitMode={portraitMode} />
 
+        {/* The dedicated "Assigned and validating" / "Stuck in assigned"
+            badge still shows a retry-dispatch button, so keep it when there
+            is no structured block reason yet. */}
         {isAssigned && !dispatchError && (
           <AssignedStatusBadge task={task} portraitMode={portraitMode} />
-        )}
-
-        {task.status === 'inbox' && !task.assigned_agent_id && (
-          <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-amber-500/10 rounded-md border border-amber-500/30`}>
-            <div className="w-2 h-2 bg-amber-400 rounded-full flex-shrink-0" />
-            <span className="text-xs text-amber-200">Needs agent — assign to start</span>
-          </div>
-        )}
-
-        {['testing', 'verification'].includes(task.status) && dispatchError && (
-          <div className={`flex items-start gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-red-500/10 rounded-md border border-red-500/30`}>
-            <div className="w-2 h-2 bg-red-400 rounded-full mt-1 flex-shrink-0" />
-            <span className="text-xs text-red-300">{dispatchError}</span>
-          </div>
-        )}
-
-        {task.status === 'review' && !dispatchError && (
-          <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-cyan-500/10 rounded-md border border-cyan-500/30`}>
-            <div className="w-2 h-2 bg-cyan-400 rounded-full flex-shrink-0" />
-            <span className="text-xs text-cyan-200">In queue — waiting for verification</span>
-          </div>
         )}
 
         {task.assigned_agent && (
