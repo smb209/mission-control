@@ -1690,6 +1690,46 @@ const migrations: Migration[] = [
       db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN suggested_role TEXT`);
       console.log('[Migration 030] convoy_subtasks.suggested_role added');
     }
+  },
+  {
+    id: '031',
+    name: 'add_debug_console_tables',
+    up: (db) => {
+      console.log('[Migration 031] Adding debug_events + debug_config tables...');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS debug_events (
+          id TEXT PRIMARY KEY,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          event_type TEXT NOT NULL,
+          direction TEXT NOT NULL CHECK (direction IN ('outbound', 'inbound', 'internal')),
+          task_id TEXT,
+          agent_id TEXT,
+          session_key TEXT,
+          duration_ms INTEGER,
+          request_body TEXT,
+          response_body TEXT,
+          error TEXT,
+          metadata TEXT
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_debug_events_created ON debug_events(created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_debug_events_task ON debug_events(task_id, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_debug_events_agent ON debug_events(agent_id, created_at DESC)`);
+
+      // Single-row config table. Enforced via CHECK so app code doesn't have
+      // to worry about multi-row races — there is exactly one row at id=1.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS debug_config (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          collection_enabled INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`INSERT OR IGNORE INTO debug_config (id, collection_enabled) VALUES (1, 0)`);
+
+      console.log('[Migration 031] debug_events + debug_config created (collection_enabled=0 by default)');
+    }
   }
 ];
 

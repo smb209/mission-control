@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle, Activity, Rocket } from 'lucide-react';
+import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle, Activity, Rocket, Bug } from 'lucide-react';
 import Link from 'next/link';
 import type { WorkspaceStats } from '@/lib/types';
 
@@ -63,6 +63,14 @@ export function WorkspaceDashboard() {
               >
                 <Activity className="w-4 h-4" />
                 Activity Dashboard
+              </Link>
+              <Link
+                href="/debug"
+                className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm"
+                title="Verbose debugging — capture MC↔agent traffic"
+              >
+                <Bug className="w-4 h-4" />
+                Debug
               </Link>
               <button
                 onClick={() => setShowCreateModal(true)}
