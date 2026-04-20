@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   serverExternalPackages: ['better-sqlite3', '@aws-sdk/client-s3'],
+  allowedDevOrigins: ['192.168.50.95', '*.local'],
   async headers() {
     return [
       {
