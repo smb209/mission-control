@@ -31,8 +31,20 @@ interface PlanningState {
   spec?: {
     title: string;
     summary: string;
-    deliverables: string[];
-    success_criteria: string[];
+    // Old planner output is string[]; new structured output is objects. The
+    // renderer below accepts both — old in-flight tasks still display.
+    deliverables: Array<string | {
+      id?: string;
+      title: string;
+      kind?: 'file' | 'behavior' | 'artifact';
+      path_pattern?: string;
+      acceptance?: string;
+    }>;
+    success_criteria: Array<string | {
+      id?: string;
+      assertion: string;
+      how_to_test?: string;
+    }>;
     constraints: Record<string, unknown>;
   };
   agents?: Array<{
@@ -539,21 +551,39 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
           {state.spec.deliverables?.length > 0 && (
             <div className="mb-3">
               <h4 className="text-sm font-medium mb-1">Deliverables:</h4>
-              <ul className="list-disc list-inside text-sm text-mc-text-secondary">
-                {state.spec.deliverables.map((d, i) => (
-                  <li key={i}>{d}</li>
-                ))}
+              <ul className="list-disc list-inside text-sm text-mc-text-secondary space-y-1">
+                {state.spec.deliverables.map((d, i) => {
+                  if (typeof d === 'string') {
+                    return <li key={i}>{d}</li>;
+                  }
+                  return (
+                    <li key={d.id || i}>
+                      <span className="font-medium text-mc-text">{d.title}</span>
+                      {d.kind ? <span className="text-xs text-mc-text-tertiary"> ({d.kind})</span> : null}
+                      {d.path_pattern ? <code className="ml-1 text-xs text-mc-accent">{d.path_pattern}</code> : null}
+                      {d.acceptance ? <div className="text-xs ml-5 text-mc-text-tertiary">{d.acceptance}</div> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
-          
+
           {state.spec.success_criteria?.length > 0 && (
             <div>
               <h4 className="text-sm font-medium mb-1">Success Criteria:</h4>
-              <ul className="list-disc list-inside text-sm text-mc-text-secondary">
-                {state.spec.success_criteria.map((c, i) => (
-                  <li key={i}>{c}</li>
-                ))}
+              <ul className="list-disc list-inside text-sm text-mc-text-secondary space-y-1">
+                {state.spec.success_criteria.map((c, i) => {
+                  if (typeof c === 'string') {
+                    return <li key={i}>{c}</li>;
+                  }
+                  return (
+                    <li key={c.id || i}>
+                      <span>{c.assertion}</span>
+                      {c.how_to_test ? <div className="text-xs ml-5 text-mc-text-tertiary">Test: {c.how_to_test}</div> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

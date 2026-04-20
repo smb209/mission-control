@@ -15,6 +15,7 @@ import { logDebugEvent } from '@/lib/debug-log';
 import { formatMailForDispatch } from '@/lib/mailbox';
 import { getPendingNotesForDispatch } from '@/lib/task-notes';
 import { createTaskWorkspace, determineIsolationStrategy } from '@/lib/workspace-isolation';
+import { parsePlanningSpec } from '@/lib/planning-spec';
 import type { Task, Agent, Product, OpenClawSession, WorkflowStage, TaskImage } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -238,7 +239,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Parse planning_spec and planning_agents if present (stored as JSON text on the task row)
     const rawTask = task as Task & { assigned_agent_name?: string; workspace_id: string; planning_spec?: string; planning_agents?: string };
     let planningSpecSection = '';
+    let deliverablesChecklistSection = '';
+    let successCriteriaChecklistSection = '';
     let agentInstructionsSection = '';
+
+    // Normalize the planner's output so dispatch can build structured
+    // checklists for the builder (deliverables) and tester (criteria),
+    // regardless of whether the planner emitted the old string[] shape or
+    // the new structured one.
+    const normalizedSpec = parsePlanningSpec(rawTask.planning_spec);
 
     if (rawTask.planning_spec) {
       try {
@@ -250,6 +259,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         // If not valid JSON, treat as plain text
         planningSpecSection = `\n---\n**📋 PLANNING SPECIFICATION:**\n${rawTask.planning_spec}\n`;
       }
+    }
+
+    if (normalizedSpec && normalizedSpec.deliverables.length > 0) {
+      const lines = normalizedSpec.deliverables.map(d => {
+        const pathPart = d.path_pattern ? ` → \`${d.path_pattern}\`` : '';
+        return `- [ ] **\`${d.id}\`** (${d.kind})${pathPart}\n      - Title: ${d.title}\n      - Acceptance: ${d.acceptance}`;
+      }).join('\n');
+      deliverablesChecklistSection = `\n---\n**✅ DELIVERABLES CHECKLIST — every entry must be produced and registered by id:**\n${lines}\n`;
+    }
+
+    if (normalizedSpec && normalizedSpec.success_criteria.length > 0) {
+      const lines = normalizedSpec.success_criteria.map(c =>
+        `- [ ] **\`${c.id}\`**: ${c.assertion}\n      - How to test: ${c.how_to_test}`
+      ).join('\n');
+      successCriteriaChecklistSection = `\n---\n**🎯 SUCCESS CRITERIA — each must be verified as pass/fail:**\n${lines}\n`;
     }
 
     if (rawTask.planning_agents) {
@@ -416,7 +440,64 @@ ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
 When complete, reply with:
 \`TASK_COMPLETE: [summary of what was delegated, to whom, and the aggregate outcome]\``;
     } else if (isBuilder) {
-      completionInstructions = `**IMPORTANT:** After completing work, you MUST make these three calls in order — all require the Authorization header:
+      // Build the builder's completion block. When a structured spec exists,
+      // require one deliverable POST per spec id (the evidence gate enforces
+      // this server-side) and instruct an explicit self-check before the
+      // status transition. When no spec exists, fall back to the legacy
+      // single-deliverable flow so ad-hoc tasks still work.
+      const hasStructuredSpec = Boolean(normalizedSpec && normalizedSpec.deliverables.length > 0);
+
+      if (hasStructuredSpec && normalizedSpec) {
+        const exampleId = normalizedSpec.deliverables[0].id;
+        const examplePath = normalizedSpec.deliverables[0].path_pattern || `${deliverablesDir}/<filename>`;
+        const fileIds = normalizedSpec.deliverables.filter(d => d.kind === 'file').map(d => d.id);
+        const allIds = normalizedSpec.deliverables.map(d => d.id);
+        const fileCheckHint = fileIds.length > 0
+          ? `For each \`kind: "file"\` deliverable above (${fileIds.map(id => `\`${id}\``).join(', ')}), \`ls -la\` the \`path_pattern\` under ${deliverablesDir}. If any file is missing, FIX IT before transitioning — the evidence gate will reject the status PATCH otherwise.`
+          : 'No file-kind deliverables — verify behavior deliverables by manually reproducing each acceptance statement.';
+
+        completionInstructions = `**✅ DEFINITION OF DONE** — you cannot transition this task until EVERY entry in the checklist above is registered.
+
+**Step 1 — produce every deliverable in the checklist.** Do not ship a skeleton referencing files that don't exist. If the checklist lists \`styles.css\` and \`app.js\` as separate entries, they must each exist as separate files under the deliverables dir with real content.
+
+**Step 2 — self-check before transitioning:**
+${fileCheckHint}
+
+If your output includes an HTML entry point, grep it for every \`href=\`/\`src=\` reference and confirm each target file actually exists. A page that references a missing \`app.js\` is not shippable.
+
+**Step 3 — register one deliverable per spec id** (the Authorization header is required on every call):
+
+\`\`\`bash
+# Repeat this POST for each deliverables[] entry in the checklist, using the matching spec_deliverable_id.
+curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"deliverable_type":"file","title":"<human name>","path":"${examplePath}","spec_deliverable_id":"${exampleId}"}'
+\`\`\`
+
+Expected spec_deliverable_id values: ${allIds.map(id => `\`${id}\``).join(', ')}
+
+**Step 4 — log a completion activity:**
+
+\`\`\`bash
+curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"activity_type":"completed","message":"<what you built — one line>"}'
+\`\`\`
+
+**Step 5 — transition status.** If this returns HTTP 400 with "missing: <ids>", you're missing deliverables. Produce them and retry — do NOT try to force the transition.
+
+\`\`\`bash
+curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"status":"${nextStatus}"}'
+\`\`\`
+
+When complete, reply with:
+\`TASK_COMPLETE: [brief summary — which deliverables you registered]\``;
+      } else {
+        // Legacy / unplanned task path — evidence gate only enforces the
+        // baseline bar (1 deliverable + 1 activity).
+        completionInstructions = `**IMPORTANT:** After completing work, you MUST make these three calls in order — all require the Authorization header:
 
 \`\`\`bash
 # 1. Register deliverable
@@ -438,13 +519,39 @@ ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
 
 When complete, reply with:
 \`TASK_COMPLETE: [brief summary of what you did]\``;
+      }
     } else if (isTester) {
-      completionInstructions = `**YOUR ROLE: TESTER** — Test the deliverables for this task.
+      // Testers get the success_criteria list as a pass/fail checklist — this
+      // is the difference between "I glanced at the deliverable" and "I
+      // actually verified each assertion".
+      const hasCriteria = Boolean(normalizedSpec && normalizedSpec.success_criteria.length > 0);
+      const criteriaGuidance = hasCriteria && normalizedSpec
+        ? `\n**Your job: verify each success criterion in the checklist above.** For each one:
+1. Run the \`how_to_test\` step.
+2. Record the result (pass or fail) with the criterion's id.
 
-Review the output directory for deliverables and run any applicable tests.
+Do NOT pass the stage unless every criterion passes. "Looks good to me" is not verification.
 
-**If tests PASS** — all calls require the Authorization header:
+**When you pass all criteria:**
+\`\`\`bash
+curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"activity_type":"completed","message":"All ${normalizedSpec.success_criteria.length} success criteria passed: [<sc-1> ok; <sc-2> ok; ...]"}'
 
+curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"status":"${nextStatus}"}'
+\`\`\`
+
+**When any criterion fails** — name the failing ids explicitly so the builder knows what to fix:
+\`\`\`bash
+curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"reason":"Failed criteria: <sc-id1>: <what you observed>; <sc-id2>: <what you observed>. Builder must address each named criterion."}'
+\`\`\``
+        : `\n**No structured success criteria on this task.** Review the deliverables against the spec/description and use your judgment.
+
+**If tests pass:**
 \`\`\`bash
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
   -H "Content-Type: application/json" \\
@@ -455,17 +562,24 @@ curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
 ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
 \`\`\`
 
-**If tests FAIL:**
-
+**If tests fail:**
 \`\`\`bash
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
   -H "Content-Type: application/json" \\
 ${authHeaderLine}  -d '{"reason":"<detailed description of what failed and what needs fixing>"}'
-\`\`\`
+\`\`\``;
 
-Reply with: \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed]\``;
+      completionInstructions = `**YOUR ROLE: TESTER** — Verify deliverables against the success criteria above.
+${criteriaGuidance}
+
+Reply with: \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed, by criterion id]\``;
     } else if (isVerifier) {
-      completionInstructions = `**YOUR ROLE: VERIFIER** — Verify that all work meets quality standards.
+      const hasCriteria = Boolean(normalizedSpec && normalizedSpec.success_criteria.length > 0);
+      const criteriaReminder = hasCriteria
+        ? `\n\nEvery success criterion in the checklist above must pass. "Looks good" is not verification — confirm each assertion using its \`how_to_test\` step, then list the ids you confirmed in your activity message.`
+        : '';
+
+      completionInstructions = `**YOUR ROLE: VERIFIER** — Verify that all work meets quality standards.${criteriaReminder}
 
 Review deliverables, test results, and task requirements.
 
@@ -474,22 +588,22 @@ Review deliverables, test results, and task requirements.
 \`\`\`bash
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
   -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"Verification passed: <summary>"}'
+${authHeaderLine}  -d '{"activity_type":"completed","message":"Verification passed: <summary; criteria verified: [<ids>]>"}'
 
 curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
   -H "Content-Type: application/json" \\
 ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
 \`\`\`
 
-**If verification FAILS:**
+**If verification FAILS** — name the specific criterion ids that failed:
 
 \`\`\`bash
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
   -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"reason":"<detailed description of what failed and what needs fixing>"}'
+${authHeaderLine}  -d '{"reason":"Failed criteria: <sc-id1>: <what you observed>; <sc-id2>: ...</what you observed>"}'
 \`\`\`
 
-Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed]\``;
+Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed, by criterion id]\``;
     } else {
       // Fallback for unknown roles
       completionInstructions = `**IMPORTANT:** After completing work, update status — the call requires the Authorization header:
@@ -565,6 +679,13 @@ ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
         ? 'NEW TASK ASSIGNED'
         : `${roleLabel.toUpperCase()} STAGE — ${task.title}`;
 
+    // Put the structured checklists up front when they exist — the builder
+    // needs the deliverables list before wading through the spec prose, and
+    // the tester needs the criteria list up front. Old-shape tasks (no
+    // structured spec) render only the existing planningSpecSection below.
+    const deliverablesLead = isBuilder ? deliverablesChecklistSection : '';
+    const criteriaLead = (isTester || isVerifier) ? successCriteriaChecklistSection : '';
+
     const taskMessage = `${priorityEmoji} **${headline}**
 
 **Title:** ${task.title}
@@ -572,7 +693,7 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
+${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
 ${isBuilder ? (workspaceIsolated
   ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
   : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)

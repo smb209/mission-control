@@ -23,7 +23,9 @@ export interface RosterAgent {
 }
 
 /** Policy caps shared by planning + convoy flows. Keep small and explicit. */
-export const MAX_CONVOY_SUBTASKS = parseInt(process.env.MAX_CONVOY_SUBTASKS || '6', 10);
+// Default bumped from 6 → 8 so a typical planned app (one sub-task per
+// deliverable + a dedicated Tester sub-task) fits without hitting the cap.
+export const MAX_CONVOY_SUBTASKS = parseInt(process.env.MAX_CONVOY_SUBTASKS || '8', 10);
 export const MAX_TASKS_PER_AGENT = parseInt(process.env.MAX_TASKS_PER_AGENT || '2', 10);
 export const MIN_NEW_AGENT_RATIONALE_LENGTH = 20;
 

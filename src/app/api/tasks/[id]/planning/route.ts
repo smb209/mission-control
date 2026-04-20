@@ -174,7 +174,13 @@ export async function POST(
     const roster = getAgentRoster(task.workspace_id);
     const rosterBlock = formatRosterForPrompt(roster);
 
-    // Build the initial planning prompt
+    // Build the initial planning prompt. Two things matter here: the
+    // question-asking loop (which fires now) and the final completion
+    // shape the planner MUST emit once it's done asking. We spell the
+    // completion schema out up front because agents anchor on structure
+    // when shown it once — asking for a binary-testable spec only at the
+    // "answer" stage was producing narrative summaries that downstream
+    // builders then interpreted in the cheapest way possible.
     const planningPrompt = `PLANNING REQUEST
 
 Task Title: ${task.title}
@@ -187,7 +193,48 @@ When you later emit the final plan (status: "complete") with an "agents" array, 
 
 You are starting a planning session for this task. Read PLANNING.md for your protocol.
 
-Generate your FIRST question to understand what the user needs. Remember:
+**Your job has two phases:**
+
+PHASE 1 — ask multiple-choice questions until you understand what the user needs.
+PHASE 2 — emit a final spec with STRUCTURED, TESTABLE deliverables and success criteria (see schema below) so downstream builders and testers can objectively tell whether work is done.
+
+**Completion schema** (for when you're ready to emit status: "complete"):
+\`\`\`json
+{
+  "status": "complete",
+  "spec": {
+    "title": "...",
+    "summary": "...",
+    "deliverables": [
+      {
+        "id": "short-machine-id",              // stable id builders use when registering fulfillment
+        "title": "Human-readable name",
+        "kind": "file" | "behavior" | "artifact",
+        "path_pattern": "src/foo.js",          // required when kind=file; relative to the deliverables dir
+        "acceptance": "Binary, testable assertion — e.g. 'exports logShot(data) which persists to IndexedDB db=espresso-shots'"
+      }
+    ],
+    "success_criteria": [
+      {
+        "id": "sc-1",
+        "assertion": "Binary: passes or fails, no ambiguity",
+        "how_to_test": "Specific command, manual step, or assertion the tester runs"
+      }
+    ],
+    "constraints": {}
+  },
+  "agents": [ /* as described above */ ],
+  "execution_plan": {}
+}
+\`\`\`
+
+**Rules for the spec (these are the difference between a working deliverable and a broken mockup):**
+- EVERY major artifact needed to ship the task must be its own entry in \`deliverables\` — not bundled under a vague "module" entry. If the task needs an HTML page + CSS + JS + service worker, that is four deliverables, not one.
+- For \`kind: "file"\`, \`path_pattern\` MUST name the file. No "some JS file" — name it.
+- For \`kind: "behavior"\`, \`acceptance\` MUST be verifiable (e.g. "page loads from cache with network disabled", not "works offline").
+- \`success_criteria\` are for the Tester: each one should be something pass/fail-able. If you can't describe how to test it, it doesn't belong here.
+
+PHASE 1 starts now. Generate your FIRST question to understand what the user needs. Remember:
 - Questions must be multiple choice
 - Include an "Other" option
 - Be specific to THIS task, not generic

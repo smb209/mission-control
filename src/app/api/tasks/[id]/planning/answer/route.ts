@@ -57,14 +57,29 @@ For another question, respond with JSON:
   ]
 }
 
-If planning is complete, respond with JSON:
+If planning is complete, respond with JSON using the STRUCTURED spec shape (every deliverable must have id/kind/acceptance — no bare strings):
+
 {
   "status": "complete",
   "spec": {
     "title": "Task title",
     "summary": "Summary of what needs to be done",
-    "deliverables": ["List of deliverables"],
-    "success_criteria": ["How we know it's done"],
+    "deliverables": [
+      {
+        "id": "short-machine-id",
+        "title": "Human-readable name",
+        "kind": "file",
+        "path_pattern": "relative/path.ext",
+        "acceptance": "Binary testable assertion — what the file must contain or do"
+      }
+    ],
+    "success_criteria": [
+      {
+        "id": "sc-1",
+        "assertion": "Binary pass/fail assertion",
+        "how_to_test": "Specific command, step, or check the tester runs"
+      }
+    ],
     "constraints": {}
   },
   "agents": [
@@ -80,7 +95,13 @@ If planning is complete, respond with JSON:
     "approach": "How to execute",
     "steps": ["Step 1", "Step 2"]
   }
-}`;
+}
+
+RULES:
+- Every major artifact gets its own deliverables entry. An HTML app with a service worker is AT LEAST four entries (index.html, styles.css, app.js, sw.js), not one "PWA module".
+- kind=file REQUIRES path_pattern. Name the file — do not say "some CSS file".
+- kind=behavior REQUIRES a testable acceptance ("page loads from cache with network disabled", not "works offline").
+- success_criteria entries must each be independently pass/fail-able.`;
 
     // Parse existing messages
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];

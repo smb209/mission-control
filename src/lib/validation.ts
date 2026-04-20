@@ -107,6 +107,29 @@ export const CreateDeliverableSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   path: z.string().optional(),
   description: z.string().optional(),
+  /** When fulfilling a planning-spec deliverable, name which one. The
+   *  evidence gate reconciles this against planning_spec.deliverables[].id
+   *  before allowing a transition into testing/review/verification/done. */
+  spec_deliverable_id: z.string().max(200).optional(),
+});
+
+// Planning spec deliverables + success criteria (structured shape). Readers
+// still accept the legacy array-of-strings shape for in-flight tasks — see
+// parsePlanningSpec in src/lib/planning-spec.ts.
+const SpecDeliverableKind = z.enum(['file', 'behavior', 'artifact']);
+
+export const SpecDeliverableSchema = z.object({
+  id: z.string().min(1).max(100),
+  title: z.string().min(1).max(500),
+  kind: SpecDeliverableKind,
+  path_pattern: z.string().max(500).optional(),
+  acceptance: z.string().min(1).max(2000),
+});
+
+export const SpecSuccessCriterionSchema = z.object({
+  id: z.string().min(1).max(100),
+  assertion: z.string().min(1).max(1000),
+  how_to_test: z.string().min(1).max(1000),
 });
 
 // Fail-task validation schema — agents hit this to trigger a fail-loopback

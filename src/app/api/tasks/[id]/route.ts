@@ -4,7 +4,7 @@ import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { getMissionControlUrl } from '@/lib/config';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
-import { hasStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
+import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
 import { updateConvoyProgress, checkConvoyCompletion, dispatchReadyConvoySubtasks } from '@/lib/convoy';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
@@ -215,13 +215,22 @@ export async function PATCH(
         );
       }
 
-      // Hard evidence gate for forward-stage transitions and completion
+      // Hard evidence gate for forward-stage transitions and completion.
+      // Rejection includes the specific reason (missing spec deliverables by
+      // id) so agents can take the correct corrective action instead of
+      // guessing what "evidence requirements" means.
       const enteringQualityStage = ['testing', 'review', 'verification', 'done'].includes(nextStatus);
-      if (enteringQualityStage && !boardOverrideAllowed && !hasStageEvidence(id)) {
-        return NextResponse.json(
-          { error: 'Evidence gate failed: stage transition requires at least one deliverable and one activity note' },
-          { status: 400 }
-        );
+      if (enteringQualityStage && !boardOverrideAllowed) {
+        const evidence = checkStageEvidence(id);
+        if (!evidence.ok) {
+          return NextResponse.json(
+            {
+              error: evidence.reason || 'Evidence gate failed',
+              missingDeliverableIds: evidence.missingDeliverableIds,
+            },
+            { status: 400 }
+          );
+        }
       }
 
       // Failure transitions must include status_reason

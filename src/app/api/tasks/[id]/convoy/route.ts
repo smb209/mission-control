@@ -13,6 +13,7 @@ import {
   MIN_NEW_AGENT_RATIONALE_LENGTH,
   type RosterAgent,
 } from '@/lib/agent-resolver';
+import { parsePlanningSpec } from '@/lib/planning-spec';
 import type { Task, Agent, ConvoyStatus, DecompositionStrategy } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -40,11 +41,38 @@ interface ParsedSubtask {
  * existing agents by id instead of silently producing ghosts.
  */
 function buildDecompositionPrompt(task: Task, roster: RosterAgent[]): string {
-  const specSection = task.description || 'No description provided.';
   const rosterBlock = formatRosterForPrompt(roster);
   const createPolicy = roster.length === 0
     ? 'No existing agents. Set agent_id to null for every sub-task.'
     : 'Prefer assigning sub-tasks to agents in the roster above. Only set agent_id to null when no listed agent is a reasonable fit; in that case you MUST provide a specific rationale naming the capability or capacity gap.';
+
+  // Inject the structured spec (if planning produced one) so the decomposition
+  // can make per-deliverable subtasks instead of one monolithic "Build" task.
+  // Falls back to task.description for non-planned tasks. This is the biggest
+  // single lever against the "one builder subtask swallows five deliverables
+  // and ships a skeleton" failure mode.
+  const parsedSpec = parsePlanningSpec(
+    (task as Task & { planning_spec?: string }).planning_spec
+  );
+
+  let specSection: string;
+  let perDeliverableHint: string;
+  if (parsedSpec && parsedSpec.deliverables.length > 0) {
+    const deliverableLines = parsedSpec.deliverables
+      .map(d => {
+        const pathPart = d.path_pattern ? ` → \`${d.path_pattern}\`` : '';
+        return `- **${d.id}** (${d.kind})${pathPart}: ${d.acceptance}`;
+      })
+      .join('\n');
+    const summary = parsedSpec.summary ? `\n\n**Summary:** ${parsedSpec.summary}` : '';
+    specSection = `${parsedSpec.title ? `**Planned Title:** ${parsedSpec.title}\n` : ''}${summary}\n\n**Deliverables from planning spec (each must be produced):**\n${deliverableLines}`;
+    perDeliverableHint = `
+- **Map each planning-spec deliverable to at least one builder sub-task.** Do not collapse five deliverables into one "Build" sub-task — that's how we end up with a skeleton HTML file referencing missing CSS/JS. Each builder sub-task's \`description\` MUST name the specific \`deliverables[].id\` it fulfills (e.g. "Fulfills spec deliverables: shot-logger, pwa-manifest"). File-kind deliverables especially should each be their own builder sub-task unless they're trivially small (< 20 lines).
+- **Always include a dedicated Tester sub-task** with \`suggested_role: "tester"\` that depends on all builder sub-tasks. Its description must name every success criterion id it's responsible for verifying. The Reviewer runs AFTER the Tester, not instead of one.`;
+  } else {
+    specSection = task.description || 'No description provided.';
+    perDeliverableHint = '';
+  }
 
   return `TASK DECOMPOSITION REQUEST
 
@@ -68,7 +96,7 @@ Rules:
 - Do not assign more than ${MAX_TASKS_PER_AGENT} sub-tasks to the same agent_id; if more work exists for a role, prefer creating a new agent over overloading.
 - Prefer agents with status "standby" over "working".
 - For each sub-task include "agent_id" (from the roster above) OR null, plus "suggested_role" (human-readable), and a "rationale" explaining the choice.
-- If agent_id is null, "rationale" must name the specific capability gap — "no suitable agent" is not acceptable.
+- If agent_id is null, "rationale" must name the specific capability gap — "no suitable agent" is not acceptable.${perDeliverableHint}
 
 Respond with ONLY valid JSON — no markdown fences, no commentary — in this exact shape:
 {
@@ -77,7 +105,7 @@ Respond with ONLY valid JSON — no markdown fences, no commentary — in this e
   "subtasks": [
     {
       "title": "Sub-task title",
-      "description": "Detailed description of what this sub-task should accomplish",
+      "description": "Detailed description. For builder sub-tasks, name the spec deliverables[].id values this fulfills.",
       "suggested_role": "researcher",
       "agent_id": "<existing agent id from roster, or null>",
       "agent_name": "<name for new agent, only when agent_id is null>",
