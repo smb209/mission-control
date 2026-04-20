@@ -362,7 +362,7 @@ export async function GET(
     // extractJSON failed or the completion handler never fired).
     const lastAssistantMsg = [...messages].reverse().find((m: any) => m.role === 'assistant');
     if (lastAssistantMsg) {
-      const parsed = extractJSON(lastAssistantMsg.content) as { status?: string; spec?: object; agents?: any[]; execution_plan?: object } | null;
+      const parsed = extractJSON(lastAssistantMsg.content) as { status?: string; question?: string; options?: unknown; spec?: object; agents?: any[]; execution_plan?: object } | null;
       if (parsed && parsed.status === 'complete') {
         console.log('[Planning Poll] FALLBACK: Found unprocessed completion in stored messages — handling now');
         const { firstAgentId, parsed: fullParsed, dispatchError } = await handlePlanningCompletion(taskId, parsed, messages);
@@ -375,6 +375,105 @@ export async function GET(
           messages,
           autoDispatched: !!firstAgentId,
           dispatchError,
+        });
+      }
+
+      // Unparseable response: first try a single automated reprompt asking
+      // the planner to re-emit strict JSON. Only if that also fails do we
+      // surface parseError to the UI. Most LLM failures here are semantic
+      // (missing schema keys, unescaped quotes) — `jsonrepair` can't fix them,
+      // but the agent usually can when told explicitly what broke.
+      const hasUsableShape = !!(parsed && (parsed.question || parsed.status || parsed.spec));
+      if (!hasUsableShape) {
+        console.error(
+          `[Planning Poll] Unparseable assistant response for task ${taskId}. Full content:\n${lastAssistantMsg.content}`
+        );
+
+        const alreadyReprompted = lastAssistantMsg.reprompted === true;
+
+        if (!alreadyReprompted) {
+          const sessionKey = task.planning_session_key;
+          if (!sessionKey) {
+            // Shouldn't happen — we checked earlier — but fail closed.
+            return NextResponse.json({
+              hasUpdates: true,
+              parseError: 'The planning agent returned an unparseable response and no session is available to retry.',
+              rawContent: typeof lastAssistantMsg.content === 'string'
+                ? lastAssistantMsg.content.slice(0, 4000)
+                : String(lastAssistantMsg.content).slice(0, 4000),
+              messages,
+            });
+          }
+
+          const correction = `Your last response could not be parsed as valid JSON. Common issues seen: options missing the "label" key, trailing commas, unescaped quotes, truncation.
+
+Re-emit your last output with STRICTLY VALID JSON that conforms to one of these shapes exactly.
+
+Question shape:
+{
+  "question": "...",
+  "options": [
+    {"id": "A", "label": "..."},
+    {"id": "B", "label": "..."},
+    {"id": "other", "label": "Other"}
+  ]
+}
+
+Completion shape:
+{
+  "status": "complete",
+  "spec": {...},
+  "agents": [...],
+  "execution_plan": {...}
+}
+
+EVERY option object MUST have BOTH "id" and "label" string keys. Emit ONLY the JSON object — no prose, no code fences.`;
+
+          try {
+            const client = getOpenClawClient();
+            if (!client.isConnected()) {
+              await client.connect();
+            }
+            await client.call('chat.send', {
+              sessionKey,
+              message: correction,
+              idempotencyKey: `planning-reprompt-${taskId}-${Date.now()}`,
+            });
+            console.log(`[Planning Poll] Sent reformat correction to planner for task ${taskId}`);
+          } catch (err) {
+            console.error(`[Planning Poll] Failed to send reformat correction:`, err);
+            return NextResponse.json({
+              hasUpdates: true,
+              parseError: `Planner returned invalid JSON and the reformat request also failed: ${(err as Error).message}`,
+              rawContent: typeof lastAssistantMsg.content === 'string'
+                ? lastAssistantMsg.content.slice(0, 4000)
+                : String(lastAssistantMsg.content).slice(0, 4000),
+              messages,
+            });
+          }
+
+          // Mark this message so a future malformed reply falls through to
+          // parseError (we only auto-retry once per bad message).
+          const taggedMessages = messages.map((m: any) =>
+            m === lastAssistantMsg ? { ...m, reprompted: true } : m
+          );
+          run('UPDATE tasks SET planning_messages = ? WHERE id = ?', [JSON.stringify(taggedMessages), taskId]);
+
+          return NextResponse.json({
+            hasUpdates: true,
+            reprompted: true,
+            messages: taggedMessages,
+          });
+        }
+
+        // Already reprompted once and the retry is also malformed — surface.
+        return NextResponse.json({
+          hasUpdates: true,
+          parseError: 'The planning agent returned malformed JSON twice in a row. Cancel and restart planning, or edit the task and try again.',
+          rawContent: typeof lastAssistantMsg.content === 'string'
+            ? lastAssistantMsg.content.slice(0, 4000)
+            : String(lastAssistantMsg.content).slice(0, 4000),
+          messages,
         });
       }
     }

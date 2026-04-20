@@ -26,6 +26,8 @@ interface PlanningState {
   currentQuestion?: PlanningQuestion;
   isComplete: boolean;
   dispatchError?: string;
+  parseError?: string;
+  parseErrorContent?: string;
   spec?: {
     title: string;
     summary: string;
@@ -63,6 +65,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
   const [stalePlanning, setStalePlanning] = useState(false);
   const [forceCompleting, setForceCompleting] = useState(false);
   const [noNewMessageCount, setNoNewMessageCount] = useState(0);
+  const [repromptingPlanner, setRepromptingPlanner] = useState(false);
 
   // Refs to track polling state without triggering re-renders
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -134,11 +137,37 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
           });
         }
 
+        // Surface malformed agent responses — this handles both the freshly-arrived
+        // case (also returned with hasUpdates:true) and the already-stored case.
+        if (data.parseError) {
+          setError(null);
+          setStalePlanning(false);
+          setNoNewMessageCount(0);
+          setRepromptingPlanner(false);
+          setState(prev => prev ? { ...prev, parseError: data.parseError, parseErrorContent: data.rawContent } : prev);
+          setIsWaitingForResponse(false);
+          setIsSubmittingAnswer(false);
+          setSubmitting(false);
+          stopPolling();
+          return;
+        }
+
+        // Auto-reprompt flow: the server sent a correction to the planner and
+        // is waiting for a valid retry. Keep polling, show a transient banner.
+        if (data.reprompted) {
+          setError(null);
+          setStalePlanning(false);
+          setNoNewMessageCount(0);
+          setRepromptingPlanner(true);
+          return;
+        }
+
         if (data.hasUpdates) {
           // Clear any stale waiting warnings once updates are flowing
           setError(null);
           setStalePlanning(false);
           setNoNewMessageCount(0);
+          setRepromptingPlanner(false);
 
           const newQuestion = data.currentQuestion?.question;
           const questionChanged = newQuestion && currentQuestionRef.current !== newQuestion;
@@ -616,6 +645,48 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
         </button>
       </div>
 
+      {/* Auto-reprompt in-flight — planner emitted invalid JSON, server asked it to reformat */}
+      {repromptingPlanner && !state?.parseError && (
+        <div className="mx-4 mt-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+            <p className="text-amber-300 text-xs">
+              Planner returned invalid JSON — asked it to reformat. Waiting for corrected response…
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Parse error banner — agent emitted unparseable JSON */}
+      {state?.parseError && (
+        <div className="mx-4 mt-4 bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-red-400 text-sm font-medium mb-2">Malformed response from planner</p>
+              <p className="text-red-300 text-xs mb-3">{state.parseError}</p>
+              {state.parseErrorContent && (
+                <details className="mb-3">
+                  <summary className="text-red-400 text-xs cursor-pointer hover:text-red-300">
+                    Show raw content
+                  </summary>
+                  <pre className="mt-2 p-2 bg-black/40 border border-red-500/20 rounded text-xs text-red-200 overflow-x-auto whitespace-pre-wrap break-words max-h-64">
+{state.parseErrorContent}
+                  </pre>
+                </details>
+              )}
+              <button
+                onClick={cancelPlanning}
+                disabled={canceling}
+                className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs rounded-sm disabled:opacity-50"
+              >
+                Cancel planning and retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Question area */}
       <div className="flex-1 overflow-y-auto p-6">
         {state?.currentQuestion ? (
@@ -736,7 +807,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
               )}
             </div>
           </div>
-        ) : (
+        ) : state?.parseError ? null : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               {stalePlanning ? (
