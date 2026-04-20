@@ -362,7 +362,7 @@ export async function GET(
     // extractJSON failed or the completion handler never fired).
     const lastAssistantMsg = [...messages].reverse().find((m: any) => m.role === 'assistant');
     if (lastAssistantMsg) {
-      const parsed = extractJSON(lastAssistantMsg.content) as { status?: string; spec?: object; agents?: any[]; execution_plan?: object } | null;
+      const parsed = extractJSON(lastAssistantMsg.content) as { status?: string; question?: string; options?: unknown; spec?: object; agents?: any[]; execution_plan?: object } | null;
       if (parsed && parsed.status === 'complete') {
         console.log('[Planning Poll] FALLBACK: Found unprocessed completion in stored messages — handling now');
         const { firstAgentId, parsed: fullParsed, dispatchError } = await handlePlanningCompletion(taskId, parsed, messages);
@@ -375,6 +375,26 @@ export async function GET(
           messages,
           autoDispatched: !!firstAgentId,
           dispatchError,
+        });
+      }
+
+      // Surface unparseable assistant responses so the UI stops silently
+      // polling forever. Happens when the agent emits malformed JSON (missing
+      // keys, unescaped strings, truncation). Without this, the poll returned
+      // `hasUpdates: false` and the user saw an infinite spinner even though
+      // the agent had already responded.
+      const hasUsableShape = !!(parsed && (parsed.question || parsed.status || parsed.spec));
+      if (!hasUsableShape) {
+        console.error(
+          `[Planning Poll] Unparseable assistant response for task ${taskId}. Full content:\n${lastAssistantMsg.content}`
+        );
+        return NextResponse.json({
+          hasUpdates: true,
+          parseError: 'The planning agent returned a response that could not be parsed as valid planning JSON. Cancel and restart planning, or edit the task and try again.',
+          rawContent: typeof lastAssistantMsg.content === 'string'
+            ? lastAssistantMsg.content.slice(0, 4000)
+            : String(lastAssistantMsg.content).slice(0, 4000),
+          messages,
         });
       }
     }
