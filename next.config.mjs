@@ -1,13 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  serverExternalPackages: ['better-sqlite3'],
-  webpack: (config) => {
-    config.externals.push({
-      'better-sqlite3': 'commonjs better-sqlite3',
-      '@aws-sdk/client-s3': 'commonjs @aws-sdk/client-s3',
-    });
-    return config;
-  },
+  serverExternalPackages: ['better-sqlite3', '@aws-sdk/client-s3'],
   async headers() {
     return [
       {

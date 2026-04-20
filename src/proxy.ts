@@ -53,7 +53,7 @@ if (DEMO_MODE) {
   console.log('[DEMO] Running in demo mode — all write operations are blocked');
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Only protect /api/* routes
