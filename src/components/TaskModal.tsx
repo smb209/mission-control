@@ -247,13 +247,13 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
       <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full max-w-2xl max-h-[92vh] sm:max-h-[90vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-mc-border flex-shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-mc-border shrink-0">
           <h2 className="text-lg font-semibold">
             {task ? task.title : 'Create New Task'}
           </h2>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-mc-bg-tertiary rounded"
+            className="p-1 hover:bg-mc-bg-tertiary rounded-sm"
           >
             <X className="w-5 h-5" />
           </button>
@@ -261,7 +261,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
 
         {/* Tabs - only show for existing tasks */}
         {task && (
-          <div className="flex border-b border-mc-border flex-shrink-0 overflow-x-auto">
+          <div className="flex border-b border-mc-border shrink-0 overflow-x-auto">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -292,7 +292,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               required
-              className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+              className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
               placeholder="What needs to be done?"
             />
           </div>
@@ -304,7 +304,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               rows={3}
-              className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent resize-none"
+              className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none"
               placeholder="Add details..."
             />
           </div>
@@ -317,7 +317,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                   type="checkbox"
                   checked={usePlanningMode}
                   onChange={(e) => setUsePlanningMode(e.target.checked)}
-                  className="w-4 h-4 mt-0.5 rounded border-mc-border"
+                  className="w-4 h-4 mt-0.5 rounded-sm border-mc-border"
                 />
                 <div>
                   <span className="font-medium text-sm flex items-center gap-2">
@@ -346,7 +346,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                   setForm({ ...form, assigned_agent_id: e.target.value });
                 }
               }}
-              className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+              className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
             >
               <option value="">Unassigned</option>
               {agents.map((agent) => (
@@ -367,7 +367,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               <select
                 value={form.priority}
                 onChange={(e) => setForm({ ...form, priority: e.target.value as TaskPriority })}
-                className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
               >
                 {priorities.map((p) => (
                   <option key={p} value={p}>
@@ -384,7 +384,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                 type="datetime-local"
                 value={form.due_date}
                 onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
               />
             </div>
           </div>
@@ -483,7 +483,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
 
         {/* Footer - only show on overview tab */}
         {activeTab === 'overview' && (
-          <div className="flex items-center justify-between p-4 border-t border-mc-border flex-shrink-0">
+          <div className="flex items-center justify-between p-4 border-t border-mc-border shrink-0">
             <div className="flex items-center gap-2">
               {task && (
                 <>
@@ -491,7 +491,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                     type="button"
                     onClick={handleArchiveToggle}
                     disabled={isArchiving}
-                    className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary rounded text-sm disabled:opacity-50"
+                    className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary rounded-sm text-sm disabled:opacity-50"
                     title={task.is_archived ? 'Restore from archive' : 'Archive (preserves deliverables)'}
                   >
                     {task.is_archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
@@ -501,7 +501,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                     type="button"
                     onClick={handleDelete}
                     disabled={isDeleting}
-                    className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded text-sm disabled:opacity-50"
+                    className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded-sm text-sm disabled:opacity-50"
                     title="Permanently delete this task and its deliverables"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -527,7 +527,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                 <button
                   onClick={(e) => handleSubmit(e, true)}
                   disabled={isSubmitting}
-                  className="min-h-11 flex items-center gap-2 px-4 py-2 border border-mc-accent text-mc-accent rounded text-sm font-medium hover:bg-mc-accent/10 disabled:opacity-50"
+                  className="min-h-11 flex items-center gap-2 px-4 py-2 border border-mc-accent text-mc-accent rounded-sm text-sm font-medium hover:bg-mc-accent/10 disabled:opacity-50"
                 >
                   <Plus className="w-4 h-4" />
                   {isSubmitting ? 'Saving...' : 'Save & New'}
@@ -536,7 +536,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               <button
                 onClick={handleSubmit}
                 disabled={isSubmitting}
-                className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+                className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
               >
                 <Save className="w-4 h-4" />
                 {isSubmitting ? 'Saving...' : 'Save'}

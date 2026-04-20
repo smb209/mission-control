@@ -130,16 +130,16 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
                 <ChevronLeft className="w-4 h-4" />
                 <LayoutGrid className="w-4 h-4" />
               </Link>
-              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-mc-bg-tertiary rounded min-w-0">
+              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-mc-bg-tertiary rounded-sm min-w-0">
                 <span className="text-base">{workspace.icon}</span>
                 <span className="font-medium truncate text-sm">{workspace.name}</span>
               </div>
             </div>
 
-            <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary" title="Autopilot">
+            <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Autopilot">
               <Rocket className="w-5 h-5" />
             </Link>
-            <button onClick={() => router.push('/settings')} className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary shrink-0" title="Settings">
+            <button onClick={() => router.push('/settings')} className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary shrink-0" title="Settings">
               <Settings className="w-5 h-5" />
             </button>
           </div>
@@ -157,7 +157,7 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
             </div>
 
             <div className="flex-1 grid grid-cols-2 gap-2">
-              <div className="relative group min-h-11 rounded border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs cursor-help">
+              <div className="relative group min-h-11 rounded-sm border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs cursor-help">
                 <span className="text-mc-accent-cyan font-semibold">{activeAgents}</span>
                 <span className="text-mc-text-secondary">active</span>
                 <div className="hidden group-hover:block absolute top-full mt-1 left-0 right-0 md:left-auto md:right-auto md:w-64 z-40 p-2 rounded-lg border border-mc-border bg-mc-bg shadow-lg">
@@ -165,7 +165,7 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
                   <ActiveAgentsTooltip activeAgents={workingAgentsList} activeSubAgents={activeSubAgents} />
                 </div>
               </div>
-              <div className="relative group min-h-11 rounded border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs cursor-help">
+              <div className="relative group min-h-11 rounded-sm border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs cursor-help">
                 <span className="text-mc-accent-purple font-semibold">{tasksInQueue}</span>
                 <span className="text-mc-text-secondary">queued</span>
                 <div className="hidden group-hover:block absolute top-full mt-1 left-0 right-0 md:left-auto md:right-auto md:w-64 z-40 p-2 rounded-lg border border-mc-border bg-mc-bg shadow-lg">
@@ -191,13 +191,13 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
                   <LayoutGrid className="w-4 h-4" />
                 </Link>
                 <span className="hidden sm:block text-mc-text-secondary">/</span>
-                <div className="flex items-center gap-2 px-2 md:px-3 py-1 bg-mc-bg-tertiary rounded min-w-0">
+                <div className="flex items-center gap-2 px-2 md:px-3 py-1 bg-mc-bg-tertiary rounded-sm min-w-0">
                   <span className="text-base md:text-lg">{workspace.icon}</span>
                   <span className="font-medium truncate text-sm md:text-base">{workspace.name}</span>
                 </div>
               </div>
             ) : (
-              <Link href="/" className="flex items-center gap-2 px-3 py-1 bg-mc-bg-tertiary rounded hover:bg-mc-bg transition-colors">
+              <Link href="/" className="flex items-center gap-2 px-3 py-1 bg-mc-bg-tertiary rounded-sm hover:bg-mc-bg transition-colors">
                 <LayoutGrid className="w-4 h-4" />
                 <span className="text-sm">All Workspaces</span>
               </Link>
@@ -237,10 +237,10 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
               <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-mc-accent-green animate-pulse' : 'bg-mc-accent-red'}`} />
               {isOnline ? 'ONLINE' : 'OFFLINE'}
             </div>
-            <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary" title="Autopilot">
+            <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Autopilot">
               <Rocket className="w-5 h-5" />
             </Link>
-            <button onClick={() => router.push('/settings')} className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary" title="Settings">
+            <button onClick={() => router.push('/settings')} className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Settings">
               <Settings className="w-5 h-5" />
             </button>
           </div>

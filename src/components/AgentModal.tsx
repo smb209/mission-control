@@ -154,7 +154,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
           </h2>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-mc-bg-tertiary rounded"
+            className="p-1 hover:bg-mc-bg-tertiary rounded-sm"
           >
             <X className="w-5 h-5" />
           </button>
@@ -210,7 +210,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
-                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                   placeholder="Agent name"
                 />
               </div>
@@ -223,7 +223,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   value={form.role}
                   onChange={(e) => setForm({ ...form, role: e.target.value })}
                   required
-                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                   placeholder="e.g., Code & Automation"
                 />
               </div>
@@ -235,7 +235,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}
-                  className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent resize-none"
+                  className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none"
                   placeholder="What does this agent do?"
                 />
               </div>
@@ -246,7 +246,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                 <select
                   value={form.status}
                   onChange={(e) => setForm({ ...form, status: e.target.value as AgentStatus })}
-                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                 >
                   <option value="standby">Standby</option>
                   <option value="working">Working</option>
@@ -282,7 +282,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   <select
                     value={form.model}
                     onChange={(e) => setForm({ ...form, model: e.target.value })}
-                    className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                    className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                   >
                     <option value="">-- Use Default Model --</option>
                     {availableModels.map((model) => (
@@ -304,7 +304,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   type="text"
                   value={form.session_key_prefix}
                   onChange={(e) => setForm({ ...form, session_key_prefix: e.target.value })}
-                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                   placeholder="agent:<name>:"
                 />
                 <p className="text-xs text-mc-text-secondary mt-1">
@@ -324,7 +324,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                 value={form.soul_md}
                 onChange={(e) => setForm({ ...form, soul_md: e.target.value })}
                 rows={15}
-                className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-mc-accent resize-none"
+                className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm font-mono focus:outline-hidden focus:border-mc-accent resize-none"
                 placeholder="# Agent Name&#10;&#10;Define this agent's personality, values, and communication style..."
               />
             </div>
@@ -339,7 +339,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                 value={form.user_md}
                 onChange={(e) => setForm({ ...form, user_md: e.target.value })}
                 rows={15}
-                className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-mc-accent resize-none"
+                className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm font-mono focus:outline-hidden focus:border-mc-accent resize-none"
                 placeholder="# User Context&#10;&#10;Information about the human this agent works with..."
               />
             </div>
@@ -354,7 +354,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                 value={form.agents_md}
                 onChange={(e) => setForm({ ...form, agents_md: e.target.value })}
                 rows={15}
-                className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-mc-accent resize-none"
+                className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm font-mono focus:outline-hidden focus:border-mc-accent resize-none"
                 placeholder="# Team Roster&#10;&#10;Information about other agents this agent works with..."
               />
             </div>
@@ -368,7 +368,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
               <button
                 type="button"
                 onClick={handleDelete}
-                className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded text-sm"
+                className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded-sm text-sm"
               >
                 <Trash2 className="w-4 h-4" />
                 Delete
@@ -386,7 +386,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
             <button
               onClick={handleSubmit}
               disabled={isSubmitting}
-              className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+              className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
               {isSubmitting ? 'Saving...' : 'Save'}

@@ -80,7 +80,7 @@ export function ProductSettings({ product, onSave }: Props) {
   }
 
   const inputClass =
-    'w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text placeholder:text-mc-text-secondary/50 focus:outline-none focus:border-mc-accent';
+    'w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text placeholder:text-mc-text-secondary/50 focus:outline-hidden focus:border-mc-accent';
   const labelClass = 'block text-xs font-medium text-mc-text-secondary uppercase tracking-wider mb-1.5';
 
   return (

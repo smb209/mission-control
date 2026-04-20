@@ -471,7 +471,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
         {state.dispatchError && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
             <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
               <div className="flex-1">
                 <p className="text-amber-400 text-sm font-medium mb-2">Task dispatch failed</p>
                 <p className="text-amber-300 text-xs mb-3">{state.dispatchError}</p>
@@ -479,7 +479,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                   <button
                     onClick={retryDispatch}
                     disabled={retryingDispatch}
-                    className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs rounded disabled:opacity-50 flex items-center gap-1"
+                    className="px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs rounded-sm disabled:opacity-50 flex items-center gap-1"
                   >
                     {retryingDispatch ? (
                       <>
@@ -600,7 +600,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
         <button
           onClick={cancelPlanning}
           disabled={canceling}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-mc-accent-red hover:bg-mc-accent-red/10 rounded disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-2 text-sm text-mc-accent-red hover:bg-mc-accent-red/10 rounded-sm disabled:opacity-50"
         >
           {canceling ? (
             <>
@@ -664,7 +664,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                           value={otherText}
                           onChange={(e) => setOtherText(e.target.value)}
                           placeholder="Please specify..."
-                          className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                          className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                           disabled={submitting}
                         />
                       </div>
@@ -684,7 +684,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
               >
                 <div className="flex items-start gap-2">
                   <AlertCircle
-                    className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                    className={`w-4 h-4 mt-0.5 shrink-0 ${
                       error.includes('still processing') ? 'text-orange-300' : 'text-red-400'
                     }`}
                   />

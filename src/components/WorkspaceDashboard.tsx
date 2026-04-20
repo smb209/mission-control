@@ -191,7 +191,7 @@ function WorkspaceCard({ workspace, onDelete }: { workspace: WorkspaceStats; onD
                   e.stopPropagation();
                   setShowDeleteConfirm(true);
                 }}
-                className="p-1.5 rounded hover:bg-mc-accent-red/20 text-mc-text-secondary hover:text-mc-accent-red transition-colors opacity-0 group-hover:opacity-100"
+                className="p-1.5 rounded-sm hover:bg-mc-accent-red/20 text-mc-text-secondary hover:text-mc-accent-red transition-colors opacity-0 group-hover:opacity-100"
                 title="Delete workspace"
               >
                 <Trash2 className="w-4 h-4" />
@@ -338,7 +338,7 @@ function CreateWorkspaceModal({ onClose, onCreated }: { onClose: () => void; onC
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g., Acme Corp"
-              className="w-full bg-mc-bg border border-mc-border rounded-lg px-4 py-2 focus:outline-none focus:border-mc-accent"
+              className="w-full bg-mc-bg border border-mc-border rounded-lg px-4 py-2 focus:outline-hidden focus:border-mc-accent"
               autoFocus
             />
           </div>

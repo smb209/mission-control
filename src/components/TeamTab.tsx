@@ -202,7 +202,7 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
         <select
           value={selectedWorkflow}
           onChange={(e) => handleWorkflowChange(e.target.value)}
-          className="w-full min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+          className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
         >
           <option value="">No workflow (single agent)</option>
           {workflows.map(wf => (
@@ -219,7 +219,7 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
           <label className="block text-sm font-medium mb-2">Stages</label>
           <div className="flex items-center gap-1 overflow-x-auto pb-1">
             {currentWorkflow.stages.map((stage: WorkflowStage, i: number) => (
-              <div key={stage.id} className="flex items-center gap-1 flex-shrink-0">
+              <div key={stage.id} className="flex items-center gap-1 shrink-0">
                 <div className={`px-3 py-1.5 rounded-full text-xs font-medium ${
                   stage.role
                     ? 'bg-mc-accent/10 border border-mc-accent/30 text-mc-accent'
@@ -241,7 +241,7 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
       {missingRoles.length > 0 && (
         <div className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
           <div className="flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-orange-300 mt-0.5 flex-shrink-0" />
+            <AlertCircle className="w-4 h-4 text-orange-300 mt-0.5 shrink-0" />
             <div>
               <p className="text-sm text-orange-200">
                 Missing agents for: {missingRoles.join(', ')}
@@ -263,13 +263,13 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
             const assignment = roles.find(r => normalizeRole(r.role) === normalizeRole(role));
             return (
               <div key={role} className="flex items-center gap-3">
-                <div className="w-24 text-xs font-medium text-mc-text-secondary capitalize flex-shrink-0">
+                <div className="w-24 text-xs font-medium text-mc-text-secondary capitalize shrink-0">
                   {role}
                 </div>
                 <select
                   value={assignment?.agent_id || ''}
                   onChange={(e) => handleRoleAgentChange(role, e.target.value)}
-                  className="flex-1 min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="flex-1 min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                 >
                   <option value="">Unassigned</option>
                   {agents.map(agent => (
@@ -285,13 +285,13 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
           {/* Custom role slots (not from workflow) - role names are catalog-driven (not editable text) */}
           {roles.filter(r => !uniqueRoles.includes(normalizeRole(r.role)) && r.role).map((r, i) => (
             <div key={`custom-${i}`} className="flex items-center gap-3">
-              <div className="w-24 text-xs font-medium text-mc-text-secondary capitalize flex-shrink-0">
+              <div className="w-24 text-xs font-medium text-mc-text-secondary capitalize shrink-0">
                 {normalizeRole(r.role)}
               </div>
               <select
                 value={r.agent_id}
                 onChange={(e) => handleRoleAgentChange(r.role, e.target.value)}
-                className="flex-1 min-h-11 bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                className="flex-1 min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
               >
                 <option value="">Unassigned</option>
                 {agents.map(agent => (
@@ -332,7 +332,7 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="w-full min-h-11 flex items-center justify-center gap-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+        className="w-full min-h-11 flex items-center justify-center gap-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
       >
         <Save className="w-4 h-4" />
         {saving ? 'Saving...' : 'Save Team'}

@@ -50,7 +50,7 @@ export function IdeaCard({ idea, onAction, showActions = true, compact = false }
     <div className="bg-mc-bg-secondary border border-mc-border rounded-xl p-5 space-y-4 max-w-md w-full mx-auto">
       {/* Header: category + complexity */}
       <div className="flex items-center justify-between">
-        <span className={`text-xs font-medium px-2 py-1 rounded ${categoryColors[idea.category] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+        <span className={`text-xs font-medium px-2 py-1 rounded-sm ${categoryColors[idea.category] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
           {idea.category}
         </span>
         {idea.complexity && (
@@ -92,7 +92,7 @@ export function IdeaCard({ idea, onAction, showActions = true, compact = false }
 
       {/* Resurfaced badge */}
       {idea.source === 'resurfaced' && (
-        <div className="text-xs bg-amber-500/20 text-amber-400 px-2 py-1 rounded inline-block">
+        <div className="text-xs bg-amber-500/20 text-amber-400 px-2 py-1 rounded-sm inline-block">
           Resurfaced: {idea.resurfaced_reason || 'From maybe pool'}
         </div>
       )}
@@ -113,8 +113,8 @@ export function IdeaCard({ idea, onAction, showActions = true, compact = false }
             };
             const statusColor = statusColors[sim.status] || 'text-mc-text-secondary';
             return (
-              <div key={i} className="flex items-start gap-1.5 text-xs bg-violet-500/15 text-violet-300 px-2 py-1.5 rounded border border-violet-500/20">
-                <Copy className="w-3 h-3 mt-0.5 flex-shrink-0" />
+              <div key={i} className="flex items-start gap-1.5 text-xs bg-violet-500/15 text-violet-300 px-2 py-1.5 rounded-sm border border-violet-500/20">
+                <Copy className="w-3 h-3 mt-0.5 shrink-0" />
                 <span>
                   Similar to: <span className="font-medium text-violet-200">&ldquo;{sim.title}&rdquo;</span>
                   {' '}(<span className={statusColor}>{sim.status}</span>, {pct}% match)
@@ -170,7 +170,7 @@ export function IdeaCard({ idea, onAction, showActions = true, compact = false }
       {tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {tags.map(tag => (
-            <span key={tag} className="text-xs bg-mc-bg-tertiary text-mc-text-secondary px-2 py-0.5 rounded">
+            <span key={tag} className="text-xs bg-mc-bg-tertiary text-mc-text-secondary px-2 py-0.5 rounded-sm">
               {tag}
             </span>
           ))}

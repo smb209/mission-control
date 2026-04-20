@@ -220,7 +220,7 @@ export default function NewProductPage() {
                 type="text"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text focus:outline-none focus:border-mc-accent"
+                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text focus:outline-hidden focus:border-mc-accent"
                 placeholder="My Product"
               />
             </div>
@@ -229,7 +229,7 @@ export default function NewProductPage() {
               <textarea
                 value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text focus:outline-none focus:border-mc-accent resize-none"
+                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text focus:outline-hidden focus:border-mc-accent resize-none"
                 rows={3}
                 placeholder="What does this product do?"
               />
@@ -265,7 +265,7 @@ export default function NewProductPage() {
                     value={form.repo_url}
                     onChange={e => setForm(f => ({ ...f, repo_url: e.target.value }))}
                     onBlur={() => { if (form.repo_url) validateRepoUrl(form.repo_url); }}
-                    className="flex-1 bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                    className="flex-1 bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                     placeholder="https://github.com/..."
                   />
                   <button
@@ -291,7 +291,7 @@ export default function NewProductPage() {
                     type="text"
                     value={form.live_url}
                     onChange={e => setForm(f => ({ ...f, live_url: e.target.value }))}
-                    className="flex-1 bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                    className="flex-1 bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                     placeholder="https://..."
                   />
                   <button
@@ -315,7 +315,7 @@ export default function NewProductPage() {
                 <select
                   value={form.build_mode}
                   onChange={e => setForm(f => ({ ...f, build_mode: e.target.value as 'plan_first' | 'auto_build' }))}
-                  className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                 >
                   <option value="plan_first">Plan first — send to planning queue</option>
                   <option value="auto_build">Auto-build — dispatch to builder immediately</option>
@@ -327,7 +327,7 @@ export default function NewProductPage() {
                   type="text"
                   value={form.default_branch}
                   onChange={e => setForm(f => ({ ...f, default_branch: e.target.value }))}
-                  className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                   placeholder="main"
                 />
               </div>
@@ -379,7 +379,7 @@ export default function NewProductPage() {
               <textarea
                 value={form.product_program}
                 onChange={e => setForm(f => ({ ...f, product_program: e.target.value }))}
-                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text font-mono text-sm focus:outline-none focus:border-mc-accent resize-none"
+                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text font-mono text-sm focus:outline-hidden focus:border-mc-accent resize-none"
                 rows={20}
                 placeholder={`# Product Program: ${form.name}\n\n## Purpose\nWhat this product does and who it's for.\n\n## Target Users\nWho uses this and what problems they have.\n\n## Priorities\nWhat matters most — growth, stability, features, UX, performance, etc.\n\n## Research Directives\nSpecific areas to focus research on.\n\n## Exclusions\nThings you do NOT want suggested.`}
               />

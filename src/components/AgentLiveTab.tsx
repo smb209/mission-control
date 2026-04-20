@@ -193,7 +193,7 @@ export function AgentLiveTab({ taskId }: AgentLiveTabProps) {
                     </span>
                   )}
                 </div>
-                <div className="text-sm text-mc-text whitespace-pre-wrap break-words">
+                <div className="text-sm text-mc-text whitespace-pre-wrap wrap-break-word">
                   {msg.content}
                 </div>
               </div>
@@ -214,7 +214,7 @@ export function AgentLiveTab({ taskId }: AgentLiveTabProps) {
                     streaming
                   </span>
                 </div>
-                <div className="text-sm text-mc-text whitespace-pre-wrap break-words font-mono">
+                <div className="text-sm text-mc-text whitespace-pre-wrap wrap-break-word font-mono">
                   {content}
                 </div>
               </div>

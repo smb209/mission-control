@@ -37,7 +37,7 @@ function BlockedBadgeInner({ state, portraitMode }: { state: BlockedState; portr
       className={`flex items-start gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} rounded-md border ${toneClasses}`}
       title={state.tooltip}
     >
-      <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${dotColor}`} />
+      <div className={`w-2 h-2 rounded-full mt-1 shrink-0 ${dotColor}`} />
       <span className="text-xs leading-snug">{state.label}</span>
     </div>
   );

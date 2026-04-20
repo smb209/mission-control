@@ -410,18 +410,18 @@ function DebugEventRow({
         onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-mc-bg-tertiary/40 rounded-lg"
       >
-        {expanded ? <ChevronDown className="w-4 h-4 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 flex-shrink-0" />}
-        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${directionBadge.cls} flex-shrink-0`}>
+        {expanded ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-sm border ${directionBadge.cls} shrink-0`}>
           {directionBadge.label}
         </span>
-        <span className="font-mono text-sm flex-shrink-0">{event.event_type}</span>
+        <span className="font-mono text-sm shrink-0">{event.event_type}</span>
         <span className="text-xs text-mc-text-secondary truncate flex-1">
           {event.task_id && <span className="mr-3">task={event.task_id.slice(0, 8)}</span>}
           {event.agent_id && <span className="mr-3">agent={event.agent_id.slice(0, 8)}</span>}
           {event.duration_ms != null && <span className="mr-3">{event.duration_ms}ms</span>}
           {hasError && <span className="text-red-300">error</span>}
         </span>
-        <span className="text-[11px] text-mc-text-secondary/70 flex-shrink-0">
+        <span className="text-[11px] text-mc-text-secondary/70 shrink-0">
           {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
         </span>
       </button>
@@ -459,13 +459,13 @@ function DebugField({
     return (
       <div>
         <div className="text-mc-text-secondary mb-1">{label}</div>
-        <pre className={`whitespace-pre-wrap break-all bg-mc-bg px-3 py-2 rounded border border-mc-border max-h-96 overflow-auto ${toneCls}`}>{value}</pre>
+        <pre className={`whitespace-pre-wrap break-all bg-mc-bg px-3 py-2 rounded-sm border border-mc-border max-h-96 overflow-auto ${toneCls}`}>{value}</pre>
       </div>
     );
   }
   return (
     <div className="flex gap-3">
-      <span className="text-mc-text-secondary w-28 flex-shrink-0">{label}</span>
+      <span className="text-mc-text-secondary w-28 shrink-0">{label}</span>
       <span className={`break-all ${toneCls}`}>{value}</span>
     </div>
   );

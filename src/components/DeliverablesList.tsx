@@ -145,7 +145,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
         <div className="flex items-center justify-end">
           <a
             href={`/api/tasks/${taskId}/deliverables/download`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-mc-accent text-white hover:bg-mc-accent/90"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm bg-mc-accent text-white hover:bg-mc-accent/90"
             title={`Download ${mcFileCount} file${mcFileCount === 1 ? '' : 's'} as a zip`}
           >
             <Archive className="w-4 h-4" />
@@ -159,7 +159,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
           className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border hover:border-mc-accent transition-colors"
         >
           {/* Icon */}
-          <div className="flex-shrink-0 text-mc-accent">
+          <div className="shrink-0 text-mc-accent">
             {getDeliverableIcon(deliverable.deliverable_type)}
           </div>
 
@@ -185,7 +185,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                 {deliverable.deliverable_type === 'file' && deliverable.storage_scheme === 'mc' && (
                   <a
                     href={`/api/deliverables/${deliverable.id}/download`}
-                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent"
+                    className="shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-accent"
                     title="Download file"
                   >
                     <Download className="w-4 h-4" />
@@ -195,7 +195,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                 {deliverable.deliverable_type === 'file' && deliverable.path?.endsWith('.html') && (
                   <button
                     onClick={() => handlePreview(deliverable)}
-                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent-cyan"
+                    className="shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-accent-cyan"
                     title="Preview in browser"
                   >
                     <Eye className="w-4 h-4" />
@@ -205,7 +205,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                 {deliverable.path && (
                   <button
                     onClick={() => handleOpen(deliverable)}
-                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent"
+                    className="shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-accent"
                     title={deliverable.deliverable_type === 'url' ? 'Open URL' : 'Reveal in Finder'}
                   >
                     <ExternalLink className="w-4 h-4" />
@@ -228,12 +228,12 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                   href={deliverable.path}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-accent hover:text-mc-accent/80 font-mono break-all block hover:bg-mc-bg-tertiary/80"
+                  className="mt-2 p-2 bg-mc-bg-tertiary rounded-sm text-xs text-mc-accent hover:text-mc-accent/80 font-mono break-all block hover:bg-mc-bg-tertiary/80"
                 >
                   {deliverable.path}
                 </a>
               ) : (
-                <div className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-text-secondary font-mono break-all">
+                <div className="mt-2 p-2 bg-mc-bg-tertiary rounded-sm text-xs text-mc-text-secondary font-mono break-all">
                   {deliverable.path}
                 </div>
               )
@@ -252,7 +252,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
               )}
               {deliverable.deliverable_type === 'file' && deliverable.storage_scheme !== 'mc' && (
                 <span
-                  className="px-1.5 py-0.5 rounded bg-mc-bg-tertiary text-mc-text-secondary"
+                  className="px-1.5 py-0.5 rounded-sm bg-mc-bg-tertiary text-mc-text-secondary"
                   title="Stored on host filesystem; not downloadable from the web UI"
                 >
                   host-only

@@ -646,7 +646,7 @@ const healthDotStyles: Record<AgentHealthState, { bg: string; animate: boolean; 
           e.stopPropagation();
           handleNudge(task.id, task.assigned_agent_id);
         }}
-        className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors"
+        className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-sm border border-red-500/30 transition-colors"
       >
         Nudge
       </button>
@@ -731,25 +731,25 @@ export function HealthAlertBanner() {
       
       <div className="space-y-2">
         {visibleAlerts.map(alert => (
-          <div key={alert.taskId} className="flex items-center justify-between gap-3 py-2 px-3 bg-mc-bg-secondary/50 rounded">
+          <div key={alert.taskId} className="flex items-center justify-between gap-3 py-2 px-3 bg-mc-bg-secondary/50 rounded-sm">
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0" />
-              <span className="text-base flex-shrink-0">{alert.agentEmoji}</span>
+              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shrink-0" />
+              <span className="text-base shrink-0">{alert.agentEmoji}</span>
               <span className="text-xs text-mc-text-secondary truncate">
                 {alert.agentName} {alert.healthState} on "{alert.taskTitle}" ({alert.duration})
                 {!alert.sessionAlive && ' — session dead'}
                 {alert.hasArtifacts && ' — work appears complete'}
               </span>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <button className="text-xs px-2 py-1 bg-mc-bg-tertiary hover:bg-mc-accent/20 text-mc-text-secondary rounded border border-mc-border transition-colors">
+            <div className="flex items-center gap-2 shrink-0">
+              <button className="text-xs px-2 py-1 bg-mc-bg-tertiary hover:bg-mc-accent/20 text-mc-text-secondary rounded-sm border border-mc-border transition-colors">
                 View
               </button>
-              <button className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded border border-red-500/30 transition-colors">
+              <button className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-sm border border-red-500/30 transition-colors">
                 Nudge
               </button>
               {alert.hasArtifacts && (
-                <button className="text-xs px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded border border-green-500/30 transition-colors">
+                <button className="text-xs px-2 py-1 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-sm border border-green-500/30 transition-colors">
                   Complete
                 </button>
               )}

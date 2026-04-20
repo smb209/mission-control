@@ -158,7 +158,7 @@ export function HealthWeightSliders({ productId, initialWeights, onSaved }: Prop
                   type="checkbox"
                   checked={!isDisabled}
                   onChange={() => handleToggle(comp.key)}
-                  className="rounded border-mc-border bg-mc-bg text-mc-accent focus:ring-mc-accent"
+                  className="rounded-sm border-mc-border bg-mc-bg text-mc-accent focus:ring-mc-accent"
                 />
                 <span
                   className="text-sm font-medium"

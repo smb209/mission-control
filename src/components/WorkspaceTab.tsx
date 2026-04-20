@@ -106,12 +106,12 @@ export function WorkspaceTab({ taskId, taskStatus }: WorkspaceTabProps) {
     <div className="space-y-4 p-1">
       {/* Strategy badge */}
       <div className="flex items-center gap-2">
-        <span className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded bg-mc-bg-tertiary text-mc-text-secondary">
+        <span className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-sm bg-mc-bg-tertiary text-mc-text-secondary">
           {strategyIcon}
           {strategyLabel}
         </span>
         {workspace.mergeStatus && (
-          <span className={`text-xs font-medium px-2 py-1 rounded ${mergeStatusColors[workspace.mergeStatus] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+          <span className={`text-xs font-medium px-2 py-1 rounded-sm ${mergeStatusColors[workspace.mergeStatus] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
             {workspace.mergeStatus === 'pr_created' ? 'PR Created' : workspace.mergeStatus}
           </span>
         )}

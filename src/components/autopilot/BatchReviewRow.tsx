@@ -45,7 +45,7 @@ export function BatchReviewRow({ idea, selected, action, onToggleSelect, onActio
           type="checkbox"
           checked={selected}
           onChange={onToggleSelect}
-          className="w-4 h-4 rounded border-mc-border bg-mc-bg text-mc-accent focus:ring-mc-accent/50 cursor-pointer"
+          className="w-4 h-4 rounded-sm border-mc-border bg-mc-bg text-mc-accent focus:ring-mc-accent/50 cursor-pointer"
         />
       </div>
 
@@ -55,7 +55,7 @@ export function BatchReviewRow({ idea, selected, action, onToggleSelect, onActio
         <div className="flex items-start gap-2">
           <h4 className="text-sm font-medium text-mc-text leading-tight flex-1 min-w-0">{idea.title}</h4>
           <div className="flex items-center gap-2 shrink-0">
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${categoryColors[idea.category] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-sm ${categoryColors[idea.category] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
               {idea.category}
             </span>
             {idea.complexity && (
@@ -94,7 +94,7 @@ export function BatchReviewRow({ idea, selected, action, onToggleSelect, onActio
           {tags.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
               {tags.slice(0, 3).map(tag => (
-                <span key={tag} className="text-[10px] bg-mc-bg-tertiary text-mc-text-secondary px-1.5 py-0.5 rounded">
+                <span key={tag} className="text-[10px] bg-mc-bg-tertiary text-mc-text-secondary px-1.5 py-0.5 rounded-sm">
                   {tag}
                 </span>
               ))}
@@ -114,7 +114,7 @@ export function BatchReviewRow({ idea, selected, action, onToggleSelect, onActio
             const val = e.target.value;
             onActionChange(val ? val as SwipeAction : null);
           }}
-          className={`text-xs rounded-lg border px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-mc-accent/50 cursor-pointer ${
+          className={`text-xs rounded-lg border px-2 py-1.5 focus:outline-hidden focus:ring-1 focus:ring-mc-accent/50 cursor-pointer ${
             action === 'approve' ? 'bg-green-500/20 border-green-500/40 text-green-400' :
             action === 'reject' ? 'bg-red-500/20 border-red-500/40 text-red-400' :
             action === 'maybe' ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' :

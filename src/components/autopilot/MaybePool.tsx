@@ -72,7 +72,7 @@ export function MaybePool({ productId }: MaybePoolProps) {
                 </span>
                 <button
                   onClick={() => handleResurface(entry.idea_id)}
-                  className="text-xs px-3 py-1.5 rounded bg-mc-accent/20 text-mc-accent hover:bg-mc-accent/30"
+                  className="text-xs px-3 py-1.5 rounded-sm bg-mc-accent/20 text-mc-accent hover:bg-mc-accent/30"
                 >
                   Resurface Now
                 </button>

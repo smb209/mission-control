@@ -568,7 +568,7 @@ Once features are built and shipped, the system doesn't stop. Post-launch agents
 1. Research agent identifies content opportunities (keyword gaps, competitor content, trending topics)
 2. Content ideas enter the swipe deck alongside feature ideas (category: `content`)
 3. Approved content ideas become tasks with content-specific workflow:
-   `outline` → `draft` → `review` → `publish`
+   `outline-solid` → `draft` → `review` → `publish`
 4. Published content is tracked for performance (pageviews, engagement, conversions)
 5. Underperforming content is flagged for optimization
 

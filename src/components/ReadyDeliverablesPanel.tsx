@@ -92,7 +92,7 @@ export function ReadyDeliverablesPanel({ workspaceId }: Props) {
           <Package className="w-4 h-4 text-mc-accent" />
           <span className="text-sm font-medium uppercase tracking-wider">Deliverables</span>
           {visible.length > 0 && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-mc-bg-tertiary text-mc-text-secondary">
+            <span className="text-xs px-1.5 py-0.5 rounded-sm bg-mc-bg-tertiary text-mc-text-secondary">
               {visible.length}
             </span>
           )}
@@ -121,7 +121,7 @@ export function ReadyDeliverablesPanel({ workspaceId }: Props) {
               {visible.map(row => (
                 <div
                   key={row.task_id}
-                  className={`p-2 rounded border border-mc-border bg-mc-bg ${row.is_archived ? 'opacity-60' : ''}`}
+                  className={`p-2 rounded-sm border border-mc-border bg-mc-bg ${row.is_archived ? 'opacity-60' : ''}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span
@@ -133,7 +133,7 @@ export function ReadyDeliverablesPanel({ workspaceId }: Props) {
                     {row.mc_count > 0 && (
                       <a
                         href={`/api/tasks/${row.task_id}/deliverables/download`}
-                        className="flex-shrink-0 p-1 rounded text-mc-accent hover:bg-mc-bg-tertiary"
+                        className="shrink-0 p-1 rounded-sm text-mc-accent hover:bg-mc-bg-tertiary"
                         title={`Download ${row.mc_count} file${row.mc_count === 1 ? '' : 's'}`}
                       >
                         <Download className="w-3.5 h-3.5" />
@@ -141,7 +141,7 @@ export function ReadyDeliverablesPanel({ workspaceId }: Props) {
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-1 text-xs">
-                    <span className={`px-1.5 py-0.5 rounded capitalize ${statusClass(row.status)}`}>
+                    <span className={`px-1.5 py-0.5 rounded-sm capitalize ${statusClass(row.status)}`}>
                       {row.status.replace(/_/g, ' ')}
                     </span>
                     <span className="text-mc-text-secondary">

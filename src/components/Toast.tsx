@@ -68,11 +68,11 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   }, [toast.duration, toast.type, onDismiss]);
 
   return (
-    <div className={`flex items-start gap-3 p-4 rounded-lg border backdrop-blur-sm shadow-lg max-w-md animate-slide-in ${COLORS[toast.type]}`}>
+    <div className={`flex items-start gap-3 p-4 rounded-lg border backdrop-blur-xs shadow-lg max-w-md animate-slide-in ${COLORS[toast.type]}`}>
       <Icon size={18} className={`mt-0.5 shrink-0 ${ICON_COLORS[toast.type]}`} />
       <div className="flex-1 min-w-0">
         <p className="font-medium text-sm">{toast.title}</p>
-        {toast.message && <p className="text-xs mt-1 opacity-80 break-words">{toast.message}</p>}
+        {toast.message && <p className="text-xs mt-1 opacity-80 wrap-break-word">{toast.message}</p>}
         {toast.action && (
           <button
             onClick={toast.action.onClick}
@@ -111,7 +111,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ addToast, removeToast }}>
       {children}
       {/* Toast container — fixed bottom-right */}
-      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2">
+      <div className="fixed bottom-4 right-4 z-9999 flex flex-col gap-2">
         {toasts.map(toast => (
           <ToastItem key={toast.id} toast={toast} onDismiss={() => removeToast(toast.id)} />
         ))}

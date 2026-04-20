@@ -75,7 +75,7 @@ export function TaskImages({ taskId }: TaskImagesProps) {
         <h3 className="text-sm font-medium text-mc-text-secondary">
           Images {images.length > 0 && `(${images.length})`}
         </h3>
-        <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-mc-accent hover:bg-mc-accent/10 rounded cursor-pointer transition-colors">
+        <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-mc-accent hover:bg-mc-accent/10 rounded-sm cursor-pointer transition-colors">
           {uploading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (

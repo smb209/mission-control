@@ -147,7 +147,7 @@ export function SessionsList({ taskId }: SessionsListProps) {
           className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border"
         >
           {/* Agent Avatar */}
-          <div className="flex-shrink-0">
+          <div className="shrink-0">
             {session.agent_avatar_emoji ? (
               <span className="text-2xl">{session.agent_avatar_emoji}</span>
             ) : (
@@ -195,7 +195,7 @@ export function SessionsList({ taskId }: SessionsListProps) {
             {session.status === 'active' && (
               <button
                 onClick={() => handleMarkComplete(session.openclaw_session_id)}
-                className="p-1.5 hover:bg-mc-bg-tertiary rounded text-green-500"
+                className="p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-green-500"
                 title="Mark as complete"
               >
                 <Check className="w-4 h-4" />
@@ -203,7 +203,7 @@ export function SessionsList({ taskId }: SessionsListProps) {
             )}
             <button
               onClick={() => handleDelete(session.openclaw_session_id)}
-              className="p-1.5 hover:bg-mc-bg-tertiary rounded text-red-500"
+              className="p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-red-500"
               title="Delete session"
             >
               <Trash2 className="w-4 h-4" />

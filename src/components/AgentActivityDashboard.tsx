@@ -285,7 +285,7 @@ export function AgentActivityDashboard({ workspace }: AgentActivityDashboardProp
                       <div className="text-xs text-mc-text-secondary truncate">{agent.role}</div>
                     </div>
                     <div className="text-right shrink-0">
-                      <span className={`text-xs px-2 py-1 rounded uppercase ${agent.status === 'working' ? 'status-working' : agent.status === 'offline' ? 'status-offline' : 'status-standby'}`}>
+                      <span className={`text-xs px-2 py-1 rounded-sm uppercase ${agent.status === 'working' ? 'status-working' : agent.status === 'offline' ? 'status-offline' : 'status-standby'}`}>
                         {agent.status}
                       </span>
                       <div className="text-[11px] text-mc-text-secondary mt-1">Updated {formatDistanceToNow(new Date(agent.updated_at), { addSuffix: true })}</div>
