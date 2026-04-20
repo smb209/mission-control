@@ -65,6 +65,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
   const [stalePlanning, setStalePlanning] = useState(false);
   const [forceCompleting, setForceCompleting] = useState(false);
   const [noNewMessageCount, setNoNewMessageCount] = useState(0);
+  const [repromptingPlanner, setRepromptingPlanner] = useState(false);
 
   // Refs to track polling state without triggering re-renders
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -142,6 +143,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
           setError(null);
           setStalePlanning(false);
           setNoNewMessageCount(0);
+          setRepromptingPlanner(false);
           setState(prev => prev ? { ...prev, parseError: data.parseError, parseErrorContent: data.rawContent } : prev);
           setIsWaitingForResponse(false);
           setIsSubmittingAnswer(false);
@@ -150,11 +152,22 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
           return;
         }
 
+        // Auto-reprompt flow: the server sent a correction to the planner and
+        // is waiting for a valid retry. Keep polling, show a transient banner.
+        if (data.reprompted) {
+          setError(null);
+          setStalePlanning(false);
+          setNoNewMessageCount(0);
+          setRepromptingPlanner(true);
+          return;
+        }
+
         if (data.hasUpdates) {
           // Clear any stale waiting warnings once updates are flowing
           setError(null);
           setStalePlanning(false);
           setNoNewMessageCount(0);
+          setRepromptingPlanner(false);
 
           const newQuestion = data.currentQuestion?.question;
           const questionChanged = newQuestion && currentQuestionRef.current !== newQuestion;
@@ -631,6 +644,18 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
           )}
         </button>
       </div>
+
+      {/* Auto-reprompt in-flight — planner emitted invalid JSON, server asked it to reformat */}
+      {repromptingPlanner && !state?.parseError && (
+        <div className="mx-4 mt-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+            <p className="text-amber-300 text-xs">
+              Planner returned invalid JSON — asked it to reformat. Waiting for corrected response…
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Parse error banner — agent emitted unparseable JSON */}
       {state?.parseError && (
