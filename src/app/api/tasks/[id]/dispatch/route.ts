@@ -424,7 +424,8 @@ their persona, memory, and channel bindings.
 For each peer agent you want to delegate work to:
 
 1. **Invoke \`sessions_send\` FIRST.** Do NOT announce the delegation before the tool call returns. Capture the tool-call result id the gateway returns.
-   - \`sessionKey\`: discover via \`sessions_list\`, or target the agent's main session. Gateway ids are listed above.
+   - \`sessionKey\`: construct a FRESH per-task session key as \`agent:<peer_gateway_id>:task-${task.id}\` — substitute the peer's gateway id from the list above (e.g. \`agent:mc-researcher:task-${task.id}\`). The gateway creates the session implicitly on first send.
+   - **Do NOT target the peer's \`:main\` session.** Shared \`:main\` sessions carry context from prior tasks, collide when multiple tasks run in parallel, and appear to get aborted more aggressively by the gateway's run lifecycle (see the task cc3d40e1 post-mortem: every peer delegation landed on \`:main\` and was aborted before responding). Per-task session keys give each delegation an isolated lane.
    - \`message\`: include the task id (\`${task.id}\`), the specific slice of work, any context, and prefix it with "You are the <role> for this task".
    - \`timeoutSeconds\`: \`0\` for fire-and-forget parallel work.
 
