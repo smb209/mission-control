@@ -31,3 +31,25 @@ export function resolveAgentSessionKeyPrefix(
   const slug = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return `agent:${slug || 'unknown'}:`;
 }
+
+// UUID pattern. Exported so other session-key helpers can reuse it.
+const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/**
+ * Extract the task UUID from a sessionKey, if present.
+ *
+ * Per-task session keys (coordinator dispatches, planning sessions) embed
+ * the task's UUID as a suffix — e.g.
+ *   agent:mc-coordinator:mission-control-coordinator-<UUID>
+ *   agent:mc-coordinator:planning:<UUID>
+ *
+ * Shared per-agent sessions (e.g. agent:mc-researcher:main) have no task
+ * identity and return null. The caller must fall back to the runId hint or
+ * leave task_id NULL on the debug row rather than guessing.
+ */
+export function extractTaskIdFromSessionKey(sessionKey: string | null | undefined): string | null {
+  if (!sessionKey) return null;
+  const m = UUID_RE.exec(sessionKey);
+  return m ? m[1] : null;
+}
+

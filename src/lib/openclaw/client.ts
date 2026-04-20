@@ -5,6 +5,7 @@ import type { OpenClawMessage, OpenClawSessionInfo } from '../types';
 import { loadOrCreateDeviceIdentity, signDevicePayload, buildDeviceAuthPayload, publicKeyRawBase64Url } from './device-identity';
 import { createHash } from 'crypto';
 import { logDebugEvent } from '../debug-log';
+import { extractTaskIdFromSessionKey } from './session-key';
 
 // Types for gateway model discovery (matches OpenClaw models.list response)
 export interface GatewayModelChoice {
@@ -303,23 +304,32 @@ export class OpenClawClient extends EventEmitter {
 
             console.log('[OpenClaw] Received:', data.type === 'res' ? `res:${String(data.id).slice(0, 8)}` : this.generateEventId(data).slice(0, 16));
 
-            // Forward gateway streaming events so subscribers can tap in
+            // Forward gateway streaming events so subscribers can tap in.
+            // We also extract the task UUID from the sessionKey suffix so
+            // per-task debug queries surface these rows. Shared :main
+            // sessions (peer agents without a per-task dispatch) have no
+            // task UUID and the field stays null — that's expected and
+            // correct, not a bug.
             if (data.type === 'event' && data.event === 'agent' && data.payload) {
               this.emit('agent_event', data.payload);
+              const sessionKey = (data.payload as { sessionKey?: string })?.sessionKey ?? null;
               logDebugEvent({
                 type: 'agent.event',
                 direction: 'inbound',
-                sessionKey: (data.payload as { sessionKey?: string })?.sessionKey ?? null,
+                taskId: extractTaskIdFromSessionKey(sessionKey),
+                sessionKey,
                 responseBody: data.payload,
                 metadata: { seq: data.seq, event: data.event },
               });
             }
             if (data.type === 'event' && data.event === 'chat' && data.payload) {
               this.emit('chat_event', data.payload);
+              const sessionKey = (data.payload as { sessionKey?: string })?.sessionKey ?? null;
               logDebugEvent({
                 type: 'chat.response',
                 direction: 'inbound',
-                sessionKey: (data.payload as { sessionKey?: string })?.sessionKey ?? null,
+                taskId: extractTaskIdFromSessionKey(sessionKey),
+                sessionKey,
                 responseBody: data.payload,
                 metadata: { seq: data.seq, event: data.event },
               });
