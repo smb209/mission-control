@@ -3,17 +3,23 @@ import { queryOne } from '@/lib/db';
 import { handleStageFailure, drainQueue } from '@/lib/workflow-engine';
 import { notifyLearner } from '@/lib/learner';
 import { logDebugEvent } from '@/lib/debug-log';
+import { FailTaskSchema } from '@/lib/validation';
 import type { Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * POST /api/tasks/[id]/fail
+ * Report a stage failure and trigger the fail-loopback.
  *
- * Report a stage failure. Triggers the workflow engine's fail-loopback
- * to send the task back to the appropriate stage (usually in_progress/builder).
+ * Agents in testing/review/verification call this when the prior stage's work
+ * didn't pass. The workflow engine routes the task back to the appropriate
+ * earlier stage (usually in_progress/builder) with the reason attached.
  *
- * Body: { reason: "What failed and why" }
+ * @openapi
+ * @tag Agent Callbacks
+ * @auth bearer
+ * @pathParams TaskIdParam
+ * @body FailTaskSchema
  */
 export async function POST(
   request: NextRequest,
@@ -23,11 +29,14 @@ export async function POST(
 
   try {
     const body = await request.json();
-    const { reason } = body;
-
-    if (!reason) {
-      return NextResponse.json({ error: 'reason is required' }, { status: 400 });
+    const validation = FailTaskSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: validation.error.issues },
+        { status: 400 }
+      );
     }
+    const { reason } = validation.data;
 
     const task = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
     if (!task) {

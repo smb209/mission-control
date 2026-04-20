@@ -84,6 +84,15 @@ export const ReleaseCycleSchema = z.object({
   released_by: z.string().max(200).optional(),
 });
 
+// Shared path-param schemas for OpenAPI doc generation
+export const TaskIdParam = z.object({
+  id: z.string().describe('Task UUID'),
+});
+
+export const AgentIdParam = z.object({
+  id: z.string().describe('Agent UUID or 32-char hex gateway ID'),
+});
+
 // Activity validation schema
 export const CreateActivitySchema = z.object({
   activity_type: ActivityType,
@@ -98,6 +107,28 @@ export const CreateDeliverableSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   path: z.string().optional(),
   description: z.string().optional(),
+});
+
+// Fail-task validation schema — agents hit this to trigger a fail-loopback
+// from testing/review/verification back to in_progress.
+export const FailTaskSchema = z.object({
+  reason: z.string().min(1, 'reason is required').max(5000),
+});
+
+// Checkpoint validation schema — agents save work-state snapshots so
+// mission-control can resume or audit long-running tasks.
+const CheckpointFileSnapshot = z.object({
+  path: z.string().min(1),
+  hash: z.string().min(1),
+  size: z.number().int().min(0),
+});
+
+export const CheckpointSchema = z.object({
+  agent_id: agentId,
+  checkpoint_type: z.enum(['auto', 'manual', 'crash_recovery']).optional(),
+  state_summary: z.string().min(1, 'state_summary is required').max(10000),
+  files_snapshot: z.array(CheckpointFileSnapshot).optional(),
+  context_data: z.record(z.string(), z.unknown()).optional(),
 });
 
 // Product Autopilot validation schemas
@@ -231,3 +262,5 @@ export type UpdateCostCapInput = z.infer<typeof UpdateCostCapSchema>;
 export type CreateCostEventInput = z.infer<typeof CreateCostEventSchema>;
 export type CreateScheduleInput = z.infer<typeof CreateScheduleSchema>;
 export type UpdateScheduleInput = z.infer<typeof UpdateScheduleSchema>;
+export type FailTaskInput = z.infer<typeof FailTaskSchema>;
+export type CheckpointInput = z.infer<typeof CheckpointSchema>;

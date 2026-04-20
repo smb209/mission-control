@@ -42,7 +42,21 @@ export async function GET(
   }
 }
 
-// PATCH /api/tasks/[id] - Update a task
+/**
+ * Update task fields or transition stage.
+ *
+ * Agents call this to move a task between stages (e.g. in_progress → testing)
+ * after their work is done. Operators use the same endpoint from the board.
+ * The evidence gate rejects forward transitions into testing/review/
+ * verification/done unless the task has at least one deliverable and one
+ * activity note.
+ *
+ * @openapi
+ * @tag Agent Callbacks
+ * @auth bearer
+ * @pathParams TaskIdParam
+ * @body UpdateTaskSchema
+ */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

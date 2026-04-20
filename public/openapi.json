@@ -1,0 +1,1283 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Mission Control API",
+    "version": "2.5.0",
+    "description": "HTTP API surface for Mission Control. Agent-facing endpoints authenticate with a bearer token (MC_API_TOKEN) and callback to log activities, register deliverables, report failures, and checkpoint work."
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "Current host (relative)"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "MC_API_TOKEN",
+        "description": "Shared bearer token injected into agent dispatch prompts as Authorization: Bearer <token>. Sourced from the MC_API_TOKEN environment variable."
+      }
+    },
+    "schemas": {
+      "TaskIdParam": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Task UUID"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "CreateActivitySchema": {
+        "type": "object",
+        "properties": {
+          "activity_type": {
+            "$ref": "#/components/schemas/ActivityType"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "agent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/agentId"
+              }
+            ]
+          },
+          "metadata": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "activity_type",
+          "message"
+        ]
+      },
+      "CheckpointSchema": {
+        "type": "object",
+        "properties": {
+          "agent_id": {
+            "$ref": "#/components/schemas/agentId"
+          },
+          "checkpoint_type": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual",
+              "crash_recovery"
+            ]
+          },
+          "state_summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "files_snapshot": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckpointFileSnapshot"
+            }
+          },
+          "context_data": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "agent_id",
+          "state_summary"
+        ]
+      },
+      "CreateDeliverableSchema": {
+        "type": "object",
+        "properties": {
+          "deliverable_type": {
+            "$ref": "#/components/schemas/DeliverableType"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deliverable_type",
+          "title"
+        ]
+      },
+      "FailTaskSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "UpdateTaskSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              }
+            ]
+          },
+          "priority": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TaskPriority"
+              }
+            ]
+          },
+          "assigned_agent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/agentId"
+              }
+            ]
+          },
+          "workflow_template_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "due_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "updated_by_agent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/agentId"
+              }
+            ]
+          },
+          "status_reason": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "board_override": {
+            "type": "boolean"
+          },
+          "override_reason": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "pr_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "pr_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "open",
+              "merged",
+              "closed"
+            ]
+          }
+        }
+      },
+      "agentId": {
+        "type": "string",
+        "pattern": "^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$"
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "pending_dispatch",
+          "planning",
+          "inbox",
+          "assigned",
+          "in_progress",
+          "convoy_active",
+          "testing",
+          "review",
+          "verification",
+          "done",
+          "cancelled"
+        ]
+      },
+      "TaskPriority": {
+        "type": "string",
+        "enum": [
+          "low",
+          "normal",
+          "high",
+          "urgent"
+        ]
+      },
+      "ActivityType": {
+        "type": "string",
+        "enum": [
+          "spawned",
+          "updated",
+          "completed",
+          "file_created",
+          "status_changed"
+        ]
+      },
+      "DeliverableType": {
+        "type": "string",
+        "enum": [
+          "file",
+          "url",
+          "artifact"
+        ]
+      },
+      "CreateTaskSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 10000
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              }
+            ]
+          },
+          "priority": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TaskPriority"
+              }
+            ]
+          },
+          "assigned_agent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/agentId"
+              }
+            ]
+          },
+          "created_by_agent_id": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/agentId"
+              }
+            ]
+          },
+          "business_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "due_date": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "ReleaseStallSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "terminal_state": {
+            "type": "string",
+            "enum": [
+              "cancelled",
+              "done"
+            ]
+          },
+          "released_by": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "ReleaseCycleSchema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "released_by": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "AgentIdParam": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Agent UUID or 32-char hex gateway ID"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "CheckpointFileSnapshot": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hash": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "hash",
+          "size"
+        ]
+      },
+      "IdeaCategory": {
+        "type": "string",
+        "enum": [
+          "feature",
+          "improvement",
+          "ux",
+          "performance",
+          "integration",
+          "infrastructure",
+          "content",
+          "growth",
+          "monetization",
+          "operations",
+          "security"
+        ]
+      },
+      "IdeaComplexity": {
+        "type": "string",
+        "enum": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ]
+      },
+      "SwipeAction": {
+        "type": "string",
+        "enum": [
+          "approve",
+          "reject",
+          "maybe",
+          "fire"
+        ]
+      },
+      "CostCapType": {
+        "type": "string",
+        "enum": [
+          "per_cycle",
+          "per_task",
+          "daily",
+          "monthly",
+          "per_product_monthly"
+        ]
+      },
+      "CostEventType": {
+        "type": "string",
+        "enum": [
+          "agent_dispatch",
+          "research_cycle",
+          "ideation_cycle",
+          "build_task",
+          "content_generation",
+          "seo_analysis",
+          "web_search",
+          "external_api"
+        ]
+      },
+      "ProductStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "archived"
+        ]
+      },
+      "CreateProductSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "repo_url": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uri"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  ""
+                ]
+              }
+            ]
+          },
+          "live_url": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uri"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  ""
+                ]
+              }
+            ]
+          },
+          "product_program": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 10
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "string"
+          },
+          "build_mode": {
+            "type": "string",
+            "enum": [
+              "auto_build",
+              "plan_first"
+            ]
+          },
+          "default_branch": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "UpdateProductSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "repo_url": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uri",
+                "nullable": true
+              },
+              {
+                "type": "string",
+                "enum": [
+                  ""
+                ]
+              }
+            ]
+          },
+          "live_url": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uri",
+                "nullable": true
+              },
+              {
+                "type": "string",
+                "enum": [
+                  ""
+                ]
+              }
+            ]
+          },
+          "product_program": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 10
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProductStatus"
+              }
+            ]
+          },
+          "settings": {
+            "type": "string"
+          },
+          "build_mode": {
+            "type": "string",
+            "enum": [
+              "auto_build",
+              "plan_first"
+            ]
+          },
+          "default_branch": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "cost_cap_per_task": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true
+          },
+          "cost_cap_monthly": {
+            "type": "number",
+            "minimum": 0,
+            "nullable": true
+          },
+          "batch_review_threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      },
+      "SwipeActionSchema": {
+        "type": "object",
+        "properties": {
+          "idea_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "$ref": "#/components/schemas/SwipeAction"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "idea_id",
+          "action"
+        ]
+      },
+      "CreateIdeaSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "category": {
+            "$ref": "#/components/schemas/IdeaCategory"
+          },
+          "complexity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/IdeaComplexity"
+              }
+            ]
+          },
+          "impact_score": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "feasibility_score": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 10
+          },
+          "estimated_effort_hours": {
+            "type": "number",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "technical_approach": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "category"
+        ]
+      },
+      "CreateCostCapSchema": {
+        "type": "object",
+        "properties": {
+          "workspace_id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "cap_type": {
+            "$ref": "#/components/schemas/CostCapType"
+          },
+          "limit_usd": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cap_type",
+          "limit_usd"
+        ]
+      },
+      "UpdateCostCapSchema": {
+        "type": "object",
+        "properties": {
+          "limit_usd": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused"
+            ]
+          },
+          "period_start": {
+            "type": "string"
+          },
+          "period_end": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCostEventSchema": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "cycle_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "agent_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/CostEventType"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "tokens_input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokens_output": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cost_usd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "metadata": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_type",
+          "cost_usd"
+        ]
+      },
+      "BatchSwipeSchema": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "idea_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "approve",
+                    "reject",
+                    "maybe",
+                    "fire"
+                  ]
+                },
+                "notes": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "idea_id",
+                "action"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 200
+          }
+        },
+        "required": [
+          "actions"
+        ]
+      },
+      "ScanUrlSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "url"
+        ]
+      },
+      "z": {
+        "type": "object"
+      },
+      "CreateScheduleSchema": {
+        "type": "object",
+        "properties": {
+          "schedule_type": {
+            "type": "string",
+            "enum": [
+              "research",
+              "ideation",
+              "maybe_reevaluation",
+              "seo_audit",
+              "content_refresh",
+              "analytics_report",
+              "social_batch",
+              "growth_experiment"
+            ]
+          },
+          "cron_expression": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule_type",
+          "cron_expression"
+        ]
+      },
+      "UpdateScheduleSchema": {
+        "type": "object",
+        "properties": {
+          "cron_expression": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responses": {
+      "400": {
+        "description": "Bad Request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "Invalid request parameters"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "400"
+                }
+              }
+            }
+          }
+        }
+      },
+      "401": {
+        "description": "Unauthorized",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "Authentication required"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "401"
+                }
+              }
+            }
+          }
+        }
+      },
+      "403": {
+        "description": "Forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "Access denied"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "403"
+                }
+              }
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "Not Found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "Resource not found"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "404"
+                }
+              }
+            }
+          }
+        }
+      },
+      "409": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "Resource already exists"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "409"
+                }
+              }
+            }
+          }
+        }
+      },
+      "500": {
+        "description": "Internal Server Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "An unexpected error occurred"
+                },
+                "code": {
+                  "type": "string",
+                  "example": "500"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/tasks/{id}": {
+      "patch": {
+        "operationId": "patch-tasks-{id}",
+        "summary": "Update task fields or transition stage.",
+        "description": "",
+        "tags": [
+          "Agent Callbacks"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "description": "Task UUID"
+            },
+            "required": true,
+            "description": "Task UUID",
+            "example": "123"
+          }
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTaskSchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          }
+        }
+      }
+    },
+    "/tasks/{id}/activities": {
+      "post": {
+        "operationId": "post-tasks-{id}-activities",
+        "summary": "Log an activity for a task.",
+        "description": "",
+        "tags": [
+          "Agent Callbacks"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "description": "Task UUID"
+            },
+            "required": true,
+            "description": "Task UUID",
+            "example": "123"
+          }
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateActivitySchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          }
+        }
+      }
+    },
+    "/tasks/{id}/checkpoint": {
+      "post": {
+        "operationId": "post-tasks-{id}-checkpoint",
+        "summary": "Save a work-state checkpoint for a long-running task.",
+        "description": "",
+        "tags": [
+          "Agent Callbacks"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "description": "Task UUID"
+            },
+            "required": true,
+            "description": "Task UUID",
+            "example": "123"
+          }
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointSchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          }
+        }
+      }
+    },
+    "/tasks/{id}/deliverables": {
+      "post": {
+        "operationId": "post-tasks-{id}-deliverables",
+        "summary": "Register a deliverable (file, URL, or artifact) produced by a task.",
+        "description": "",
+        "tags": [
+          "Agent Callbacks"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "description": "Task UUID"
+            },
+            "required": true,
+            "description": "Task UUID",
+            "example": "123"
+          }
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeliverableSchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          }
+        }
+      }
+    },
+    "/tasks/{id}/fail": {
+      "post": {
+        "operationId": "post-tasks-{id}-fail",
+        "summary": "Report a stage failure and trigger the fail-loopback.",
+        "description": "",
+        "tags": [
+          "Agent Callbacks"
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "description": "Task UUID"
+            },
+            "required": true,
+            "description": "Task UUID",
+            "example": "123"
+          }
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailTaskSchema"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          }
+        }
+      }
+    }
+  }
+}
