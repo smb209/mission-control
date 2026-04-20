@@ -224,25 +224,25 @@ export function BatchReviewList({ productId, ideas: initialIdeas, onBatchComplet
           <span className="text-xs text-mc-text-secondary mr-2">{selectedIds.size} selected — bulk action:</span>
           <button
             onClick={() => applyBulkAction('approve')}
-            className="text-[11px] px-2 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors"
+            className="text-[11px] px-2 py-1 rounded-sm bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors"
           >
             ✅ Approve All
           </button>
           <button
             onClick={() => applyBulkAction('reject')}
-            className="text-[11px] px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
+            className="text-[11px] px-2 py-1 rounded-sm bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
           >
             ❌ Reject All
           </button>
           <button
             onClick={() => applyBulkAction('maybe')}
-            className="text-[11px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors"
+            className="text-[11px] px-2 py-1 rounded-sm bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors"
           >
             🤔 Maybe All
           </button>
           <button
             onClick={() => applyBulkAction('fire')}
-            className="text-[11px] px-2 py-1 rounded bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 transition-colors"
+            className="text-[11px] px-2 py-1 rounded-sm bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 transition-colors"
           >
             🔥 Fire All
           </button>

@@ -147,9 +147,9 @@ export function CostDashboard({ productId, workspaceId = 'default' }: CostDashbo
               return (
                 <div key={item.event_type} className="flex items-center gap-3">
                   <span className="text-sm text-mc-text-secondary w-32 capitalize truncate">{label}</span>
-                  <div className="flex-1 h-5 bg-mc-bg-tertiary rounded overflow-hidden">
+                  <div className="flex-1 h-5 bg-mc-bg-tertiary rounded-sm overflow-hidden">
                     <div
-                      className="h-full bg-mc-accent-cyan/60 rounded"
+                      className="h-full bg-mc-accent-cyan/60 rounded-sm"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -202,9 +202,9 @@ export function CostDashboard({ productId, workspaceId = 'default' }: CostDashbo
                 <span>Monthly spend</span>
                 <span>{formatUsd(overview.this_month)} / {formatUsd(productCaps.cost_cap_monthly)}</span>
               </div>
-              <div className="h-2 bg-mc-bg-tertiary rounded overflow-hidden">
+              <div className="h-2 bg-mc-bg-tertiary rounded-sm overflow-hidden">
                 <div
-                  className={`h-full rounded ${capExceeded ? 'bg-amber-500' : 'bg-mc-accent-cyan/60'}`}
+                  className={`h-full rounded-sm ${capExceeded ? 'bg-amber-500' : 'bg-mc-accent-cyan/60'}`}
                   style={{ width: `${Math.min((overview.this_month / productCaps.cost_cap_monthly) * 100, 100)}%` }}
                 />
               </div>
@@ -220,7 +220,7 @@ export function CostDashboard({ productId, workspaceId = 'default' }: CostDashbo
                 step="0.01"
                 value={productCaps.cost_cap_per_task ?? ''}
                 onChange={e => setProductCaps(c => ({ ...c, cost_cap_per_task: e.target.value ? Number(e.target.value) : null }))}
-                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-3 py-2 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-3 py-2 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                 placeholder="No limit"
               />
             </div>
@@ -232,7 +232,7 @@ export function CostDashboard({ productId, workspaceId = 'default' }: CostDashbo
                 step="0.01"
                 value={productCaps.cost_cap_monthly ?? ''}
                 onChange={e => setProductCaps(c => ({ ...c, cost_cap_monthly: e.target.value ? Number(e.target.value) : null }))}
-                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-3 py-2 text-mc-text text-sm focus:outline-none focus:border-mc-accent"
+                className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-3 py-2 text-mc-text text-sm focus:outline-hidden focus:border-mc-accent"
                 placeholder="No limit"
               />
             </div>

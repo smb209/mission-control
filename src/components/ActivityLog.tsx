@@ -118,7 +118,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
           className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border"
         >
           {/* Icon */}
-          <div className="text-2xl flex-shrink-0">
+          <div className="text-2xl shrink-0">
             {getActivityIcon(activity.activity_type, activity.message)}
           </div>
 
@@ -135,13 +135,13 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
             )}
 
             {/* Message */}
-            <p className="text-sm text-mc-text break-words">
+            <p className="text-sm text-mc-text wrap-break-word">
               {activity.message}
             </p>
 
             {/* Metadata */}
             {activity.metadata && (
-              <div className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-text-secondary font-mono">
+              <div className="mt-2 p-2 bg-mc-bg-tertiary rounded-sm text-xs text-mc-text-secondary font-mono">
                 {typeof activity.metadata === 'string' 
                   ? activity.metadata 
                   : JSON.stringify(JSON.parse(activity.metadata), null, 2)}

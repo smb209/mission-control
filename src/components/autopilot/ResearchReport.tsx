@@ -143,7 +143,7 @@ export function ResearchReport({ productId }: ResearchReportProps) {
                   {cycle.status === 'completed' && (
                     <button
                       onClick={() => handleRunIdeation(cycle.id)}
-                      className="text-xs px-3 py-1.5 rounded bg-mc-accent/20 text-mc-accent hover:bg-mc-accent/30"
+                      className="text-xs px-3 py-1.5 rounded-sm bg-mc-accent/20 text-mc-accent hover:bg-mc-accent/30"
                     >
                       Generate Ideas
                     </button>
@@ -160,7 +160,7 @@ export function ResearchReport({ productId }: ResearchReportProps) {
                 <p className="text-sm text-red-400">{cycle.error_message}</p>
               )}
               {expanded === cycle.id && cycle.report && (
-                <pre className="mt-3 p-3 bg-mc-bg rounded text-xs text-mc-text-secondary overflow-auto max-h-96 whitespace-pre-wrap">
+                <pre className="mt-3 p-3 bg-mc-bg rounded-sm text-xs text-mc-text-secondary overflow-auto max-h-96 whitespace-pre-wrap">
                   {JSON.stringify(JSON.parse(cycle.report), null, 2)}
                 </pre>
               )}

@@ -202,7 +202,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
           </label>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
+            className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent-pink/90"
           >
             <Plus className="w-4 h-4" />
             New Task
@@ -231,7 +231,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                   className={`flex-none w-10 flex flex-col items-center py-2 gap-2 bg-mc-bg rounded-lg border border-mc-border/50 border-t-2 transition-[width] duration-200 hover:bg-mc-bg-tertiary ${column.color}`}
                   title={`${column.label} (${columnTasks.length}) — click to expand`}
                 >
-                  <span className="text-[10px] bg-mc-bg-tertiary px-1.5 py-0.5 rounded text-mc-text-secondary">
+                  <span className="text-[10px] bg-mc-bg-tertiary px-1.5 py-0.5 rounded-sm text-mc-text-secondary">
                     {columnTasks.length}
                   </span>
                   <span
@@ -255,11 +255,11 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                 <div className="p-2 border-b border-mc-border flex items-center justify-between gap-2">
                   <span className="text-xs font-medium uppercase text-mc-text-secondary whitespace-nowrap">{column.label}</span>
                   <div className="flex items-center gap-1">
-                    <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded text-mc-text-secondary">{columnTasks.length}</span>
+                    <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded-sm text-mc-text-secondary">{columnTasks.length}</span>
                     <button
                       type="button"
                       onClick={() => toggleColumn(column.id, false)}
-                      className="p-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+                      className="p-0.5 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
                       title="Collapse column"
                     >
                       <ChevronsLeft className="w-3.5 h-3.5" />
@@ -366,7 +366,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
 
       {/* Pipeline override warning dialog */}
       {pendingMove && (
-        <div className="fixed inset-0 z-[60] bg-black/60 p-4 flex items-center justify-center" onClick={() => setPendingMove(null)}>
+        <div className="fixed inset-0 z-60 bg-black/60 p-4 flex items-center justify-center" onClick={() => setPendingMove(null)}>
           <div
             className="w-full max-w-md bg-mc-bg-secondary border border-amber-500/30 rounded-xl p-5 space-y-4"
             onClick={(e) => e.stopPropagation()}
@@ -436,13 +436,13 @@ function AssignedStatusBadge({ task, portraitMode }: { task: Task; portraitMode:
     return (
       <div className={`${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-amber-500/10 rounded-md border border-amber-500/30`}>
         <div className="flex items-center gap-2 mb-1.5">
-          <div className="w-2 h-2 bg-amber-400 rounded-full flex-shrink-0" />
+          <div className="w-2 h-2 bg-amber-400 rounded-full shrink-0" />
           <span className="text-xs text-amber-200">Stuck in assigned for {staleMinutes}m</span>
         </div>
         <button
           onClick={handleRetryDispatch}
           disabled={retrying}
-          className="text-[11px] px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded border border-amber-500/30 disabled:opacity-50"
+          className="text-[11px] px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-sm border border-amber-500/30 disabled:opacity-50"
         >
           {retrying ? 'Dispatching...' : '↻ Retry Dispatch'}
         </button>
@@ -452,7 +452,7 @@ function AssignedStatusBadge({ task, portraitMode }: { task: Task; portraitMode:
 
   return (
     <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-yellow-500/10 rounded-md border border-yellow-500/30`}>
-      <div className="w-2 h-2 bg-yellow-400 rounded-full flex-shrink-0" />
+      <div className="w-2 h-2 bg-yellow-400 rounded-full shrink-0" />
       <span className="text-xs text-yellow-200">Assigned and validating — auto-start will move this to In Progress.</span>
     </div>
   );
@@ -512,7 +512,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
           <h4 className={`font-medium leading-snug line-clamp-2 ${portraitMode ? 'text-sm mb-3' : 'text-xs mb-2'}`}>
             {isArchived && (
               <span
-                className="inline-flex items-center gap-0.5 mr-1.5 px-1.5 py-0.5 rounded bg-mc-bg-tertiary text-[10px] text-mc-text-secondary align-middle"
+                className="inline-flex items-center gap-0.5 mr-1.5 px-1.5 py-0.5 rounded-sm bg-mc-bg-tertiary text-[10px] text-mc-text-secondary align-middle"
                 title="Archived"
               >
                 <Archive className="w-2.5 h-2.5" />
@@ -522,7 +522,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
             {task.title}
           </h4>
           {unreadCount > 0 && (
-            <span className="flex-shrink-0 flex items-center gap-1 px-1.5 py-0.5 bg-mc-accent/15 text-mc-accent rounded text-[10px] font-medium" title={`${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}`}>
+            <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 bg-mc-accent/15 text-mc-accent rounded-sm text-[10px] font-medium" title={`${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}`}>
               <MessageSquare className="w-2.5 h-2.5" />
               {unreadCount}
             </span>
@@ -531,21 +531,21 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
 
         {isPlanning && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-purple-500/10 rounded-md border border-purple-500/20`}>
-            <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse flex-shrink-0" />
+            <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse shrink-0" />
             <span className="text-xs text-purple-400 font-medium">Continue planning</span>
           </div>
         )}
 
         {isConvoyActive && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-cyan-500/10 rounded-md border border-cyan-500/20`}>
-            <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse flex-shrink-0" />
+            <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse shrink-0" />
             <span className="text-xs text-cyan-300 font-medium">Convoy active — sub-tasks running</span>
           </div>
         )}
 
         {isSubtask && (
           <div className={`flex items-center gap-1 ${portraitMode ? 'mb-2' : 'mb-1.5'}`}>
-            <span className="text-[10px] px-1.5 py-0.5 bg-cyan-500/15 text-cyan-400 rounded border border-cyan-500/20">SUB-TASK</span>
+            <span className="text-[10px] px-1.5 py-0.5 bg-cyan-500/15 text-cyan-400 rounded-sm border border-cyan-500/20">SUB-TASK</span>
           </div>
         )}
 
@@ -563,7 +563,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
         )}
 
         {task.assigned_agent && (
-          <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-1.5 px-2' : 'mb-2 py-1 px-2'} bg-mc-bg-tertiary/50 rounded`}>
+          <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-1.5 px-2' : 'mb-2 py-1 px-2'} bg-mc-bg-tertiary/50 rounded-sm`}>
             <span className="text-base">{(task.assigned_agent as unknown as { avatar_emoji: string }).avatar_emoji}</span>
             <span className="text-xs text-mc-text-secondary truncate">{(task.assigned_agent as unknown as { name: string }).name}</span>
           </div>
@@ -571,7 +571,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
 
         {task.workspace_path && (
           <div className={`flex items-center gap-1.5 ${portraitMode ? 'mb-2' : 'mb-1.5'}`}>
-            <span className="text-[10px] px-1.5 py-0.5 bg-purple-500/15 text-purple-400 rounded border border-purple-500/20">
+            <span className="text-[10px] px-1.5 py-0.5 bg-purple-500/15 text-purple-400 rounded-sm border border-purple-500/20">
               {task.workspace_strategy === 'worktree' ? '\u{1F500}' : '\u{1F512}'} ISOLATED
             </span>
           </div>

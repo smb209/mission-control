@@ -27,10 +27,8 @@ export const dynamic = 'force-dynamic';
 // GET — List rollback history for product
 // ---------------------------------------------------------------------------
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = queryOne<Product>('SELECT * FROM products WHERE id = ?', [params.id]);
     if (!product) {
@@ -59,10 +57,8 @@ export async function GET(
 // POST — Manual rollback trigger
 // ---------------------------------------------------------------------------
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = queryOne<Product>('SELECT * FROM products WHERE id = ?', [params.id]);
     if (!product) {
@@ -110,10 +106,8 @@ export async function POST(
 // PATCH — Acknowledge rollback & optionally restore automation tier
 // ---------------------------------------------------------------------------
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function PATCH(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = queryOne<Product>('SELECT * FROM products WHERE id = ?', [params.id]);
     if (!product) {

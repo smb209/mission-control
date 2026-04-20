@@ -13,9 +13,8 @@ import type { SSEEvent, Task } from '@/lib/types';
 
 export function useSSE() {
   const eventSourceRef = useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  // Use ref to track selectedTask ID without causing re-renders
-  const selectedTaskIdRef = useRef<string | undefined>();
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const selectedTaskIdRef = useRef<string | undefined>(undefined);
   const {
     updateTask,
     addTask,

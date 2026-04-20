@@ -153,10 +153,10 @@ export function MentionInput({
                 <div className="flex items-center gap-1.5">
                   <span className="font-medium">{agent.name}</span>
                   {agent.is_assigned && (
-                    <span className="text-[9px] px-1 py-0.5 bg-mc-accent/20 text-mc-accent rounded">assigned</span>
+                    <span className="text-[9px] px-1 py-0.5 bg-mc-accent/20 text-mc-accent rounded-sm">assigned</span>
                   )}
                   {agent.is_convoy_member && (
-                    <span className="text-[9px] px-1 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">convoy</span>
+                    <span className="text-[9px] px-1 py-0.5 bg-cyan-500/20 text-cyan-400 rounded-sm">convoy</span>
                   )}
                   {agent.status === 'working' && (
                     <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
@@ -176,7 +176,7 @@ export function MentionInput({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-2.5 py-1.5 text-xs text-mc-text resize-none focus:outline-none focus:border-mc-accent/60"
+          className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-2.5 py-1.5 text-xs text-mc-text resize-none focus:outline-hidden focus:border-mc-accent/60"
           rows={2}
         />
         <button

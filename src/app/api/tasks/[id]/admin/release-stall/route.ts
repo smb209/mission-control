@@ -16,8 +16,8 @@ export const dynamic = 'force-dynamic';
  * unassigns the agent, and writes audit trail to both task_activities and
  * events.
  *
- * Auth: relies on the middleware bearer-token check (same as other admin
- * endpoints — see src/middleware.ts). No additional role logic.
+ * Auth: relies on the proxy bearer-token check (same as other admin
+ * endpoints — see src/proxy.ts). No additional role logic.
  *
  * Body:
  *   reason:           required, 1..500 chars

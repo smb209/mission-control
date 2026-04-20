@@ -136,7 +136,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
           </div>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-mc-bg-tertiary rounded"
+            className="p-1 hover:bg-mc-bg-tertiary rounded-sm"
           >
             <X className="w-5 h-5" />
           </button>
@@ -153,14 +153,14 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
 
           {error && (
             <div className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-lg mb-4">
-              <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+              <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
               <span className="text-sm text-red-400">{error}</span>
             </div>
           )}
 
           {importResult && (
             <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-lg mb-4">
-              <Check className="w-5 h-5 text-green-400 flex-shrink-0" />
+              <Check className="w-5 h-5 text-green-400 shrink-0" />
               <span className="text-sm text-green-400">
                 Imported {importResult.imported} agent{importResult.imported !== 1 ? 's' : ''}
                 {importResult.skipped > 0 && ` (${importResult.skipped} skipped)`}
@@ -186,7 +186,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={discover}
-                    className="min-h-11 flex items-center gap-1 px-3 py-2 text-xs text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary rounded"
+                    className="min-h-11 flex items-center gap-1 px-3 py-2 text-xs text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary rounded-sm"
                   >
                     <RefreshCw className="w-3 h-3" />
                     Refresh
@@ -195,13 +195,13 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
                     <>
                       <button
                         onClick={selectAllAvailable}
-                        className="min-h-11 px-3 py-2 text-xs text-mc-accent hover:bg-mc-accent/10 rounded"
+                        className="min-h-11 px-3 py-2 text-xs text-mc-accent hover:bg-mc-accent/10 rounded-sm"
                       >
                         Select All
                       </button>
                       <button
                         onClick={deselectAll}
-                        className="min-h-11 px-3 py-2 text-xs text-mc-text-secondary hover:bg-mc-bg-tertiary rounded"
+                        className="min-h-11 px-3 py-2 text-xs text-mc-text-secondary hover:bg-mc-bg-tertiary rounded-sm"
                       >
                         Deselect All
                       </button>
@@ -230,7 +230,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
                     >
                       {/* Checkbox */}
                       <div
-                        className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                        className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 ${
                           isImported
                             ? 'border-green-500/50 bg-green-500/20'
                             : isSelected
@@ -251,7 +251,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm truncate">{agent.name}</span>
                           {isImported && (
-                            <span className="text-xs px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded">
+                            <span className="text-xs px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded-sm">
                               Imported
                             </span>
                           )}
@@ -286,7 +286,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
             <button
               onClick={handleImport}
               disabled={selectedIds.size === 0 || importing}
-              className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {importing ? (
                 <>

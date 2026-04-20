@@ -19,10 +19,8 @@ import type { Task, TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(_request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const db = getDb();
   const task = db.prepare(`SELECT id, title FROM tasks WHERE id = ?`).get(params.id) as
     | Pick<Task, 'id' | 'title'>

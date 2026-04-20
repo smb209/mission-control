@@ -337,7 +337,7 @@ export default function ProductDashboardPage() {
                     type="text"
                     value={settingsForm.icon || ''}
                     onChange={e => setSettingsForm(f => ({ ...f, icon: e.target.value }))}
-                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text text-center text-xl focus:outline-none focus:border-mc-accent"
+                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text text-center text-xl focus:outline-hidden focus:border-mc-accent"
                     maxLength={4}
                   />
                 </div>
@@ -347,7 +347,7 @@ export default function ProductDashboardPage() {
                     type="text"
                     value={settingsForm.name || ''}
                     onChange={e => setSettingsForm(f => ({ ...f, name: e.target.value }))}
-                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                   />
                 </div>
               </div>
@@ -357,7 +357,7 @@ export default function ProductDashboardPage() {
                 <textarea
                   value={settingsForm.description || ''}
                   onChange={e => setSettingsForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text resize-none focus:outline-none focus:border-mc-accent"
+                  className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text resize-none focus:outline-hidden focus:border-mc-accent"
                   rows={2}
                 />
               </div>
@@ -369,7 +369,7 @@ export default function ProductDashboardPage() {
                     type="url"
                     value={settingsForm.repo_url || ''}
                     onChange={e => setSettingsForm(f => ({ ...f, repo_url: e.target.value }))}
-                    className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                    className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                     placeholder="https://github.com/org/repo"
                   />
                   {settingsForm.repo_url && (
@@ -388,7 +388,7 @@ export default function ProductDashboardPage() {
                     type="url"
                     value={settingsForm.live_url || ''}
                     onChange={e => setSettingsForm(f => ({ ...f, live_url: e.target.value }))}
-                    className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                    className="flex-1 bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                     placeholder="https://yourproduct.com"
                   />
                   {settingsForm.live_url && (
@@ -407,7 +407,7 @@ export default function ProductDashboardPage() {
                     type="text"
                     value={settingsForm.default_branch || ''}
                     onChange={e => setSettingsForm(f => ({ ...f, default_branch: e.target.value }))}
-                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                     placeholder="main"
                   />
                 </div>
@@ -416,7 +416,7 @@ export default function ProductDashboardPage() {
                   <select
                     value={settingsForm.build_mode || 'plan_first'}
                     onChange={e => setSettingsForm(f => ({ ...f, build_mode: e.target.value }))}
-                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                    className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                   >
                     <option value="plan_first">Plan First</option>
                     <option value="auto_build">Auto Build</option>
@@ -429,7 +429,7 @@ export default function ProductDashboardPage() {
                 <select
                   value={settingsForm.status || 'active'}
                   onChange={e => setSettingsForm(f => ({ ...f, status: e.target.value }))}
-                  className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-none focus:border-mc-accent"
+                  className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm text-mc-text focus:outline-hidden focus:border-mc-accent"
                 >
                   <option value="active">Active</option>
                   <option value="paused">Paused</option>

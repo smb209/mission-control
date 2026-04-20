@@ -344,7 +344,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
           {!mobileMode && (
             <button
               onClick={toggleMinimize}
-              className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+              className="p-1 rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
               aria-label={effectiveMinimized ? 'Expand agents' : 'Minimize agents'}
             >
               {effectiveMinimized ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -353,11 +353,11 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
           {!effectiveMinimized && (
             <>
               <span className="text-sm font-medium uppercase tracking-wider">Agents</span>
-              <span className="bg-mc-bg-tertiary text-mc-text-secondary text-xs px-2 py-0.5 rounded ml-2">{agents.length}</span>
+              <span className="bg-mc-bg-tertiary text-mc-text-secondary text-xs px-2 py-0.5 rounded-sm ml-2">{agents.length}</span>
               <div className="relative ml-auto" data-agents-action-menu>
                 <button
                   onClick={() => setShowActionMenu(v => !v)}
-                  className="p-1.5 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+                  className="p-1.5 rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
                   aria-label="Agent actions"
                   title="Agent actions"
                 >
@@ -456,7 +456,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                       agent.status === 'working' ? 'bg-mc-accent-green' : agent.status === 'standby' ? 'bg-mc-text-secondary' : 'bg-gray-500'
                     }`}
                   />
-                  <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-mc-bg text-mc-text text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 border border-mc-border">
+                  <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-mc-bg text-mc-text text-xs rounded-sm opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 border border-mc-border">
                     {agent.name}
                   </div>
                 </button>
@@ -468,7 +468,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
           const isActive = Number(agent.is_active ?? 1) === 1;
           const isToggling = togglingAgentId === agent.id;
           return (
-            <div key={agent.id} className={`w-full rounded hover:bg-mc-bg-tertiary transition-colors ${selectedAgent?.id === agent.id ? 'bg-mc-bg-tertiary' : ''} ${!isActive ? 'opacity-50' : ''}`}>
+            <div key={agent.id} className={`w-full rounded-sm hover:bg-mc-bg-tertiary transition-colors ${selectedAgent?.id === agent.id ? 'bg-mc-bg-tertiary' : ''} ${!isActive ? 'opacity-50' : ''}`}>
               <button
                 onClick={() => {
                   setSelectedAgent(agent);
@@ -486,7 +486,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                     <span className="font-medium text-sm truncate">{agent.name}</span>
                     {!!agent.is_master && <span className="text-xs text-mc-accent-yellow">★</span>}
                     {!isActive && (
-                      <span className="text-[9px] px-1 py-0 bg-amber-500/20 text-amber-400 rounded uppercase tracking-wider" title="Excluded from routing + roll-call">
+                      <span className="text-[9px] px-1 py-0 bg-amber-500/20 text-amber-400 rounded-sm uppercase tracking-wider" title="Excluded from routing + roll-call">
                         paused
                       </span>
                     )}
@@ -494,7 +494,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                   <div className="text-xs text-mc-text-secondary truncate flex items-center gap-1">
                     {agent.role}
                     {agent.source === 'gateway' && (
-                      <span className="text-[10px] px-1 py-0 bg-blue-500/20 text-blue-400 rounded" title="Imported from Gateway">
+                      <span className="text-[10px] px-1 py-0 bg-blue-500/20 text-blue-400 rounded-sm" title="Imported from Gateway">
                         GW
                       </span>
                     )}
@@ -521,7 +521,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                   {agentHealth[agent.id] && agentHealth[agent.id] !== 'idle' && (
                     <HealthIndicator state={agentHealth[agent.id]} size="sm" />
                   )}
-                  <span className={`text-xs px-2 py-0.5 rounded uppercase ${getStatusBadge(agent.status)}`}>{agent.status}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-sm uppercase ${getStatusBadge(agent.status)}`}>{agent.status}</span>
                 </div>
               </button>
 
@@ -643,9 +643,9 @@ function RollCallResultsPanel({
           const deliveryBadge = e.delivery_status === 'sent'
             ? null
             : e.delivery_status === 'skipped'
-              ? <span className="text-[9px] px-1 bg-mc-text-secondary/20 text-mc-text-secondary rounded" title={e.delivery_error || ''}>no session</span>
+              ? <span className="text-[9px] px-1 bg-mc-text-secondary/20 text-mc-text-secondary rounded-sm" title={e.delivery_error || ''}>no session</span>
               : e.delivery_status === 'failed'
-                ? <span className="text-[9px] px-1 bg-red-500/20 text-red-400 rounded" title={e.delivery_error || ''}>fail</span>
+                ? <span className="text-[9px] px-1 bg-red-500/20 text-red-400 rounded-sm" title={e.delivery_error || ''}>fail</span>
                 : null;
           return (
             <div key={e.id} className="flex items-center gap-2 text-xs">

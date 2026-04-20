@@ -51,7 +51,7 @@ export function ProductProgramEditor({ product, onSave }: ProductProgramEditorPr
       <textarea
         value={program}
         onChange={e => setProgram(e.target.value)}
-        className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text font-mono text-sm focus:outline-none focus:border-mc-accent resize-none min-h-[600px]"
+        className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text font-mono text-sm focus:outline-hidden focus:border-mc-accent resize-none min-h-[600px]"
         placeholder="Write your product program here..."
       />
     </div>

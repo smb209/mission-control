@@ -15,10 +15,8 @@ import type { Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const db = getDb();
   const existing = db.prepare(`SELECT id FROM tasks WHERE id = ?`).get(params.id) as
     | { id: string }

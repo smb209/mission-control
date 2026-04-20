@@ -236,7 +236,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push('/')}
-              className="p-2 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary"
+              className="p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary"
               title="Back to Mission Control"
             >
               ← Back
@@ -248,7 +248,7 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleReset}
-              className="px-4 py-2 border border-mc-border rounded hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-2"
+              className="px-4 py-2 border border-mc-border rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-2"
             >
               <RotateCcw className="w-4 h-4" />
               Reset to Defaults
@@ -256,7 +256,7 @@ export default function SettingsPage() {
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="px-4 py-2 bg-mc-accent text-mc-bg rounded hover:bg-mc-accent/90 flex items-center gap-2 disabled:opacity-50"
+              className="px-4 py-2 bg-mc-accent text-mc-bg rounded-sm hover:bg-mc-accent/90 flex items-center gap-2 disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
               {isSaving ? 'Saving...' : 'Save Changes'}
@@ -269,14 +269,14 @@ export default function SettingsPage() {
       <div className="max-w-4xl mx-auto px-6 py-8">
         {/* Success Message */}
         {saveSuccess && (
-          <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded text-green-400">
+          <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-sm text-green-400">
             ✓ Settings saved successfully
           </div>
         )}
 
         {/* Error Message */}
         {error && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded text-red-400">
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-sm text-red-400">
             ✗ {error}
           </div>
         )}
@@ -301,7 +301,7 @@ export default function SettingsPage() {
                 value={config.workspaceBasePath}
                 onChange={(e) => handleChange('workspaceBasePath', e.target.value)}
                 placeholder="~/Documents/Shared"
-                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded-sm text-mc-text focus:border-mc-accent focus:outline-hidden"
               />
               <p className="text-xs text-mc-text-secondary mt-1">
                 Base directory for all Mission Control files. Use ~ for home directory.
@@ -317,7 +317,7 @@ export default function SettingsPage() {
                 value={config.projectsPath}
                 onChange={(e) => handleChange('projectsPath', e.target.value)}
                 placeholder="~/Documents/Shared/projects"
-                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded-sm text-mc-text focus:border-mc-accent focus:outline-hidden"
               />
               <p className="text-xs text-mc-text-secondary mt-1">
                 Directory where project folders are created. Each project gets its own folder.
@@ -333,7 +333,7 @@ export default function SettingsPage() {
                 value={config.defaultProjectName}
                 onChange={(e) => handleChange('defaultProjectName', e.target.value)}
                 placeholder="mission-control"
-                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded-sm text-mc-text focus:border-mc-accent focus:outline-hidden"
               />
               <p className="text-xs text-mc-text-secondary mt-1">
                 Default name for new projects. Can be changed per project.
@@ -362,7 +362,7 @@ export default function SettingsPage() {
                 value={config.missionControlUrl}
                 onChange={(e) => handleChange('missionControlUrl', e.target.value)}
                 placeholder="http://localhost:4000"
-                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded-sm text-mc-text focus:border-mc-accent focus:outline-hidden"
               />
               <p className="text-xs text-mc-text-secondary mt-1">
                 URL where Mission Control is running. Auto-detected by default. Change for remote access.
@@ -381,12 +381,12 @@ export default function SettingsPage() {
             Tune board density and lane sizing behavior.
           </p>
 
-          <label className="flex items-start gap-3 p-3 bg-mc-bg border border-mc-border rounded cursor-pointer">
+          <label className="flex items-start gap-3 p-3 bg-mc-bg border border-mc-border rounded-sm cursor-pointer">
             <input
               type="checkbox"
               checked={config.kanbanCompactEmptyColumns}
               onChange={(e) => handleChange('kanbanCompactEmptyColumns', e.target.checked)}
-              className="mt-1 h-4 w-4 accent-[var(--mc-accent)]"
+              className="mt-1 h-4 w-4 accent-(--mc-accent)"
             />
             <div>
               <div className="text-sm font-medium text-mc-text">Compact empty columns</div>
@@ -430,7 +430,7 @@ export default function SettingsPage() {
             <button
               onClick={handleCreateBackup}
               disabled={isCreatingBackup}
-              className="px-4 py-2 bg-mc-accent text-mc-bg rounded hover:bg-mc-accent/90 flex items-center gap-2 disabled:opacity-50 text-sm font-medium"
+              className="px-4 py-2 bg-mc-accent text-mc-bg rounded-sm hover:bg-mc-accent/90 flex items-center gap-2 disabled:opacity-50 text-sm font-medium"
             >
               {isCreatingBackup ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -442,7 +442,7 @@ export default function SettingsPage() {
             <button
               onClick={fetchBackups}
               disabled={isLoadingBackups}
-              className="px-3 py-2 border border-mc-border rounded hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-1.5 text-sm"
+              className="px-3 py-2 border border-mc-border rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-1.5 text-sm"
             >
               <RotateCw className={`w-3.5 h-3.5 ${isLoadingBackups ? 'animate-spin' : ''}`} />
               Refresh
@@ -451,14 +451,14 @@ export default function SettingsPage() {
 
           {/* Backup success/error messages */}
           {backupSuccess && (
-            <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded text-green-400 text-sm flex items-center gap-2">
-              <Check className="w-4 h-4 flex-shrink-0" />
+            <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded-sm text-green-400 text-sm flex items-center gap-2">
+              <Check className="w-4 h-4 shrink-0" />
               {backupSuccess}
             </div>
           )}
           {backupError && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-sm text-red-400 text-sm flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
               {backupError}
             </div>
           )}
@@ -470,11 +470,11 @@ export default function SettingsPage() {
               Loading backups...
             </div>
           ) : backups.length === 0 ? (
-            <div className="py-8 text-center text-mc-text-secondary text-sm border border-mc-border rounded bg-mc-bg">
+            <div className="py-8 text-center text-mc-text-secondary text-sm border border-mc-border rounded-sm bg-mc-bg">
               No backups yet. Click &quot;Create Backup Now&quot; to create your first backup.
             </div>
           ) : (
-            <div className="border border-mc-border rounded overflow-hidden">
+            <div className="border border-mc-border rounded-sm overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-mc-bg-tertiary border-b border-mc-border">
@@ -501,7 +501,7 @@ export default function SettingsPage() {
                         {timeAgo(backup.timestamp)}
                       </td>
                       <td className="px-4 py-2.5">
-                        <span className="text-xs font-mono px-1.5 py-0.5 bg-mc-bg rounded text-mc-text-secondary">
+                        <span className="text-xs font-mono px-1.5 py-0.5 bg-mc-bg rounded-sm text-mc-text-secondary">
                           v{backup.migrationVersion}
                         </span>
                       </td>
@@ -523,7 +523,7 @@ export default function SettingsPage() {
                           <button
                             onClick={() => setConfirmRestore(backup)}
                             disabled={isRestoringBackup !== null}
-                            className="px-2.5 py-1 text-xs rounded border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50 flex items-center gap-1"
+                            className="px-2.5 py-1 text-xs rounded-sm border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50 flex items-center gap-1"
                             title="Restore from this backup"
                           >
                             {isRestoringBackup === backup.filename ? (
@@ -536,7 +536,7 @@ export default function SettingsPage() {
                           <button
                             onClick={() => handleDeleteBackup(backup.filename)}
                             disabled={isDeletingBackup !== null}
-                            className="px-2 py-1 text-xs rounded border border-red-500/40 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                            className="px-2 py-1 text-xs rounded-sm border border-red-500/40 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                             title="Delete this backup"
                           >
                             {isDeletingBackup === backup.filename ? (
@@ -555,7 +555,7 @@ export default function SettingsPage() {
           )}
 
           {/* S3 Configuration (collapsible) */}
-          <div className="mt-4 border border-mc-border rounded">
+          <div className="mt-4 border border-mc-border rounded-sm">
             <button
               onClick={() => setShowS3Config(!showS3Config)}
               className="w-full flex items-center justify-between px-4 py-3 text-sm text-mc-text-secondary hover:bg-mc-bg-tertiary/50"
@@ -570,34 +570,34 @@ export default function SettingsPage() {
               <div className="px-4 pb-4 border-t border-mc-border">
                 <p className="text-xs text-mc-text-secondary mt-3 mb-3">
                   Configure S3-compatible storage (AWS S3, MinIO, Backblaze B2, etc.) for off-site backup storage.
-                  Set these values as environment variables in your <code className="px-1 py-0.5 bg-mc-bg rounded">.env.local</code> file:
+                  Set these values as environment variables in your <code className="px-1 py-0.5 bg-mc-bg rounded-sm">.env.local</code> file:
                 </p>
                 <div className="space-y-2 text-xs font-mono">
-                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded">
+                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm">
                     <span className="text-mc-accent w-28">S3_ENDPOINT</span>
                     <span className="text-mc-text-secondary">
                       {s3Status.endpoint || '(not set)'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded">
+                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm">
                     <span className="text-mc-accent w-28">S3_BUCKET</span>
                     <span className="text-mc-text-secondary">
                       {s3Status.bucket || '(not set)'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded">
+                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm">
                     <span className="text-mc-accent w-28">S3_ACCESS_KEY</span>
                     <span className="text-mc-text-secondary">
                       {s3Status.configured ? '••••••••' : '(not set)'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded">
+                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm">
                     <span className="text-mc-accent w-28">S3_SECRET_KEY</span>
                     <span className="text-mc-text-secondary">
                       {s3Status.configured ? '••••••••' : '(not set)'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded">
+                  <div className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm">
                     <span className="text-mc-accent w-28">S3_REGION</span>
                     <span className="text-mc-text-secondary">us-east-1 (default)</span>
                   </div>
@@ -613,7 +613,7 @@ export default function SettingsPage() {
 
         {/* Restore Confirmation Dialog */}
         {confirmRestore && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs">
             <div className="bg-mc-bg-secondary border border-mc-border rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-amber-500/10 rounded-full">
@@ -627,7 +627,7 @@ export default function SettingsPage() {
                 The application may need to be restarted after restoration.
               </p>
 
-              <div className="p-3 bg-mc-bg rounded border border-mc-border mb-4 text-xs space-y-1.5">
+              <div className="p-3 bg-mc-bg rounded-sm border border-mc-border mb-4 text-xs space-y-1.5">
                 <div className="flex justify-between">
                   <span className="text-mc-text-secondary">Backup:</span>
                   <span className="text-mc-text font-mono">{confirmRestore.filename}</span>
@@ -649,13 +649,13 @@ export default function SettingsPage() {
               <div className="flex items-center gap-3 justify-end">
                 <button
                   onClick={() => setConfirmRestore(null)}
-                  className="px-4 py-2 text-sm border border-mc-border rounded hover:bg-mc-bg-tertiary text-mc-text-secondary"
+                  className="px-4 py-2 text-sm border border-mc-border rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => handleRestore(confirmRestore)}
-                  className="px-4 py-2 text-sm bg-amber-500 text-black rounded hover:bg-amber-400 font-medium flex items-center gap-2"
+                  className="px-4 py-2 text-sm bg-amber-500 text-black rounded-sm hover:bg-amber-400 font-medium flex items-center gap-2"
                 >
                   <Upload className="w-4 h-4" />
                   Restore Database
@@ -671,7 +671,7 @@ export default function SettingsPage() {
             📝 Environment Variables
           </h3>
           <p className="text-sm text-blue-300 mb-3">
-            Some settings are also configurable via environment variables in <code className="px-2 py-1 bg-mc-bg rounded">.env.local</code>:
+            Some settings are also configurable via environment variables in <code className="px-2 py-1 bg-mc-bg rounded-sm">.env.local</code>:
           </p>
           <ul className="text-sm text-blue-300 space-y-1 ml-4 list-disc">
             <li><code>MISSION_CONTROL_URL</code> - API URL override</li>

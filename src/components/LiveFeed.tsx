@@ -40,7 +40,7 @@ export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: Liv
       <aside className="w-12 bg-mc-bg-secondary border-l border-mc-border flex flex-col items-center py-2 transition-all duration-300 ease-in-out">
         <button
           onClick={toggleMinimize}
-          className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+          className="p-1 rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
           aria-label="Expand right panel"
           title="Expand right panel"
         >
@@ -63,7 +63,7 @@ export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: Liv
         <div className="flex items-center justify-end px-2 py-1 border-b border-mc-border/60">
           <button
             onClick={toggleMinimize}
-            className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+            className="p-1 rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
             aria-label="Minimize right panel"
             title="Minimize right panel"
           >
@@ -72,11 +72,11 @@ export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: Liv
         </div>
       )}
 
-      {topSlot && <div className="flex-shrink-0">{topSlot}</div>}
+      {topSlot && <div className="shrink-0">{topSlot}</div>}
 
       {/* LIVE FEED section — the header itself is a button that collapses the
           section independently of the deliverables panel and the whole rail. */}
-      <div className={`border-b border-mc-border flex-shrink-0 ${feedCollapsed ? '' : ''}`}>
+      <div className={`border-b border-mc-border shrink-0 ${feedCollapsed ? '' : ''}`}>
         <button
           onClick={toggleFeed}
           className="w-full flex items-center justify-between px-3 py-2 hover:bg-mc-bg-tertiary"

@@ -42,7 +42,7 @@ export function ChatInbox({ tasks, onSelectTask }: ChatInboxProps) {
           className="w-full px-3 py-2.5 border-b border-mc-border/30 hover:bg-mc-bg-tertiary/50 transition-colors text-left flex gap-3 items-start"
         >
           {/* Avatar / Agent indicator */}
-          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-mc-bg-tertiary flex items-center justify-center text-sm mt-0.5">
+          <div className="shrink-0 w-8 h-8 rounded-full bg-mc-bg-tertiary flex items-center justify-center text-sm mt-0.5">
             {task.assigned_agent_emoji || '🤖'}
           </div>
 
@@ -51,7 +51,7 @@ export function ChatInbox({ tasks, onSelectTask }: ChatInboxProps) {
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm font-medium truncate">{task.task_title}</span>
               {task.unread_count > 0 && (
-                <span className="flex-shrink-0 min-w-[18px] h-[18px] px-1 bg-mc-accent text-mc-bg text-[10px] font-bold rounded-full flex items-center justify-center">
+                <span className="shrink-0 min-w-[18px] h-[18px] px-1 bg-mc-accent text-mc-bg text-[10px] font-bold rounded-full flex items-center justify-center">
                   {task.unread_count}
                 </span>
               )}
@@ -72,7 +72,7 @@ export function ChatInbox({ tasks, onSelectTask }: ChatInboxProps) {
 
             {/* Meta row */}
             <div className="flex items-center gap-2 mt-1">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColors[task.task_status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-sm ${statusColors[task.task_status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
                 {task.task_status.replace(/_/g, ' ')}
               </span>
               {task.assigned_agent_name && (
@@ -81,7 +81,7 @@ export function ChatInbox({ tasks, onSelectTask }: ChatInboxProps) {
                 </span>
               )}
               {task.last_message_at && (
-                <span className="text-[10px] text-mc-text-secondary/50 ml-auto flex-shrink-0">
+                <span className="text-[10px] text-mc-text-secondary/50 ml-auto shrink-0">
                   {formatDistanceToNow(new Date(task.last_message_at.endsWith('Z') ? task.last_message_at : task.last_message_at + 'Z'), { addSuffix: true })}
                 </span>
               )}

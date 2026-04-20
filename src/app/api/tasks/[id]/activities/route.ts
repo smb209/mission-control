@@ -16,10 +16,8 @@ export const dynamic = 'force-dynamic';
  * GET /api/tasks/[id]/activities
  * Retrieve all activities for a task
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const db = getDb();
@@ -75,10 +73,8 @@ export async function GET(
  * POST /api/tasks/[id]/activities
  * Log a new activity for a task
  */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const body = await request.json();

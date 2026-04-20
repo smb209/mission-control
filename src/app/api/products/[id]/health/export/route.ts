@@ -6,10 +6,8 @@ import { getProduct } from '@/lib/autopilot/products';
  * GET /api/products/[id]/health/export?format=csv|json
  * Export 30-day health score history.
  */
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = getProduct(params.id);
     if (!product) {

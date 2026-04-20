@@ -147,7 +147,7 @@ export function ChatConversation({ taskId, onMarkRead }: ChatConversationProps) 
       </div>
 
       {/* Input */}
-      <div className="border-t border-mc-border p-2 space-y-1.5 flex-shrink-0">
+      <div className="border-t border-mc-border p-2 space-y-1.5 shrink-0">
         {error && (
           <div className="text-[10px] text-red-400 px-1">{error}</div>
         )}

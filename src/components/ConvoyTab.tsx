@@ -210,7 +210,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
             <div className="flex flex-col sm:flex-row gap-2 justify-center">
               <button
                 onClick={() => setShowCreateForm(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90"
               >
                 <Plus className="w-4 h-4" />
                 Manual Decomposition
@@ -218,7 +218,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
               <button
                 onClick={handleAIDecompose}
                 disabled={isSubmitting}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded text-sm font-medium hover:bg-purple-500/90 disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-sm text-sm font-medium hover:bg-purple-500/90 disabled:opacity-50"
               >
                 {isSubmitting ? (
                   <>
@@ -253,7 +253,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
                     setNewSubtasks(copy);
                   }}
                   placeholder={`Sub-task ${i + 1} title`}
-                  className="w-full min-h-10 bg-mc-bg-secondary border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  className="w-full min-h-10 bg-mc-bg-secondary border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
                 />
                 <textarea
                   value={st.description}
@@ -264,7 +264,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
                   }}
                   placeholder="Description (optional)"
                   rows={2}
-                  className="w-full bg-mc-bg-secondary border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent resize-none"
+                  className="w-full bg-mc-bg-secondary border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none"
                 />
               </div>
             ))}
@@ -291,7 +291,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
               <button
                 onClick={handleCreateConvoy}
                 disabled={isSubmitting || newSubtasks.every(s => !s.title.trim())}
-                className="px-4 py-2 bg-mc-accent text-mc-bg rounded text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+                className="px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
               >
                 {isSubmitting ? 'Creating...' : 'Create Convoy'}
               </button>
@@ -319,27 +319,27 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
         <div className="flex items-center gap-2">
           <Truck className="w-5 h-5 text-cyan-400" />
           <span className="font-medium text-sm">Convoy</span>
-          <span className={`text-xs px-2 py-0.5 rounded border ${convoyStatusColor[convoy.status] || ''}`}>
+          <span className={`text-xs px-2 py-0.5 rounded-sm border ${convoyStatusColor[convoy.status] || ''}`}>
             {convoy.status.toUpperCase()}
           </span>
         </div>
         <div className="flex gap-1">
           {convoy.status === 'active' && (
             <>
-              <button onClick={handleDispatchAll} className="p-1.5 rounded hover:bg-mc-bg-tertiary text-mc-accent" title="Dispatch ready sub-tasks">
+              <button onClick={handleDispatchAll} className="p-1.5 rounded-sm hover:bg-mc-bg-tertiary text-mc-accent" title="Dispatch ready sub-tasks">
                 <Play className="w-4 h-4" />
               </button>
-              <button onClick={() => handleUpdateStatus('paused')} className="p-1.5 rounded hover:bg-mc-bg-tertiary text-yellow-400" title="Pause convoy">
+              <button onClick={() => handleUpdateStatus('paused')} className="p-1.5 rounded-sm hover:bg-mc-bg-tertiary text-yellow-400" title="Pause convoy">
                 <Pause className="w-4 h-4" />
               </button>
             </>
           )}
           {convoy.status === 'paused' && (
-            <button onClick={() => handleUpdateStatus('active')} className="p-1.5 rounded hover:bg-mc-bg-tertiary text-mc-accent" title="Resume convoy">
+            <button onClick={() => handleUpdateStatus('active')} className="p-1.5 rounded-sm hover:bg-mc-bg-tertiary text-mc-accent" title="Resume convoy">
               <Play className="w-4 h-4" />
             </button>
           )}
-          <button onClick={loadConvoy} className="p-1.5 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary" title="Refresh">
+          <button onClick={loadConvoy} className="p-1.5 rounded-sm hover:bg-mc-bg-tertiary text-mc-text-secondary" title="Refresh">
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
@@ -415,7 +415,7 @@ export function ConvoyTab({ taskId, taskTitle, taskStatus }: ConvoyTabProps) {
           </button>
           <button
             onClick={handleDispatchAll}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-mc-accent text-mc-bg rounded text-xs font-medium hover:bg-mc-accent/90"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-mc-accent text-mc-bg rounded-sm text-xs font-medium hover:bg-mc-accent/90"
           >
             <Play className="w-3.5 h-3.5" />
             Dispatch Ready

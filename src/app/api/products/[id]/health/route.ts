@@ -6,10 +6,8 @@ import { getProduct } from '@/lib/autopilot/products';
  * GET /api/products/[id]/health
  * Returns current score, component breakdown, weights, and 30-day history.
  */
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = getProduct(params.id);
     if (!product) {

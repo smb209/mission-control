@@ -190,7 +190,7 @@ In the task list/card UI, show PR status when present:
 
 ```tsx
 {task.pr_url && (
-  <a href={task.pr_url} target="_blank" className="text-xs px-2 py-0.5 rounded bg-purple-500/20 text-purple-400">
+  <a href={task.pr_url} target="_blank" className="text-xs px-2 py-0.5 rounded-sm bg-purple-500/20 text-purple-400">
     {task.pr_status === 'merged' ? '✅ Merged' : task.pr_status === 'open' ? '🔄 PR Open' : 'PR'}
   </a>
 )}

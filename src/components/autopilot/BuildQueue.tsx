@@ -74,11 +74,11 @@ export function BuildQueue({ productId }: BuildQueueProps) {
               </div>
               <div className="flex items-center gap-2">
                 {task.pr_status && (
-                  <span className={`text-xs px-2 py-1 rounded font-medium ${prStatusColors[task.pr_status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+                  <span className={`text-xs px-2 py-1 rounded-sm font-medium ${prStatusColors[task.pr_status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
                     {prStatusLabels[task.pr_status] || task.pr_status}
                   </span>
                 )}
-                <span className={`text-xs px-2 py-1 rounded font-medium ${statusColors[task.status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
+                <span className={`text-xs px-2 py-1 rounded-sm font-medium ${statusColors[task.status] || 'bg-mc-bg-tertiary text-mc-text-secondary'}`}>
                   {task.status.replace('_', ' ')}
                 </span>
               </div>

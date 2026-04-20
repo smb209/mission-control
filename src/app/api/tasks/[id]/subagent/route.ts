@@ -12,10 +12,8 @@ export const dynamic = 'force-dynamic';
  * POST /api/tasks/[id]/subagent
  * Register a sub-agent session for a task
  */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const body = await request.json();
@@ -103,10 +101,8 @@ export async function POST(
  * GET /api/tasks/[id]/subagent
  * Get all sub-agent sessions for a task
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const db = getDb();

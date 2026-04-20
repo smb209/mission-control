@@ -77,7 +77,7 @@ export function UndoToast({ swipeId, ideaTitle, action, productId, onUndo, onExp
   const truncatedTitle = ideaTitle.length > 40 ? ideaTitle.slice(0, 37) + '...' : ideaTitle;
 
   return (
-    <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border backdrop-blur-sm shadow-lg max-w-md animate-slide-in ${ACTION_COLORS[action]}`}>
+    <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border backdrop-blur-xs shadow-lg max-w-md animate-slide-in ${ACTION_COLORS[action]}`}>
       {/* Progress ring */}
       <div className="relative w-8 h-8 shrink-0">
         <svg className="w-8 h-8 -rotate-90" viewBox="0 0 32 32">
