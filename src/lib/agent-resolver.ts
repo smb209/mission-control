@@ -32,7 +32,8 @@ export const MIN_NEW_AGENT_RATIONALE_LENGTH = 20;
  * Prefers gateway-linked agents (ones that actually map to a live OpenClaw
  * session) but also includes local agents that carry a session_key_prefix —
  * those still route correctly. Agents with neither are "ghosts" and are
- * filtered out.
+ * filtered out. Operator-disabled agents (is_active=0) are excluded from the
+ * planning roster so the planner doesn't propose work for them.
  */
 export function getAgentRoster(workspaceId: string): RosterAgent[] {
   return queryAll<RosterAgent>(
@@ -41,6 +42,7 @@ export function getAgentRoster(workspaceId: string): RosterAgent[] {
      WHERE workspace_id = ?
        AND (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL)
        AND status != 'offline'
+       AND COALESCE(is_active, 1) = 1
      ORDER BY is_master DESC, name ASC`,
     [workspaceId]
   );
@@ -83,6 +85,7 @@ export function findAgentForRole(workspaceId: string, role: string): RosterAgent
        AND LOWER(role) = LOWER(?)
        AND (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL)
        AND status != 'offline'
+       AND COALESCE(is_active, 1) = 1
      ORDER BY gateway_agent_id IS NOT NULL DESC, status = 'standby' DESC, updated_at DESC
      LIMIT 1`,
     [workspaceId, role]
@@ -96,6 +99,7 @@ export function findAgentForRole(workspaceId: string, role: string): RosterAgent
        AND (LOWER(role) LIKE '%' || LOWER(?) || '%' OR LOWER(?) LIKE '%' || LOWER(role) || '%')
        AND (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL)
        AND status != 'offline'
+       AND COALESCE(is_active, 1) = 1
      ORDER BY gateway_agent_id IS NOT NULL DESC, status = 'standby' DESC, updated_at DESC
      LIMIT 1`,
     [workspaceId, role, role]
