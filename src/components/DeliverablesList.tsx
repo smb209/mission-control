@@ -6,7 +6,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { FileText, Link as LinkIcon, Package, ExternalLink, Eye } from 'lucide-react';
+import { FileText, Link as LinkIcon, Package, ExternalLink, Eye, Download, Archive } from 'lucide-react';
 import { debug } from '@/lib/debug';
 import type { TaskDeliverable } from '@/lib/types';
 
@@ -101,6 +101,13 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
     }
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  };
+
   const formatTimestamp = (timestamp: string) => {
     const date = new Date(timestamp);
     return date.toLocaleDateString('en-US', {
@@ -128,8 +135,24 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
     );
   }
 
+  const mcFileCount = deliverables.filter(
+    d => d.deliverable_type === 'file' && d.storage_scheme === 'mc'
+  ).length;
+
   return (
     <div className="space-y-3">
+      {mcFileCount > 0 && (
+        <div className="flex items-center justify-end">
+          <a
+            href={`/api/tasks/${taskId}/deliverables/download`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-mc-accent text-white hover:bg-mc-accent/90"
+            title={`Download ${mcFileCount} file${mcFileCount === 1 ? '' : 's'} as a zip`}
+          >
+            <Archive className="w-4 h-4" />
+            Download all ({mcFileCount})
+          </a>
+        </div>
+      )}
       {deliverables.map((deliverable) => (
         <div
           key={deliverable.id}
@@ -158,6 +181,16 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                 <h4 className="font-medium text-mc-text">{deliverable.title}</h4>
               )}
               <div className="flex items-center gap-1">
+                {/* Download button (MC-managed file deliverables only) */}
+                {deliverable.deliverable_type === 'file' && deliverable.storage_scheme === 'mc' && (
+                  <a
+                    href={`/api/deliverables/${deliverable.id}/download`}
+                    className="flex-shrink-0 p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-accent"
+                    title="Download file"
+                  >
+                    <Download className="w-4 h-4" />
+                  </a>
+                )}
                 {/* Preview button for HTML files */}
                 {deliverable.deliverable_type === 'file' && deliverable.path?.endsWith('.html') && (
                   <button
@@ -207,10 +240,24 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
             )}
 
             {/* Metadata */}
-            <div className="flex items-center gap-4 mt-2 text-xs text-mc-text-secondary">
+            <div className="flex items-center gap-2 mt-2 text-xs text-mc-text-secondary flex-wrap">
               <span className="capitalize">{deliverable.deliverable_type}</span>
               <span>•</span>
               <span>{formatTimestamp(deliverable.created_at)}</span>
+              {deliverable.size_bytes != null && (
+                <>
+                  <span>•</span>
+                  <span>{formatBytes(deliverable.size_bytes)}</span>
+                </>
+              )}
+              {deliverable.deliverable_type === 'file' && deliverable.storage_scheme !== 'mc' && (
+                <span
+                  className="px-1.5 py-0.5 rounded bg-mc-bg-tertiary text-mc-text-secondary"
+                  title="Stored on host filesystem; not downloadable from the web UI"
+                >
+                  host-only
+                </span>
+              )}
             </div>
           </div>
         </div>

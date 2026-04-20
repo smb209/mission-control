@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -66,6 +66,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent, keepOpen = false) => {
     e.preventDefault();
@@ -168,6 +169,30 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
       setSaveError(error instanceof Error ? error.message : 'Network error — please try again');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleArchiveToggle = async () => {
+    if (!task) return;
+    const shouldArchive = !task.is_archived;
+    setIsArchiving(true);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived: shouldArchive }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        useMissionControl.setState((state) => ({
+          tasks: state.tasks.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)),
+        }));
+        onClose();
+      }
+    } catch (error) {
+      console.error('Failed to toggle archive:', error);
+    } finally {
+      setIsArchiving(false);
     }
   };
 
@@ -464,9 +489,20 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                 <>
                   <button
                     type="button"
+                    onClick={handleArchiveToggle}
+                    disabled={isArchiving}
+                    className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary rounded text-sm disabled:opacity-50"
+                    title={task.is_archived ? 'Restore from archive' : 'Archive (preserves deliverables)'}
+                  >
+                    {task.is_archived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+                    {isArchiving ? '...' : task.is_archived ? 'Unarchive' : 'Archive'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleDelete}
                     disabled={isDeleting}
                     className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded text-sm disabled:opacity-50"
+                    title="Permanently delete this task and its deliverables"
                   >
                     <Trash2 className="w-4 h-4" />
                     {isDeleting ? 'Deleting...' : 'Delete'}

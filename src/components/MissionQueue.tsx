@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Plus, ChevronRight, GripVertical, ArrowRightLeft, AlertTriangle, MessageSquare } from 'lucide-react';
+import { Plus, ChevronRight, GripVertical, ArrowRightLeft, AlertTriangle, MessageSquare, Archive, ChevronsLeft } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { getConfig } from '@/lib/config';
@@ -32,7 +32,25 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
   const [compactEmptyColumns, setCompactEmptyColumns] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
+  // Per-column manual override. Without an entry, the column uses the default
+  // (empty = collapsed to a vertical rail, non-empty = expanded).
+  const [columnOverride, setColumnOverride] = useState<Record<string, 'expanded' | 'collapsed'>>({});
   const unreadCounts = useUnreadCounts();
+
+  const isColumnCollapsed = (id: TaskStatus, count: number): boolean => {
+    const override = columnOverride[id];
+    if (override === 'expanded') return false;
+    if (override === 'collapsed') return true;
+    return count === 0;
+  };
+
+  const toggleColumn = (id: TaskStatus, currentlyCollapsed: boolean) => {
+    setColumnOverride(prev => ({
+      ...prev,
+      [id]: currentlyCollapsed ? 'expanded' : 'collapsed',
+    }));
+  };
 
   useEffect(() => {
     const cfg = getConfig();
@@ -53,7 +71,8 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
   const [pendingMove, setPendingMove] = useState<{ task: Task; targetStatus: TaskStatus } | null>(null);
 
-  const getTasksByStatus = (status: TaskStatus) => tasks.filter((task) => task.status === status);
+  const getTasksByStatus = (status: TaskStatus) =>
+    tasks.filter((task) => task.status === status && (showArchived || !task.is_archived));
 
   // Active pipeline states where manual moves are dangerous
   const ACTIVE_PIPELINE_STATES: TaskStatus[] = ['assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification'];
@@ -167,13 +186,28 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
           <ChevronRight className="w-4 h-4 text-mc-text-secondary" />
           <span className="text-sm font-medium uppercase tracking-wider">Mission Queue</span>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
-        >
-          <Plus className="w-4 h-4" />
-          New Task
-        </button>
+        <div className="flex items-center gap-2">
+          <label
+            className="flex items-center gap-1.5 text-xs text-mc-text-secondary cursor-pointer select-none"
+            title="Include archived tasks in the board"
+          >
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={e => setShowArchived(e.target.checked)}
+              className="accent-mc-accent"
+            />
+            <Archive className="w-3.5 h-3.5" />
+            Archived
+          </label>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
+          >
+            <Plus className="w-4 h-4" />
+            New Task
+          </button>
+        </div>
       </div>
 
       {!mobileMode ? (
@@ -181,6 +215,35 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
           {COLUMNS.map((column) => {
             const columnTasks = getTasksByStatus(column.id);
             const hasTasks = columnTasks.length > 0;
+            const collapsed = isColumnCollapsed(column.id, columnTasks.length);
+
+            if (collapsed) {
+              // Vertical rail — narrow column with rotated label. Still acts as
+              // a drop target. Whole body is a button that expands the column
+              // back to horizontal.
+              return (
+                <button
+                  key={column.id}
+                  type="button"
+                  onClick={() => toggleColumn(column.id, true)}
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, column.id)}
+                  className={`flex-none w-10 flex flex-col items-center py-2 gap-2 bg-mc-bg rounded-lg border border-mc-border/50 border-t-2 transition-[width] duration-200 hover:bg-mc-bg-tertiary ${column.color}`}
+                  title={`${column.label} (${columnTasks.length}) — click to expand`}
+                >
+                  <span className="text-[10px] bg-mc-bg-tertiary px-1.5 py-0.5 rounded text-mc-text-secondary">
+                    {columnTasks.length}
+                  </span>
+                  <span
+                    className="text-xs font-medium uppercase text-mc-text-secondary tracking-wider"
+                    style={{ writingMode: 'vertical-rl' }}
+                  >
+                    {column.label}
+                  </span>
+                </button>
+              );
+            }
+
             return (
               <div
                 key={column.id}
@@ -191,7 +254,17 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
               >
                 <div className="p-2 border-b border-mc-border flex items-center justify-between gap-2">
                   <span className="text-xs font-medium uppercase text-mc-text-secondary whitespace-nowrap">{column.label}</span>
-                  <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded text-mc-text-secondary">{columnTasks.length}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs bg-mc-bg-tertiary px-2 py-0.5 rounded text-mc-text-secondary">{columnTasks.length}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleColumn(column.id, false)}
+                      className="p-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+                      title="Collapse column"
+                    >
+                      <ChevronsLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className={`flex-1 overflow-y-auto p-2 ${hasTasks ? 'space-y-2' : ''}`}>
@@ -417,6 +490,8 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
   const isAssigned = task.status === 'assigned';
   const dispatchError = task.planning_dispatch_error;
 
+  const isArchived = task.is_archived === 1;
+
   return (
     <div
       draggable={!mobileMode}
@@ -424,7 +499,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
       onClick={onClick}
       className={`group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${
         isDragging ? 'opacity-50 scale-95' : ''
-      } ${isPlanning ? 'border-purple-500/40 hover:border-purple-500' : 'border-mc-border/50 hover:border-mc-accent/40'}`}
+      } ${isArchived ? 'opacity-60 border-dashed' : ''} ${isPlanning ? 'border-purple-500/40 hover:border-purple-500' : 'border-mc-border/50 hover:border-mc-accent/40'}`}
     >
       {!mobileMode && (
         <div className="flex items-center justify-center py-1.5 border-b border-mc-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -434,7 +509,18 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
 
       <div className={portraitMode ? 'p-4' : 'p-3'}>
         <div className="flex items-start justify-between gap-1.5">
-          <h4 className={`font-medium leading-snug line-clamp-2 ${portraitMode ? 'text-sm mb-3' : 'text-xs mb-2'}`}>{task.title}</h4>
+          <h4 className={`font-medium leading-snug line-clamp-2 ${portraitMode ? 'text-sm mb-3' : 'text-xs mb-2'}`}>
+            {isArchived && (
+              <span
+                className="inline-flex items-center gap-0.5 mr-1.5 px-1.5 py-0.5 rounded bg-mc-bg-tertiary text-[10px] text-mc-text-secondary align-middle"
+                title="Archived"
+              >
+                <Archive className="w-2.5 h-2.5" />
+                Archived
+              </span>
+            )}
+            {task.title}
+          </h4>
           {unreadCount > 0 && (
             <span className="flex-shrink-0 flex items-center gap-1 px-1.5 py-0.5 bg-mc-accent/15 text-mc-accent rounded text-[10px] font-medium" title={`${unreadCount} unread message${unreadCount !== 1 ? 's' : ''}`}>
               <MessageSquare className="w-2.5 h-2.5" />

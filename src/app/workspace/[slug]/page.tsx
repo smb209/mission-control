@@ -8,6 +8,7 @@ import { Header } from '@/components/Header';
 import { AgentsSidebar } from '@/components/AgentsSidebar';
 import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
+import { ReadyDeliverablesPanel } from '@/components/ReadyDeliverablesPanel';
 import { SSEDebugPanel } from '@/components/SSEDebugPanel';
 import { useMissionControl } from '@/lib/store';
 import { useSSE } from '@/hooks/useSSE';
@@ -211,7 +212,7 @@ export default function WorkspacePage() {
       <div className="hidden lg:flex flex-1 overflow-hidden">
         <AgentsSidebar workspaceId={workspace.id} />
         <MissionQueue workspaceId={workspace.id} />
-        <LiveFeed />
+        <LiveFeed topSlot={<ReadyDeliverablesPanel workspaceId={workspace.id} />} />
       </div>
 
       <div

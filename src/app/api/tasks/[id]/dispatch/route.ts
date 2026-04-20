@@ -4,6 +4,7 @@ import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
+import { getTaskDeliverableDir } from '@/lib/deliverables/storage';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
@@ -203,11 +204,16 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       urgent: '🔴'
     }[task.priority] || '⚪';
 
-    // Get project path for deliverables — with workspace isolation if needed
+    // Get project path for working files — with workspace isolation if needed
     const projectsPath = getProjectsPath();
     const projectDir = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     let taskProjectDir = `${projectsPath}/${projectDir}`;
     const missionControlUrl = getMissionControlUrl();
+
+    // Deliverables directory: MC-managed location the agent writes FINAL
+    // deliverables into so they become web-downloadable. Separate from
+    // taskProjectDir, which may be an isolated worktree the agent codes in.
+    const deliverablesDir = getTaskDeliverableDir(task.id, 'host');
 
     // Create isolated workspace if parallel builds are possible
     // Only for builder dispatches (assigned/in_progress), not tester/reviewer
@@ -396,9 +402,10 @@ curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
 ${authHeaderLine}  -d '{"activity_type":"updated","message":"Delegated <slice> to <agent name>"}'
 
 # Register aggregated deliverable (after all peers report in)
+# Save the file to the **DELIVERABLES DIR** below so it becomes web-downloadable.
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
   -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"deliverable_type":"file","title":"<title>","path":"${taskProjectDir}/<filename>"}'
+${authHeaderLine}  -d '{"deliverable_type":"file","title":"<title>","path":"${deliverablesDir}/<filename>"}'
 
 # Close the task
 curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
@@ -413,9 +420,10 @@ When complete, reply with:
 
 \`\`\`bash
 # 1. Register deliverable
+# Save the file to the **DELIVERABLES DIR** below so it becomes web-downloadable.
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
   -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"deliverable_type":"file","title":"<file name>","path":"${taskProjectDir}/<filename>"}'
+${authHeaderLine}  -d '{"deliverable_type":"file","title":"<file name>","path":"${deliverablesDir}/<filename>"}'
 
 # 2. Log activity (must have both a deliverable AND an activity before step 3 will pass the evidence gate)
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
@@ -566,9 +574,9 @@ ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
 ${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
 ${isBuilder ? (workspaceIsolated
-  ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\nCreate this directory if needed and save all deliverables there.\n`
-  : `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory and save all deliverables there.\n`)
-: isCoordinator ? '' : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n`}
+  ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
+  : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)
+: isCoordinator ? `**DELIVERABLES DIR:** ${deliverablesDir}\nAggregated deliverables registered via the deliverables endpoint should be written to this directory so they become web-downloadable.\n` : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nFinal deliverables should be saved to ${deliverablesDir} so they become web-downloadable.\n`}
 ${completionInstructions}
 
 If you need help or clarification, ask the orchestrator.`;

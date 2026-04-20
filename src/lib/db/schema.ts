@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   workspace_base_commit TEXT,
   merge_status TEXT,
   merge_pr_url TEXT,
+  is_archived INTEGER DEFAULT 0,
+  archived_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -255,6 +257,8 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   title TEXT NOT NULL,
   path TEXT,
   description TEXT,
+  storage_scheme TEXT DEFAULT 'host',
+  size_bytes INTEGER,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -797,6 +801,7 @@ CREATE TABLE IF NOT EXISTS debug_config (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(is_archived, status);
 CREATE INDEX IF NOT EXISTS idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);

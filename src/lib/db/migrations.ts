@@ -1814,6 +1814,36 @@ const migrations: Migration[] = [
 
       console.log('[Migration 032] Complete: is_active flag, mailbox generalized, rollcall tables created.');
     }
+  },
+  {
+    id: '033',
+    name: 'deliverable_storage_and_task_archive',
+    up: (db) => {
+      console.log('[Migration 033] Adding task archive flags and deliverable storage metadata...');
+
+      const tasksInfo = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+      if (!tasksInfo.some(c => c.name === 'is_archived')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN is_archived INTEGER DEFAULT 0`);
+        db.exec(`UPDATE tasks SET is_archived = 0 WHERE is_archived IS NULL`);
+      }
+      if (!tasksInfo.some(c => c.name === 'archived_at')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN archived_at TEXT`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(is_archived, status)`);
+
+      const delivInfo = db.prepare("PRAGMA table_info(task_deliverables)").all() as { name: string }[];
+      if (!delivInfo.some(c => c.name === 'storage_scheme')) {
+        db.exec(`ALTER TABLE task_deliverables ADD COLUMN storage_scheme TEXT DEFAULT 'host'`);
+        // Existing rows: they reference host paths, so 'host' is correct. URL/artifact
+        // rows also get 'host' but the UI keys off deliverable_type, not scheme.
+        db.exec(`UPDATE task_deliverables SET storage_scheme = 'host' WHERE storage_scheme IS NULL`);
+      }
+      if (!delivInfo.some(c => c.name === 'size_bytes')) {
+        db.exec(`ALTER TABLE task_deliverables ADD COLUMN size_bytes INTEGER`);
+      }
+
+      console.log('[Migration 033] Complete: tasks.is_archived/archived_at and task_deliverables.storage_scheme/size_bytes added.');
+    }
   }
 ];
 
