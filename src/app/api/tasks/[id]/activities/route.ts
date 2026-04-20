@@ -70,8 +70,16 @@ export async function GET(request: NextRequest, props: { params: Promise<{ id: s
 }
 
 /**
- * POST /api/tasks/[id]/activities
- * Log a new activity for a task
+ * Log an activity for a task.
+ *
+ * Agents call this to report progress, completed steps, and file creations so
+ * the activity feed and stall detector see forward motion.
+ *
+ * @openapi
+ * @tag Agent Callbacks
+ * @auth bearer
+ * @pathParams TaskIdParam
+ * @body CreateActivitySchema
  */
 export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;

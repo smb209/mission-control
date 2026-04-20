@@ -46,8 +46,16 @@ export async function GET(request: NextRequest, props: { params: Promise<{ id: s
 }
 
 /**
- * POST /api/tasks/[id]/deliverables
- * Add a new deliverable to a task
+ * Register a deliverable (file, URL, or artifact) produced by a task.
+ *
+ * Agents call this after writing outputs so the UI can show download links
+ * and the evidence gate recognizes the stage as having produced work.
+ *
+ * @openapi
+ * @tag Agent Callbacks
+ * @auth bearer
+ * @pathParams TaskIdParam
+ * @body CreateDeliverableSchema
  */
 export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;

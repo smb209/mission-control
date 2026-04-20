@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { saveCheckpoint, getLatestCheckpoint } from '@/lib/checkpoint';
 import { deliverPendingNotesAtCheckpoint } from '@/lib/task-notes';
-import type { CheckpointType } from '@/lib/types';
+import { CheckpointSchema } from '@/lib/validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,22 +9,31 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-// POST /api/tasks/[id]/checkpoint — Save a work checkpoint
+/**
+ * Save a work-state checkpoint for a long-running task.
+ *
+ * Agents call this periodically (or before risky operations) so the task can
+ * be audited, resumed after a crash, or used as a reference for operator
+ * notes delivered at checkpoint boundaries.
+ *
+ * @openapi
+ * @tag Agent Callbacks
+ * @auth bearer
+ * @pathParams TaskIdParam
+ * @body CheckpointSchema
+ */
 export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { agent_id, checkpoint_type, state_summary, files_snapshot, context_data } = body as {
-      agent_id: string;
-      checkpoint_type?: CheckpointType;
-      state_summary: string;
-      files_snapshot?: Array<{ path: string; hash: string; size: number }>;
-      context_data?: Record<string, unknown>;
-    };
-
-    if (!agent_id || !state_summary) {
-      return NextResponse.json({ error: 'agent_id and state_summary are required' }, { status: 400 });
+    const validation = CheckpointSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: 'Validation failed', details: validation.error.issues },
+        { status: 400 }
+      );
     }
+    const { agent_id, checkpoint_type, state_summary, files_snapshot, context_data } = validation.data;
 
     const checkpoint = saveCheckpoint({
       taskId: id,
