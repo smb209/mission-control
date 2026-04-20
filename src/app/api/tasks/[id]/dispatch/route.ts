@@ -136,7 +136,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // Create session record
       const sessionId = uuidv4();
       const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}-${id}`;
-      
+
       run(
         `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, task_id, channel, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -154,6 +154,18 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
          VALUES (?, ?, ?, ?, ?)`,
         [uuidv4(), 'agent_status_changed', agent.id, `${agent.name} session created`, now]
       );
+
+      logDebugEvent({
+        type: 'session.create',
+        direction: 'internal',
+        taskId: id,
+        agentId: agent.id,
+        sessionKey: openclawSessionId,
+        metadata: {
+          agent_name: agent.name,
+          reason: 'no_active_session_found',
+        },
+      });
     }
 
     if (!session) {
