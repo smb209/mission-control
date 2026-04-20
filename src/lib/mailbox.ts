@@ -104,14 +104,16 @@ export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
     } as Agent);
     const sessionKey = `${prefix}mc-mail-${id}`;
 
+    // Frame the mail so the agent recognises it as MC→agent mail (not a
+    // regular task dispatch). We deliberately don't append a generic
+    // "reply by POST" footer here — callers know the exact reply shape
+    // they want (roll-call needs a specific subject format; help-request
+    // flows may not need a reply at all), and appending a generic footer
+    // caused agents to guess URLs / methods / body shapes rather than
+    // follow the caller's explicit instructions.
     const framedMessage = `📬 **MAIL from ${fromAgent?.name || fromAgentId}** (mail_id=${id})
 ${subject ? `**Subject:** ${subject}\n` : ''}
-${body}
-
----
-This mail has also been stored in your mailbox. Reply by POSTing to:
-\`POST /api/agents/${fromAgentId}/mail\`
-Body: \`{"from_agent_id": "<your-id>", "subject": "re: ${subject || 'mail'}", "body": "<your reply>"}\``;
+${body}`;
 
     await client.call('chat.send', {
       sessionKey,

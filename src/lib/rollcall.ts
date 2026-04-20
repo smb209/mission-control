@@ -3,6 +3,7 @@ import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { sendMail } from '@/lib/mailbox';
 import { resolveMasterOrchestrator } from '@/lib/master-orchestrator';
+import { getMissionControlUrl } from '@/lib/config';
 import type { Agent } from '@/lib/types';
 
 export interface RollCallSession {
@@ -134,13 +135,51 @@ export async function initiateRollCall(params: {
   // — parallel fire would interleave RPC requests but gain little given
   // the typical target count (<10). Keeping it sequential also gives us
   // deterministic ordering in the debug feed.
-  const body =
-    'ROLL CALL — please reply briefly with your current status.\n\n' +
-    'Format: `CHECKED_IN: <your role>, status=<ok|busy|blocked>, note=<optional one-liner>`\n\n' +
-    `Reply by POSTing to /api/agents/${master.agent.id}/mail with subject="roll_call_reply".\n` +
-    `This roll-call times out in ${timeoutSeconds}s.`;
+  //
+  // Each target gets a personalized mail body that hard-codes:
+  //   - their own MC agent_id (they don't need to guess / introspect)
+  //   - the fully-qualified MC URL (no "localhost:3120?" probing)
+  //   - a bearer-token hint (the middleware rejects agent POSTs without
+  //     the MC_API_TOKEN in prod; dev without a token omits the header)
+  //   - a ready-to-paste curl command so there's one unambiguous shape
+  //     to mimic
+  // Prior versions of this prompt showed agents trying every port from
+  // 3000 upward, probing with PUT when POST was right, and filling
+  // `from_agent_id` with whatever random uuid they could scrape off
+  // their own session. Being explicit here eliminates all of that.
+  const missionControlUrl = getMissionControlUrl();
+  const token = process.env.MC_API_TOKEN;
+  const authHeaderLine = token
+    ? `  -H "Authorization: Bearer ${token}" \\\n`
+    : '';
+  const authNote = token
+    ? `The Authorization header above is required — Mission Control runs with MC_API_TOKEN set and rejects unauthenticated agent callbacks with 403.`
+    : `No Authorization header is required in this dev environment (MC_API_TOKEN is not set).`;
 
   for (const target of targets) {
+    const replyEndpoint = `${missionControlUrl}/api/agents/${master.agent.id}/mail`;
+    const body = `ROLL CALL — please reply briefly with your current status.
+
+**Your Mission Control agent_id:** \`${target.id}\`
+**Your role:** ${target.role}
+**Reply within:** ${timeoutSeconds}s
+
+**REPLY FORMAT** — copy and run this exact curl, substituting your short status note:
+
+\`\`\`bash
+curl -sS -X POST '${replyEndpoint}' \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{
+    "from_agent_id": "${target.id}",
+    "subject": "roll_call_reply:${rollcallId}",
+    "body": "CHECKED_IN: ${target.role}, status=ok, note=<your short note>"
+  }'
+\`\`\`
+
+${authNote}
+
+Keep the reply brief — a single \`CHECKED_IN:\` line is enough.`;
+
     let deliveryStatus: 'sent' | 'failed' | 'skipped' = 'failed';
     let deliveryError: string | null = null;
     try {
