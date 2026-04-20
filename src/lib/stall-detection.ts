@@ -4,6 +4,7 @@ import { sendMail } from '@/lib/mailbox';
 import { logTaskActivity } from '@/lib/activity-log';
 import { saveCheckpointThrottled } from '@/lib/checkpoint';
 import { logDebugEvent } from '@/lib/debug-log';
+import { auditCoordinatorDelegations } from '@/lib/coordinator-audit';
 import type { Task } from '@/lib/types';
 
 // Active statuses that can go stale. Kept in sync with
@@ -94,11 +95,30 @@ export async function scanStalledTasks(): Promise<StallReport> {
 
     // 1. Mark the task. status_reason is cleared by Phase 3.5
     //    (recovery-guard) when the coordinator does anything real.
+    //
+    // Before writing the reason string, run a coordinator-delegation audit.
+    // If the coordinator has claimed delegations via [DELEGATION] markers
+    // (or, worse, emitted umbrella "I delegated to N agents" prose) but no
+    // peer agent has posted anything back, this is the hallucinated-delegation
+    // pattern observed on task cc3d40e1 — narrating a tool call without
+    // actually invoking it. Surface it explicitly so operators know this is
+    // a recoverable "nudge the coordinator to actually fire sessions_send"
+    // stall, not a generic peer-is-slow stall.
+    const coordinatorAudit = auditCoordinatorDelegations(task.id);
+    const suspectedHallucination =
+      coordinatorAudit.suspicious ||
+      (coordinatorAudit.claims.length === 0 &&
+        coordinatorAudit.unmarkedClaimActivities > 0 &&
+        coordinatorAudit.peerCallbacks === 0);
+
     if (!alreadyFlagged) {
+      const reasonTail = suspectedHallucination
+        ? ` (suspected hallucinated delegation: ${coordinatorAudit.claims.length} marked + ${coordinatorAudit.unmarkedClaimActivities} unmarked claims, 0 peer callbacks)`
+        : '';
       run(
         `UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?`,
         [
-          `stalled_no_activity (idle ${Math.round(minutesIdle)}m, detected ${new Date().toISOString()})`,
+          `stalled_no_activity (idle ${Math.round(minutesIdle)}m, detected ${new Date().toISOString()})${reasonTail}`,
           new Date().toISOString(),
           task.id,
         ]
@@ -106,8 +126,17 @@ export async function scanStalledTasks(): Promise<StallReport> {
       logTaskActivity({
         taskId: task.id,
         type: 'stall_detected',
-        message: `Task idle for ${Math.round(minutesIdle)}m with no deliverables`,
-        metadata: { minutes_idle: Math.round(minutesIdle), threshold: thresholdMinutes },
+        message: suspectedHallucination
+          ? `Task idle ${Math.round(minutesIdle)}m with 0 peer callbacks despite ${coordinatorAudit.claims.length + coordinatorAudit.unmarkedClaimActivities} coordinator delegation claim(s) — suspected hallucinated delegation`
+          : `Task idle for ${Math.round(minutesIdle)}m with no deliverables`,
+        metadata: {
+          minutes_idle: Math.round(minutesIdle),
+          threshold: thresholdMinutes,
+          suspected_hallucinated_delegation: suspectedHallucination,
+          marked_claims: coordinatorAudit.claims.length,
+          unmarked_claims: coordinatorAudit.unmarkedClaimActivities,
+          peer_callbacks: coordinatorAudit.peerCallbacks,
+        },
       });
 
       logDebugEvent({
