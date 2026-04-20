@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronRight, ChevronLeft, Clock } from 'lucide-react';
+import { ChevronUp, ChevronDown, Clock, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Event } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
@@ -11,15 +11,21 @@ type FeedFilter = 'all' | 'tasks' | 'agents';
 interface LiveFeedProps {
   mobileMode?: boolean;
   isPortrait?: boolean;
+  // Optional content rendered at the top of the rail, above the filter tabs.
+  // Used by the desktop layout to stack the Ready Deliverables panel above
+  // the feed without creating a competing w-80 wrapper.
+  topSlot?: React.ReactNode;
 }
 
-export function LiveFeed({ mobileMode = false, isPortrait = true }: LiveFeedProps) {
+export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: LiveFeedProps) {
   const { events } = useMissionControl();
   const [filter, setFilter] = useState<FeedFilter>('all');
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false); // whole-rail collapse
+  const [feedCollapsed, setFeedCollapsed] = useState(false); // only hide feed content
 
   const effectiveMinimized = mobileMode ? false : isMinimized;
   const toggleMinimize = () => setIsMinimized(!isMinimized);
+  const toggleFeed = () => setFeedCollapsed(v => !v);
 
   const filteredEvents = events.filter((event) => {
     if (filter === 'all') return true;
@@ -28,28 +34,58 @@ export function LiveFeed({ mobileMode = false, isPortrait = true }: LiveFeedProp
     return true;
   });
 
+  // Whole-rail collapsed view: a slim 12px-wide column with just the expand button.
+  if (effectiveMinimized) {
+    return (
+      <aside className="w-12 bg-mc-bg-secondary border-l border-mc-border flex flex-col items-center py-2 transition-all duration-300 ease-in-out">
+        <button
+          onClick={toggleMinimize}
+          className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+          aria-label="Expand right panel"
+          title="Expand right panel"
+        >
+          <PanelRightOpen className="w-4 h-4" />
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside
       className={`bg-mc-bg-secondary ${mobileMode ? 'border border-mc-border rounded-lg h-full' : 'border-l border-mc-border'} flex flex-col transition-all duration-300 ease-in-out ${
-        effectiveMinimized ? 'w-12' : mobileMode ? 'w-full' : 'w-80'
+        mobileMode ? 'w-full' : 'w-80'
       }`}
     >
-      <div className="p-3 border-b border-mc-border">
-        <div className="flex items-center">
-          {!mobileMode && (
-            <button
-              onClick={toggleMinimize}
-              className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
-              aria-label={effectiveMinimized ? 'Expand feed' : 'Minimize feed'}
-            >
-              {effectiveMinimized ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            </button>
-          )}
-          {!effectiveMinimized && <span className="text-sm font-medium uppercase tracking-wider">Live Feed</span>}
+      {/* Rail toolbar — whole-panel minimize lives here, independent of the
+          LIVE FEED section header so it's always reachable even when the feed
+          (or deliverables) is collapsed. */}
+      {!mobileMode && (
+        <div className="flex items-center justify-end px-2 py-1 border-b border-mc-border/60">
+          <button
+            onClick={toggleMinimize}
+            className="p-1 rounded hover:bg-mc-bg-tertiary text-mc-text-secondary hover:text-mc-text transition-colors"
+            aria-label="Minimize right panel"
+            title="Minimize right panel"
+          >
+            <PanelRightClose className="w-4 h-4" />
+          </button>
         </div>
+      )}
 
-        {!effectiveMinimized && (
-          <div className={`mt-3 ${mobileMode && isPortrait ? 'grid grid-cols-3 gap-2' : 'flex gap-1'}`}>
+      {topSlot && <div className="flex-shrink-0">{topSlot}</div>}
+
+      {/* LIVE FEED section — the header itself is a button that collapses the
+          section independently of the deliverables panel and the whole rail. */}
+      <div className={`border-b border-mc-border flex-shrink-0 ${feedCollapsed ? '' : ''}`}>
+        <button
+          onClick={toggleFeed}
+          className="w-full flex items-center justify-between px-3 py-2 hover:bg-mc-bg-tertiary"
+        >
+          <span className="text-sm font-medium uppercase tracking-wider">Live Feed</span>
+          {feedCollapsed ? <ChevronDown className="w-4 h-4 text-mc-text-secondary" /> : <ChevronUp className="w-4 h-4 text-mc-text-secondary" />}
+        </button>
+        {!feedCollapsed && (
+          <div className={`px-3 pb-3 ${mobileMode && isPortrait ? 'grid grid-cols-3 gap-2' : 'flex gap-1'}`}>
             {(['all', 'tasks', 'agents'] as FeedFilter[]).map((tab) => (
               <button
                 key={tab}
@@ -65,7 +101,7 @@ export function LiveFeed({ mobileMode = false, isPortrait = true }: LiveFeedProp
         )}
       </div>
 
-      {!effectiveMinimized && (
+      {!feedCollapsed && (
         <div className="flex-1 overflow-y-auto p-2 space-y-1 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
           {filteredEvents.length === 0 ? (
             <div className="text-center py-8 text-mc-text-secondary text-sm">No events yet</div>
@@ -103,6 +139,10 @@ function EventItem({ event }: { event: Event }) {
         return '🚚';
       case 'convoy_completed':
         return '🏁';
+      case 'task_archived':
+        return '📦';
+      case 'task_unarchived':
+        return '📤';
       default:
         return '📌';
     }

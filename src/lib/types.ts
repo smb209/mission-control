@@ -15,6 +15,8 @@ export type EventType =
   | 'task_assigned'
   | 'task_status_changed'
   | 'task_completed'
+  | 'task_archived'
+  | 'task_unarchived'
   | 'message_sent'
   | 'agent_status_changed'
   | 'agent_joined'
@@ -92,6 +94,8 @@ export interface Task {
   workspace_base_commit?: string;
   merge_status?: 'pending' | 'merged' | 'conflict' | 'pr_created' | 'abandoned';
   merge_pr_url?: string;
+  is_archived?: number;
+  archived_at?: string;
   created_at: string;
   updated_at: string;
   // Joined fields
@@ -253,6 +257,8 @@ export interface TaskActivity {
 
 export type DeliverableType = 'file' | 'url' | 'artifact';
 
+export type DeliverableStorageScheme = 'mc' | 'host' | 'ssh';
+
 export interface TaskDeliverable {
   id: string;
   task_id: string;
@@ -260,6 +266,8 @@ export interface TaskDeliverable {
   title: string;
   path?: string;
   description?: string;
+  storage_scheme?: DeliverableStorageScheme;
+  size_bytes?: number;
   created_at: string;
 }
 
@@ -822,6 +830,8 @@ export type SSEEventType =
   | 'task_updated'
   | 'task_created'
   | 'task_deleted'
+  | 'task_archived'
+  | 'task_unarchived'
   | 'activity_logged'
   | 'deliverable_added'
   | 'agent_spawned'
