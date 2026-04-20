@@ -52,10 +52,12 @@
   --mc-accent-cyan: #39d353;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+@layer base {
+  * {
+    box-sizing: border-box;
+    padding: 0;
+    margin: 0;
+  }
 }
 
 html,
