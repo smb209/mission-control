@@ -782,7 +782,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
               )}
             </div>
           </div>
-        ) : (
+        ) : state?.parseError ? null : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               {stalePlanning ? (
