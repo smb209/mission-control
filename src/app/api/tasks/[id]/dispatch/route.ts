@@ -402,43 +402,69 @@ their persona, memory, and channel bindings.
 
     let completionInstructions: string;
     if (isCoordinator) {
-      completionInstructions = `**YOUR ROLE: COORDINATOR** — Break this task down and delegate to the persistent agents above. Track their progress and roll the results up to Mission Control.
+      // This prompt is the response to a specific failure mode observed on
+      // task cc3d40e1 (2026-04-20): the Coordinator posted one umbrella
+      // "Delegated parallel research+write+review to 3 agents" activity
+      // *without* ever invoking the sessions_send tool. Gateway logs showed
+      // zero outbound peer messages. The Coordinator then went idle waiting
+      // for callbacks that could never happen.
+      //
+      // Defense in depth below:
+      //   (a) Ordering: sessions_send BEFORE the activity, not after.
+      //   (b) One activity per sessions_send call, each tagged with a parseable
+      //       marker that includes the tool_call_id the gateway returned.
+      //   (c) Explicit ban on umbrella "I delegated to N agents" claims.
+      //   (d) Server-side audit (see auditCoordinatorDelegations in
+      //       src/lib/coordinator-audit.ts) flags tasks where claimed
+      //       delegations > 0 but zero peer callbacks arrived.
+      completionInstructions = `**YOUR ROLE: COORDINATOR** — Delegate to the persistent agents above via the gateway. Mission Control cannot see tool invocations on the gateway side, so YOU are responsible for emitting structured proof of each delegation after it fires.
 
-**CRITICAL — HOW TO DELEGATE:**
-- Use the \`sessions_send\` tool (a.k.a. \`agent.send\`) to dispatch work to each persistent agent.
-  - \`sessionKey\`: call \`sessions_list\` first to discover the target agent's active session, or target its main session. The gateway ids above identify each agent.
-  - \`message\`: include the task id (\`${task.id}\`), the specific slice of work you want them to do, and any context they need. Prefix each message with \"You are the <role> for this task\" so they receive the role framing they would get from Mission Control directly.
-  - \`timeoutSeconds\`: use \`0\` (fire-and-forget) for parallel work; use a positive value only when you need a synchronous reply.
-- **DO NOT use \`sessions_spawn\`** for this workflow. Spawned subagents inherit a stripped context (no SOUL.md/IDENTITY.md) and won't know the role they're meant to play. We want the pinned persona of the persistent agents.
-- If \`sessions_send\` is rejected with a permissions/allow-list error (e.g. *"Session send visibility is restricted"*), the OpenClaw allow-list on this coordinator needs \`tools.sessions.visibility: "all"\` — or an explicit list of peer agent ids. Surface the blocker via:
-  \`\`\`bash
-  curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
-    -H "Content-Type: application/json" \\
-${authHeaderLine}    -d '{"reason":"sessions_send blocked by allow-list: <error text>"}'
-  \`\`\`
+**DELEGATION PROTOCOL — strict ordering:**
 
-**TRACKING & REPORTING** (all calls require the Authorization header):
+For each peer agent you want to delegate work to:
+
+1. **Invoke \`sessions_send\` FIRST.** Do NOT announce the delegation before the tool call returns. Capture the tool-call result id the gateway returns.
+   - \`sessionKey\`: construct a FRESH per-task session key as \`agent:<peer_gateway_id>:task-${task.id}\` — substitute the peer's gateway id from the list above (e.g. \`agent:mc-researcher:task-${task.id}\`). The gateway creates the session implicitly on first send.
+   - **Do NOT target the peer's \`:main\` session.** Shared \`:main\` sessions carry context from prior tasks, collide when multiple tasks run in parallel, and appear to get aborted more aggressively by the gateway's run lifecycle (see the task cc3d40e1 post-mortem: every peer delegation landed on \`:main\` and was aborted before responding). Per-task session keys give each delegation an isolated lane.
+   - \`message\`: include the task id (\`${task.id}\`), the specific slice of work, any context, and prefix it with "You are the <role> for this task".
+   - \`timeoutSeconds\`: \`0\` for fire-and-forget parallel work.
+
+2. **IMMEDIATELY AFTER the tool call returns successfully, POST ONE activity** logging that specific delegation. Each activity message MUST start with the \`[DELEGATION]\` marker in the exact format below. Mission Control audits these — messages that don't match the format are treated as unverified:
 
 \`\`\`bash
-# Log each delegation / receipt
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
   -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"updated","message":"Delegated <slice> to <agent name>"}'
+${authHeaderLine}  -d '{"activity_type":"updated","message":"[DELEGATION] target=\\"<agent name>\\" gateway_id=\\"<gateway_agent_id>\\" tool_call_id=\\"<id returned by sessions_send>\\" slice=\\"<one-line summary of what you asked them to do>\\""}'
+\`\`\`
 
-# Register aggregated deliverable (after all peers report in)
-# Save the file to the **DELIVERABLES DIR** below so it becomes web-downloadable.
+**ONE activity per sessions_send call.** Do NOT bundle multiple delegations into a single activity. Do NOT post an umbrella "Delegated work to 3 agents" activity — it will be rejected by the audit and the stall detector will flag the task as suspected hallucinated delegation.
+
+**DO NOT use \`sessions_spawn\`.** Spawned subagents inherit a stripped context and won't know their role.
+
+**If \`sessions_send\` is rejected** with an allow-list error (*"Session send visibility is restricted"*), the OpenClaw allow-list on this coordinator needs \`tools.sessions.visibility: "all"\`. Surface the blocker immediately — do not post a \`[DELEGATION]\` activity since no delegation actually happened:
+
+\`\`\`bash
+curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
+  -H "Content-Type: application/json" \\
+${authHeaderLine}  -d '{"reason":"sessions_send blocked by allow-list: <error text>"}'
+\`\`\`
+
+**AGGREGATION & COMPLETION** (after every peer has reported back):
+
+\`\`\`bash
+# Register the aggregated deliverable. Save it to the DELIVERABLES DIR below.
 curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
   -H "Content-Type: application/json" \\
 ${authHeaderLine}  -d '{"deliverable_type":"file","title":"<title>","path":"${deliverablesDir}/<filename>"}'
 
-# Close the task
+# Transition the task.
 curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
   -H "Content-Type: application/json" \\
 ${authHeaderLine}  -d '{"status":"${nextStatus}"}'
 \`\`\`
 
 When complete, reply with:
-\`TASK_COMPLETE: [summary of what was delegated, to whom, and the aggregate outcome]\``;
+\`TASK_COMPLETE: [one line per delegated agent with tool_call_id + outcome]\``;
     } else if (isBuilder) {
       // Build the builder's completion block. When a structured spec exists,
       // require one deliverable POST per spec id (the evidence gate enforces

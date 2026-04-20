@@ -4,6 +4,7 @@ import { sendMail } from '@/lib/mailbox';
 import { logTaskActivity } from '@/lib/activity-log';
 import { saveCheckpointThrottled } from '@/lib/checkpoint';
 import { logDebugEvent } from '@/lib/debug-log';
+import { auditCoordinatorDelegations } from '@/lib/coordinator-audit';
 import type { Task } from '@/lib/types';
 
 // Active statuses that can go stale. Kept in sync with
@@ -94,11 +95,36 @@ export async function scanStalledTasks(): Promise<StallReport> {
 
     // 1. Mark the task. status_reason is cleared by Phase 3.5
     //    (recovery-guard) when the coordinator does anything real.
+    //
+    // Before writing the reason string, run a coordinator-delegation audit.
+    // If the coordinator has claimed delegations (via [DELEGATION] markers
+    // or the older umbrella "I delegated to N agents" prose) but no peer
+    // agent has posted anything back, the claim is unverified. There are
+    // two plausible causes and the audit alone can't distinguish them:
+    //   (a) the coordinator never actually invoked sessions_send — the
+    //       hallucinated-tool-call failure mode;
+    //   (b) the coordinator DID invoke sessions_send but the peer session
+    //       was aborted on the gateway side before responding (observed on
+    //       task cc3d40e1 where the gateway logged 4 `completed`
+    //       sessions_send calls but zero peer chat.response events).
+    // Either way the task is stuck, and "unverified delegation" captures
+    // both cases without over-claiming. Operators then inspect the gateway
+    // log to disambiguate.
+    const coordinatorAudit = auditCoordinatorDelegations(task.id);
+    const unverifiedDelegation =
+      coordinatorAudit.suspicious ||
+      (coordinatorAudit.claims.length === 0 &&
+        coordinatorAudit.unmarkedClaimActivities > 0 &&
+        coordinatorAudit.peerCallbacks === 0);
+
     if (!alreadyFlagged) {
+      const reasonTail = unverifiedDelegation
+        ? ` (unverified delegation: ${coordinatorAudit.claims.length} marked + ${coordinatorAudit.unmarkedClaimActivities} unmarked claims, 0 peer callbacks — check gateway log to distinguish hallucinated tool call vs aborted peer session)`
+        : '';
       run(
         `UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?`,
         [
-          `stalled_no_activity (idle ${Math.round(minutesIdle)}m, detected ${new Date().toISOString()})`,
+          `stalled_no_activity (idle ${Math.round(minutesIdle)}m, detected ${new Date().toISOString()})${reasonTail}`,
           new Date().toISOString(),
           task.id,
         ]
@@ -106,8 +132,17 @@ export async function scanStalledTasks(): Promise<StallReport> {
       logTaskActivity({
         taskId: task.id,
         type: 'stall_detected',
-        message: `Task idle for ${Math.round(minutesIdle)}m with no deliverables`,
-        metadata: { minutes_idle: Math.round(minutesIdle), threshold: thresholdMinutes },
+        message: unverifiedDelegation
+          ? `Task idle ${Math.round(minutesIdle)}m with 0 peer callbacks despite ${coordinatorAudit.claims.length + coordinatorAudit.unmarkedClaimActivities} coordinator delegation claim(s) — unverified delegation (hallucinated call OR aborted peer session)`
+          : `Task idle for ${Math.round(minutesIdle)}m with no deliverables`,
+        metadata: {
+          minutes_idle: Math.round(minutesIdle),
+          threshold: thresholdMinutes,
+          unverified_delegation: unverifiedDelegation,
+          marked_claims: coordinatorAudit.claims.length,
+          unmarked_claims: coordinatorAudit.unmarkedClaimActivities,
+          peer_callbacks: coordinatorAudit.peerCallbacks,
+        },
       });
 
       logDebugEvent({
