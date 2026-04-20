@@ -5,7 +5,7 @@ import { broadcast } from '@/lib/events';
 import { getMissionControlUrl } from '@/lib/config';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { hasStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
-import { updateConvoyProgress, checkConvoyCompletion } from '@/lib/convoy';
+import { updateConvoyProgress, checkConvoyCompletion, dispatchReadyConvoySubtasks } from '@/lib/convoy';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
 import { UpdateTaskSchema } from '@/lib/validation';
@@ -478,7 +478,15 @@ export async function PATCH(
       try {
         updateConvoyProgress(existing.convoy_id);
         if (nextStatus === 'done') {
-          checkConvoyCompletion(existing.convoy_id);
+          const wasFinal = checkConvoyCompletion(existing.convoy_id);
+          // If the convoy still has work left, promote any sub-tasks whose
+          // dependencies just cleared. Without this the convoy stalls with
+          // dependent sub-tasks permanently stuck in inbox.
+          if (!wasFinal) {
+            dispatchReadyConvoySubtasks(existing.convoy_id).catch(err =>
+              console.error('[Convoy] auto-dispatch on subtask done failed:', err)
+            );
+          }
         }
       } catch (err) {
         console.error('[Convoy] progress update failed:', err);

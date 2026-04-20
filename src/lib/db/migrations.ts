@@ -1844,6 +1844,73 @@ const migrations: Migration[] = [
 
       console.log('[Migration 033] Complete: tasks.is_archived/archived_at and task_deliverables.storage_scheme/size_bytes added.');
     }
+  },
+  {
+    id: '034',
+    name: 'convoy_resolve_symbolic_depends_on',
+    up: (db) => {
+      // The decomposition LLM emits `depends_on: ["subtask-0", "subtask-1"]`
+      // style refs and prior code wrote them to convoy_subtasks verbatim. The
+      // dispatcher compares against task UUIDs, so those refs never matched —
+      // any convoy with dependencies stalled after the first subtask. Translate
+      // every remaining symbolic ref to the referenced task's UUID (looked up
+      // by sort_order within the same convoy). Rows whose depends_on is NULL,
+      // empty, or already UUIDs are left alone. Done for all existing convoys
+      // regardless of status; harmless on ones that already completed.
+      console.log('[Migration 034] Resolving symbolic depends_on refs in convoy_subtasks...');
+
+      const rows = db.prepare(
+        `SELECT id, convoy_id, depends_on FROM convoy_subtasks WHERE depends_on IS NOT NULL AND depends_on != '' AND depends_on != '[]'`
+      ).all() as { id: string; convoy_id: string; depends_on: string }[];
+
+      let updated = 0;
+      const orderCache = new Map<string, Map<number, string>>();
+      const update = db.prepare('UPDATE convoy_subtasks SET depends_on = ? WHERE id = ?');
+
+      for (const row of rows) {
+        let parsed: string[];
+        try {
+          parsed = JSON.parse(row.depends_on);
+        } catch {
+          continue;
+        }
+        if (!Array.isArray(parsed) || parsed.length === 0) continue;
+
+        let order = orderCache.get(row.convoy_id);
+        if (!order) {
+          const siblings = db.prepare(
+            'SELECT task_id, sort_order FROM convoy_subtasks WHERE convoy_id = ?'
+          ).all(row.convoy_id) as { task_id: string; sort_order: number }[];
+          order = new Map(siblings.map(s => [s.sort_order, s.task_id]));
+          orderCache.set(row.convoy_id, order);
+        }
+
+        let changed = false;
+        const resolved: string[] = [];
+        for (const dep of parsed) {
+          const match = typeof dep === 'string' ? /^subtask-(\d+)$/.exec(dep) : null;
+          if (match) {
+            const taskId = order.get(parseInt(match[1], 10));
+            if (taskId) {
+              resolved.push(taskId);
+              changed = true;
+            } else {
+              console.warn(`[Migration 034] convoy_subtask ${row.id}: dep ${dep} out of range, dropping`);
+              changed = true;
+            }
+          } else {
+            resolved.push(dep);
+          }
+        }
+
+        if (changed) {
+          update.run(resolved.length > 0 ? JSON.stringify(resolved) : null, row.id);
+          updated += 1;
+        }
+      }
+
+      console.log(`[Migration 034] Complete: rewrote depends_on on ${updated} convoy_subtasks row(s).`);
+    }
   }
 ];
 

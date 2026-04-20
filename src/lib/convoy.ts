@@ -2,7 +2,39 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { notifyLearner } from '@/lib/learner';
+import { getMissionControlUrl } from '@/lib/config';
+import { pickDynamicAgent } from '@/lib/task-governance';
 import type { Convoy, ConvoySubtask, Task, ConvoyStatus, DecompositionStrategy } from '@/lib/types';
+
+/**
+ * The decomposition LLM writes `depends_on` as zero-based symbolic refs
+ * like "subtask-0", "subtask-1" (see src/app/api/tasks/[id]/convoy/route.ts
+ * prompt). Translate those into the actual task UUIDs so downstream
+ * dependency checks work without a symbol table. Unknown refs are dropped
+ * with a warning — they'd only produce a permanently-blocked subtask.
+ */
+function resolveSymbolicDeps(
+  deps: string[] | undefined,
+  indexToTaskId: string[]
+): string[] | undefined {
+  if (!deps || deps.length === 0) return deps;
+  const resolved: string[] = [];
+  for (const dep of deps) {
+    const match = /^subtask-(\d+)$/.exec(dep);
+    if (match) {
+      const idx = parseInt(match[1], 10);
+      if (idx >= 0 && idx < indexToTaskId.length) {
+        resolved.push(indexToTaskId[idx]);
+      } else {
+        console.warn(`[Convoy] depends_on "${dep}" out of range — dropping`);
+      }
+    } else {
+      // Already a UUID (or some other concrete ref) — pass through.
+      resolved.push(dep);
+    }
+  }
+  return resolved;
+}
 
 interface CreateSubtaskInput {
   title: string;
@@ -54,11 +86,15 @@ export function createConvoy(input: CreateConvoyInput): Convoy {
       [now, parentTaskId]
     );
 
-    // Create sub-tasks
+    // Pre-allocate UUIDs so we can translate symbolic `depends_on` refs
+    // ("subtask-N") into real task IDs before inserting any rows.
+    const indexToTaskId = subtasks.map(() => uuidv4());
+
     for (let i = 0; i < subtasks.length; i++) {
       const sub = subtasks[i];
-      const subtaskId = uuidv4();
+      const subtaskId = indexToTaskId[i];
       const convoySubtaskId = uuidv4();
+      const resolvedDeps = resolveSymbolicDeps(sub.depends_on, indexToTaskId);
 
       // Create the task entry
       run(
@@ -71,7 +107,7 @@ export function createConvoy(input: CreateConvoyInput): Convoy {
       run(
         `INSERT INTO convoy_subtasks (id, convoy_id, task_id, sort_order, depends_on, suggested_role, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [convoySubtaskId, convoyId, subtaskId, i, sub.depends_on ? JSON.stringify(sub.depends_on) : null, sub.suggested_role || null, now]
+        [convoySubtaskId, convoyId, subtaskId, i, resolvedDeps && resolvedDeps.length > 0 ? JSON.stringify(resolvedDeps) : null, sub.suggested_role || null, now]
       );
     }
 
@@ -227,6 +263,103 @@ export function checkConvoyCompletion(convoyId: string): boolean {
   return false;
 }
 
+const MAX_PARALLEL_CONVOY_SUBTASKS = 5;
+
+export interface ConvoyDispatchResult {
+  dispatched: number;
+  total: number;
+  skipped?: string;
+  results: Array<{ taskId: string; success: boolean; error?: string }>;
+}
+
+/**
+ * Advance every ready subtask in a convoy: auto-assign agents, move to
+ * `assigned`, and POST to the per-task dispatch endpoint. Used both by the
+ * explicit `/convoy/dispatch` endpoint (operator nudge) and by the PATCH
+ * done-handler (auto-advance when a dependency completes).
+ *
+ * No-ops gracefully when the convoy is missing, inactive, or already at the
+ * parallel-subtask cap. Never throws — callers should treat the result as
+ * advisory.
+ */
+export async function dispatchReadyConvoySubtasks(convoyId: string): Promise<ConvoyDispatchResult> {
+  const convoy = queryOne<Convoy>('SELECT * FROM convoys WHERE id = ?', [convoyId]);
+  if (!convoy) return { dispatched: 0, total: 0, skipped: 'convoy not found', results: [] };
+  if (convoy.status !== 'active') return { dispatched: 0, total: 0, skipped: `convoy is ${convoy.status}`, results: [] };
+
+  const allDispatchable = getDispatchableSubtasks(convoyId);
+  if (allDispatchable.length === 0) {
+    return { dispatched: 0, total: 0, skipped: 'no subtasks ready', results: [] };
+  }
+
+  const currentlyActive = queryAll<{ id: string }>(
+    `SELECT t.id FROM convoy_subtasks cs JOIN tasks t ON cs.task_id = t.id
+     WHERE cs.convoy_id = ? AND t.status IN ('assigned', 'in_progress', 'testing', 'verification')`,
+    [convoyId]
+  ).length;
+  const slots = Math.max(0, MAX_PARALLEL_CONVOY_SUBTASKS - currentlyActive);
+  const dispatchable = allDispatchable.slice(0, slots);
+
+  if (dispatchable.length === 0) {
+    return { dispatched: 0, total: allDispatchable.length, skipped: `max parallel reached (${MAX_PARALLEL_CONVOY_SUBTASKS})`, results: [] };
+  }
+
+  const missionControlUrl = getMissionControlUrl();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (process.env.MC_API_TOKEN) {
+    headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
+  }
+
+  const results: ConvoyDispatchResult['results'] = [];
+
+  for (const subtask of dispatchable) {
+    const task = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [subtask.task_id]);
+    if (!task) continue;
+
+    let agentId = task.assigned_agent_id;
+    if (!agentId) {
+      const roleHint = subtask.suggested_role || 'builder';
+      const picked = pickDynamicAgent(subtask.task_id, roleHint);
+      if (picked) {
+        agentId = picked.id;
+        run('UPDATE tasks SET assigned_agent_id = ?, updated_at = datetime(\'now\') WHERE id = ?', [agentId, subtask.task_id]);
+      }
+    }
+
+    if (!agentId) {
+      results.push({ taskId: subtask.task_id, success: false, error: 'No agent available' });
+      continue;
+    }
+
+    run('UPDATE tasks SET status = \'assigned\', updated_at = datetime(\'now\') WHERE id = ?', [subtask.task_id]);
+
+    try {
+      const res = await fetch(`${missionControlUrl}/api/tasks/${subtask.task_id}/dispatch`, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      if (res.ok) {
+        results.push({ taskId: subtask.task_id, success: true });
+      } else {
+        const errorText = await res.text();
+        results.push({ taskId: subtask.task_id, success: false, error: errorText });
+      }
+    } catch (err) {
+      results.push({ taskId: subtask.task_id, success: false, error: (err as Error).message });
+    }
+  }
+
+  updateConvoyProgress(convoyId);
+
+  return {
+    dispatched: results.filter(r => r.success).length,
+    total: dispatchable.length,
+    results,
+  };
+}
+
 /**
  * Find sub-tasks that are ready to dispatch (in inbox, all dependencies done).
  */
@@ -274,10 +407,23 @@ export function addSubtasks(convoyId: string, subtasks: CreateSubtaskInput[]): C
   const now = new Date().toISOString();
 
   return transaction(() => {
+    // Pre-allocate UUIDs for the new subtasks so symbolic deps referring to
+    // other new subtasks ("subtask-N", counting from the convoy start) resolve
+    // correctly. Existing subtasks are also addressable by the same scheme.
+    const existingByOrder = queryAll<{ task_id: string; sort_order: number }>(
+      'SELECT task_id, sort_order FROM convoy_subtasks WHERE convoy_id = ? ORDER BY sort_order',
+      [convoyId]
+    );
+    const indexToTaskId: string[] = existingByOrder.map(r => r.task_id);
+    for (let i = 0; i < subtasks.length; i++) {
+      indexToTaskId.push(uuidv4());
+    }
+
     for (let i = 0; i < subtasks.length; i++) {
       const sub = subtasks[i];
-      const subtaskId = uuidv4();
+      const subtaskId = indexToTaskId[existingByOrder.length + i];
       const convoySubtaskId = uuidv4();
+      const resolvedDeps = resolveSymbolicDeps(sub.depends_on, indexToTaskId);
 
       run(
         `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, workspace_id, business_id, workflow_template_id, convoy_id, is_subtask, created_at, updated_at)
@@ -288,10 +434,10 @@ export function addSubtasks(convoyId: string, subtasks: CreateSubtaskInput[]): C
       run(
         `INSERT INTO convoy_subtasks (id, convoy_id, task_id, sort_order, depends_on, suggested_role, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [convoySubtaskId, convoyId, subtaskId, maxOrder + i + 1, sub.depends_on ? JSON.stringify(sub.depends_on) : null, sub.suggested_role || null, now]
+        [convoySubtaskId, convoyId, subtaskId, maxOrder + i + 1, resolvedDeps && resolvedDeps.length > 0 ? JSON.stringify(resolvedDeps) : null, sub.suggested_role || null, now]
       );
 
-      created.push({ id: convoySubtaskId, convoy_id: convoyId, task_id: subtaskId, sort_order: maxOrder + i + 1, depends_on: sub.depends_on, suggested_role: sub.suggested_role || null, created_at: now });
+      created.push({ id: convoySubtaskId, convoy_id: convoyId, task_id: subtaskId, sort_order: maxOrder + i + 1, depends_on: resolvedDeps, suggested_role: sub.suggested_role || null, created_at: now });
     }
 
     // Update total count
