@@ -149,6 +149,21 @@ export async function initiateRollCall(params: {
   // their own session. Being explicit here eliminates all of that.
   const missionControlUrl = getMissionControlUrl();
   const token = process.env.MC_API_TOKEN;
+
+  // Sanity check: roll-call replies must be reachable from whichever host
+  // the target agent is running on. If MISSION_CONTROL_URL points to
+  // localhost / 127.0.0.1 / ::1, agents on any other host will see
+  // "connection refused" when they try to reply. We don't block — the
+  // operator may legitimately be running a single-host dev setup — but
+  // log loudly so misconfiguration surfaces before the first 30s timeout.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(missionControlUrl)) {
+    console.warn(
+      `[RollCall] MISSION_CONTROL_URL is set to ${missionControlUrl}. ` +
+      `If any target agent runs on a different host it will not be able ` +
+      `to reach this URL to reply. Set MISSION_CONTROL_URL to an address ` +
+      `reachable from the agent host (e.g. your LAN IP) and restart MC.`
+    );
+  }
   const authHeaderLine = token
     ? `  -H "Authorization: Bearer ${token}" \\\n`
     : '';
