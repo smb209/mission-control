@@ -6,10 +6,8 @@ import { getProduct } from '@/lib/autopilot/products';
  * PUT /api/products/[id]/health/weights
  * Update per-product weight configuration and trigger recalculation.
  */
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function PUT(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const product = getProduct(params.id);
     if (!product) {

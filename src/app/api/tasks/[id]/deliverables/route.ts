@@ -22,10 +22,8 @@ export const dynamic = 'force-dynamic';
  * GET /api/tasks/[id]/deliverables
  * Retrieve all deliverables for a task
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const db = getDb();
@@ -51,10 +49,8 @@ export async function GET(
  * POST /api/tasks/[id]/deliverables
  * Add a new deliverable to a task
  */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(request: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const taskId = params.id;
     const body = await request.json();
