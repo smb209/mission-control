@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createConvoy, getConvoy, updateConvoyStatus, deleteConvoy } from '@/lib/convoy';
 import { queryOne, queryAll } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
 import { extractJSON, getMessagesFromOpenClaw } from '@/lib/planning-utils';
 import {
   getAgentRoster,
@@ -172,8 +173,10 @@ async function runAIDecomposition(task: Task): Promise<{
     await client.connect();
   }
 
-  // Create a unique session key for this decomposition
-  const prefix = masterAgent.session_key_prefix || 'agent:main:';
+  // Create a unique session key for this decomposition. Uses the agent's
+  // own namespace (gateway_agent_id or name) rather than the old `agent:main:`
+  // default that misrouted messages to the gateway's main agent.
+  const prefix = resolveAgentSessionKeyPrefix(masterAgent);
   const sessionKey = `${prefix}decompose:${task.id}`;
 
   const prompt = buildDecompositionPrompt(task, roster);

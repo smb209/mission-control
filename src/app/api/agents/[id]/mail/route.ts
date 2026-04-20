@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getUnreadMail, markAsRead } from '@/lib/mailbox';
+import { queryOne } from '@/lib/db';
+import { getUnreadMail, markAsRead, sendMail } from '@/lib/mailbox';
+import { recordRollCallReplyIfMatch } from '@/lib/rollcall';
+import type { Agent } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +18,87 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json(messages);
   } catch (error) {
     return NextResponse.json({ error: 'Failed to fetch mail' }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/agents/[id]/mail — Send mail to this agent from another.
+ *
+ * Body: {
+ *   from_agent_id: string,
+ *   subject?: string,
+ *   body: string,
+ *   convoy_id?: string,    // optional scope
+ *   task_id?: string,      // optional scope
+ *   push?: boolean         // if true, also deliver via chat.send immediately
+ * }
+ *
+ * Counterpart to /api/convoy/[convoyId]/mail — this one handles mail that
+ * lives outside a convoy (roll-call, help-requests to the master
+ * orchestrator, ad-hoc inter-agent messages). Agents reply to mail by
+ * POSTing back the other direction.
+ */
+export async function POST(request: NextRequest, { params }: RouteParams) {
+  try {
+    const { id: toAgentId } = await params;
+    const body = await request.json() as {
+      from_agent_id?: string;
+      subject?: string;
+      body?: string;
+      convoy_id?: string;
+      task_id?: string;
+      push?: boolean;
+    };
+
+    if (!body.from_agent_id || !body.body) {
+      return NextResponse.json(
+        { error: 'from_agent_id and body are required' },
+        { status: 400 }
+      );
+    }
+
+    // Sanity-check both agents exist so FK errors surface as clean 4xx.
+    const recipient = queryOne<Agent>('SELECT id FROM agents WHERE id = ?', [toAgentId]);
+    if (!recipient) {
+      return NextResponse.json({ error: `Recipient agent ${toAgentId} not found` }, { status: 404 });
+    }
+    const sender = queryOne<Agent>('SELECT id FROM agents WHERE id = ?', [body.from_agent_id]);
+    if (!sender) {
+      return NextResponse.json({ error: `Sender agent ${body.from_agent_id} not found` }, { status: 400 });
+    }
+
+    const result = await sendMail({
+      convoyId: body.convoy_id || null,
+      taskId: body.task_id || null,
+      fromAgentId: body.from_agent_id,
+      toAgentId,
+      subject: body.subject,
+      body: body.body,
+      push: Boolean(body.push),
+    });
+
+    // If this mail looks like a reply to an open roll-call, record it
+    // against the matching rollcall_entries row so the UI's live status
+    // view flips from "waiting" to "responded" for this agent. No-op if
+    // there's no match — stray replies are just regular mail.
+    const rollcallMatch = recordRollCallReplyIfMatch({
+      mailId: result.message.id,
+      fromAgentId: body.from_agent_id,
+      toAgentId,
+      subject: body.subject,
+      body: body.body,
+    });
+
+    return NextResponse.json(
+      { ...result, rollcall_matched: rollcallMatch.matched, rollcall_id: rollcallMatch.rollcallId },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error('[POST /api/agents/[id]/mail] failed:', error);
+    return NextResponse.json(
+      { error: `Failed to send mail: ${(error as Error).message}` },
+      { status: 500 }
+    );
   }
 }
 

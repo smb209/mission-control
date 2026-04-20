@@ -126,13 +126,16 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
     } catch {}
   }
 
+  // All role/fallback lookups filter on is_active=1 (COALESCE for rows
+  // created before the column existed — default to active). An operator-
+  // marked inactive agent is excluded from every routing decision.
   const checked = new Set<string>();
   for (const candidateId of plannerCandidates) {
-    const candidate = queryOne<{ id: string; name: string; is_master: number; status: string }>(
-      'SELECT id, name, is_master, status FROM agents WHERE id = ? LIMIT 1',
+    const candidate = queryOne<{ id: string; name: string; is_master: number; status: string; is_active: number }>(
+      'SELECT id, name, is_master, status, is_active FROM agents WHERE id = ? LIMIT 1',
       [candidateId]
     );
-    if (!candidate || candidate.status === 'offline') continue;
+    if (!candidate || candidate.status === 'offline' || Number(candidate.is_active ?? 1) !== 1) continue;
     checked.add(candidate.id);
     return { id: candidate.id, name: candidate.name };
   }
@@ -143,7 +146,7 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
     // via OpenClaw, so picking one silently breaks the dispatch.
     const byRole = queryOne<{ id: string; name: string }>(
       `SELECT id, name FROM agents
-       WHERE role = ? AND status != 'offline'
+       WHERE role = ? AND status != 'offline' AND COALESCE(is_active, 1) = 1
        ORDER BY
          (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL) DESC,
          status = 'standby' DESC,
@@ -156,7 +159,7 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
 
   const fallback = queryOne<{ id: string; name: string }>(
     `SELECT id, name FROM agents
-     WHERE status != 'offline'
+     WHERE status != 'offline' AND COALESCE(is_active, 1) = 1
      ORDER BY
        (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL) DESC,
        is_master ASC,

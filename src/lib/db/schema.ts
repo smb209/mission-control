@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
   source TEXT DEFAULT 'local',
   gateway_agent_id TEXT,
   session_key_prefix TEXT,
+  is_active INTEGER DEFAULT 1,
   total_cost_usd REAL DEFAULT 0,
   total_tokens_used INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
@@ -309,10 +310,13 @@ CREATE TABLE IF NOT EXISTS work_checkpoints (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Agent mailbox: inter-agent communication within a convoy
+-- Agent mailbox: inter-agent communication. Optionally scoped to a convoy
+-- or a task. Both scope columns may be NULL for ad-hoc mail (e.g. roll-call,
+-- help-requests to the master orchestrator).
 CREATE TABLE IF NOT EXISTS agent_mailbox (
   id TEXT PRIMARY KEY,
-  convoy_id TEXT NOT NULL REFERENCES convoys(id) ON DELETE CASCADE,
+  convoy_id TEXT REFERENCES convoys(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   from_agent_id TEXT NOT NULL REFERENCES agents(id),
   to_agent_id TEXT NOT NULL REFERENCES agents(id),
   subject TEXT,
@@ -320,6 +324,36 @@ CREATE TABLE IF NOT EXISTS agent_mailbox (
   read_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_agent_mailbox_to ON agent_mailbox(to_agent_id, read_at);
+CREATE INDEX IF NOT EXISTS idx_agent_mailbox_convoy ON agent_mailbox(convoy_id) WHERE convoy_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_mailbox_task ON agent_mailbox(task_id) WHERE task_id IS NOT NULL;
+
+-- Roll-call sessions: a master orchestrator asks each active agent to
+-- check in; we track delivery and reply independently so the UI can
+-- surface two distinct failure modes (couldn't deliver vs. agent silent).
+CREATE TABLE IF NOT EXISTS rollcall_sessions (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  initiator_agent_id TEXT NOT NULL REFERENCES agents(id),
+  mode TEXT NOT NULL CHECK (mode IN ('direct', 'coordinator')),
+  timeout_seconds INTEGER NOT NULL DEFAULT 30,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rollcall_entries (
+  id TEXT PRIMARY KEY,
+  rollcall_id TEXT NOT NULL REFERENCES rollcall_sessions(id) ON DELETE CASCADE,
+  target_agent_id TEXT NOT NULL REFERENCES agents(id),
+  delivery_status TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'skipped')),
+  delivery_error TEXT,
+  delivered_at TEXT,
+  reply_mail_id TEXT REFERENCES agent_mailbox(id) ON DELETE SET NULL,
+  reply_body TEXT,
+  replied_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_rollcall_entries_session ON rollcall_entries(rollcall_id);
+CREATE INDEX IF NOT EXISTS idx_rollcall_entries_target ON rollcall_entries(target_agent_id, replied_at);
 
 -- Products table (Product Autopilot)
 CREATE TABLE IF NOT EXISTS products (

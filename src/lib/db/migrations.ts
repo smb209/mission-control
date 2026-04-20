@@ -1730,6 +1730,90 @@ const migrations: Migration[] = [
 
       console.log('[Migration 031] debug_events + debug_config created (collection_enabled=0 by default)');
     }
+  },
+  {
+    id: '032',
+    name: 'active_flag_and_general_mailbox_and_rollcall',
+    up: (db) => {
+      console.log('[Migration 032] Adding agents.is_active, generalizing agent_mailbox, creating rollcall tables...');
+
+      // --- 1. agents.is_active (default 1 so every existing agent is active) ---
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!agentsInfo.some(c => c.name === 'is_active')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN is_active INTEGER DEFAULT 1`);
+        db.exec(`UPDATE agents SET is_active = 1 WHERE is_active IS NULL`);
+      }
+
+      // --- 2. agent_mailbox: make convoy_id nullable + add task_id ---
+      // SQLite can't drop NOT NULL on an existing column, so rebuild the
+      // table. PRAGMA foreign_keys must stay ON at commit; we use the
+      // documented 12-step table-rebuild pattern (inside a transaction we
+      // run outside this migration's wrapper — see runMigrations).
+      const mailboxInfo = db.prepare("PRAGMA table_info(agent_mailbox)").all() as { name: string; notnull: number }[];
+      const convoyCol = mailboxInfo.find(c => c.name === 'convoy_id');
+      const hasTaskId = mailboxInfo.some(c => c.name === 'task_id');
+      const needsRebuild = Boolean(convoyCol && convoyCol.notnull === 1) || !hasTaskId;
+
+      if (needsRebuild) {
+        db.exec(`
+          CREATE TABLE agent_mailbox_new (
+            id TEXT PRIMARY KEY,
+            convoy_id TEXT REFERENCES convoys(id) ON DELETE CASCADE,
+            task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+            from_agent_id TEXT NOT NULL REFERENCES agents(id),
+            to_agent_id TEXT NOT NULL REFERENCES agents(id),
+            subject TEXT,
+            body TEXT NOT NULL,
+            read_at TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+          )
+        `);
+        db.exec(`
+          INSERT INTO agent_mailbox_new (id, convoy_id, task_id, from_agent_id, to_agent_id, subject, body, read_at, created_at)
+          SELECT id, convoy_id, NULL as task_id, from_agent_id, to_agent_id, subject, body, read_at, created_at
+          FROM agent_mailbox
+        `);
+        db.exec(`DROP TABLE agent_mailbox`);
+        db.exec(`ALTER TABLE agent_mailbox_new RENAME TO agent_mailbox`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_mailbox_to ON agent_mailbox(to_agent_id, read_at)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_mailbox_convoy ON agent_mailbox(convoy_id) WHERE convoy_id IS NOT NULL`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_mailbox_task ON agent_mailbox(task_id) WHERE task_id IS NOT NULL`);
+      }
+
+      // --- 3. rollcall + rollcall_entries ---
+      // One roll-call session can fan out to N agents; we track delivery
+      // and reply independently (the two failure modes are different:
+      // "couldn't deliver the prompt" vs "delivered but agent didn't reply").
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rollcall_sessions (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+          initiator_agent_id TEXT NOT NULL REFERENCES agents(id),
+          mode TEXT NOT NULL CHECK (mode IN ('direct', 'coordinator')),
+          timeout_seconds INTEGER NOT NULL DEFAULT 30,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          expires_at TEXT NOT NULL
+        )
+      `);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS rollcall_entries (
+          id TEXT PRIMARY KEY,
+          rollcall_id TEXT NOT NULL REFERENCES rollcall_sessions(id) ON DELETE CASCADE,
+          target_agent_id TEXT NOT NULL REFERENCES agents(id),
+          delivery_status TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'skipped')),
+          delivery_error TEXT,
+          delivered_at TEXT,
+          reply_mail_id TEXT REFERENCES agent_mailbox(id) ON DELETE SET NULL,
+          reply_body TEXT,
+          replied_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_rollcall_entries_session ON rollcall_entries(rollcall_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_rollcall_entries_target ON rollcall_entries(target_agent_id, replied_at)`);
+
+      console.log('[Migration 032] Complete: is_active flag, mailbox generalized, rollcall tables created.');
+    }
   }
 ];
 

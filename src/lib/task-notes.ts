@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
 import type { TaskNote, OpenClawSession, Agent } from '@/lib/types';
 
 /**
@@ -98,7 +99,7 @@ export async function deliverPendingNotesAtCheckpoint(taskId: string): Promise<n
 
     // Get the agent's session key prefix
     const agent = queryOne<Agent>('SELECT * FROM agents WHERE id = ?', [activeSession.agent_id]);
-    const prefix = agent?.session_key_prefix || 'agent:main:';
+    const prefix = agent ? resolveAgentSessionKeyPrefix(agent) : 'agent:main:';
     const sessionKey = `${prefix}${activeSession.openclaw_session_id}`;
 
     // Build the message

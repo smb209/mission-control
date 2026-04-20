@@ -340,6 +340,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           WHERE gateway_agent_id IS NOT NULL
             AND id != ?
             AND COALESCE(status, 'standby') != 'offline'
+            AND COALESCE(is_active, 1) = 1
           ORDER BY role ASC, name ASC`,
         [agent.id]
       );
@@ -515,9 +516,15 @@ If you need help or clarification, ask the orchestrator.`;
 
     // Send message to agent's session using chat.send
     try {
-      // Use sessionKey for routing to the agent's session
-      // Format: {prefix}{openclaw_session_id} where prefix defaults to 'agent:main:'
-      const prefix = agent.session_key_prefix || 'agent:main:';
+      // Use sessionKey for routing to the agent's session.
+      // Prefix defaults (via resolveAgentSessionKeyPrefix) are:
+      //   1. Explicit `agent.session_key_prefix` if set
+      //   2. `agent:<gateway_agent_id>:` for gateway-synced agents
+      //   3. `agent:<name-slug>:` as last resort
+      // The old hard-coded `agent:main:` catchall silently misrouted
+      // every MC→agent chat.send to the gateway's "main" agent.
+      const { resolveAgentSessionKeyPrefix } = await import('@/lib/openclaw/session-key');
+      const prefix = resolveAgentSessionKeyPrefix(agent);
       const sessionKey = `${prefix}${session.openclaw_session_id}`;
       const idempotencyKey = `dispatch-${task.id}-${Date.now()}`;
       const chatSendStart = Date.now();

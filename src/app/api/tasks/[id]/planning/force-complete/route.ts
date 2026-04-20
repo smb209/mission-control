@@ -82,11 +82,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     let firstAgentId: string | null = null;
 
     if (allowDynamicAgents && completionParsed.agents?.length > 0) {
+      // Mirrors the planning poll path: null-preferred default. New agents
+      // inherit the master's explicit prefix only if one is set; otherwise
+      // leave it null so the runtime resolver picks the agent's own
+      // namespace instead of the `agent:main:` catchall.
       const masterAgent = queryOne<{ session_key_prefix?: string }>(
         `SELECT session_key_prefix FROM agents WHERE is_master = 1 AND workspace_id = ? ORDER BY created_at ASC LIMIT 1`,
         [task.workspace_id]
       );
-      const sessionKeyPrefix = masterAgent?.session_key_prefix || 'agent:main:';
+      const sessionKeyPrefix = masterAgent?.session_key_prefix || null;
 
       for (const agent of completionParsed.agents) {
         const agentId = crypto.randomUUID();

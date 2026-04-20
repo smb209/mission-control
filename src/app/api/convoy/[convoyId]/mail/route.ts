@@ -26,7 +26,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const message = sendMail({
+    const result = await sendMail({
       convoyId,
       fromAgentId: from_agent_id,
       toAgentId: to_agent_id,
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       body: messageBody,
     });
 
-    return NextResponse.json(message, { status: 201 });
+    return NextResponse.json(result.message, { status: 201 });
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Failed to send mail';
     return NextResponse.json({ error: msg }, { status: 400 });

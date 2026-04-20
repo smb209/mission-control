@@ -38,6 +38,7 @@ export interface Agent {
   source: AgentSource;
   gateway_agent_id?: string;
   session_key_prefix?: string;
+  is_active?: number;
   total_cost_usd?: number;
   total_tokens_used?: number;
   created_at: string;
@@ -329,6 +330,7 @@ export interface CreateAgentRequest {
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
   status?: AgentStatus;
+  is_active?: boolean;
 }
 
 export interface CreateTaskRequest {
@@ -856,7 +858,10 @@ export type SSEEventType =
   | 'debug_collection_toggled'
   | 'debug_events_cleared'
   | 'agents_cleared'
-  | 'tasks_cleared';
+  | 'tasks_cleared'
+  | 'rollcall_started'
+  | 'rollcall_delivered'
+  | 'rollcall_entry_updated';
 
 export interface SSEEvent {
   type: SSEEventType;
