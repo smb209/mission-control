@@ -146,19 +146,25 @@ export function ensureCatalogSyncScheduled(): void {
 }
 
 export function getAgentByPreferredRoles(taskId: string, preferredRoles: string[]): { id: string; name: string } | null {
+  // Filter out operator-disabled agents (is_active=0). COALESCE(is_active, 1)
+  // guards rows created before the column existed.
   for (const role of preferredRoles) {
     const byTaskRole = queryOne<{ id: string; name: string }>(
       `SELECT a.id, a.name
        FROM task_roles tr
        JOIN agents a ON a.id = tr.agent_id
-       WHERE tr.task_id = ? AND tr.role = ? AND a.status != 'offline'
+       WHERE tr.task_id = ? AND tr.role = ?
+         AND a.status != 'offline'
+         AND COALESCE(a.is_active, 1) = 1
        LIMIT 1`,
       [taskId, role]
     );
     if (byTaskRole) return byTaskRole;
 
     const byGlobalRole = queryOne<{ id: string; name: string }>(
-      `SELECT id, name FROM agents WHERE role = ? AND status != 'offline' ORDER BY updated_at DESC LIMIT 1`,
+      `SELECT id, name FROM agents
+       WHERE role = ? AND status != 'offline' AND COALESCE(is_active, 1) = 1
+       ORDER BY updated_at DESC LIMIT 1`,
       [role]
     );
     if (byGlobalRole) return byGlobalRole;

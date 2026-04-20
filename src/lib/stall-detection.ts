@@ -269,7 +269,7 @@ async function notifyForStall(
   // the FK check doesn't fail when the stalled task never had an assignee.
   const fromAgentId = task.assigned_agent_id || convoy.coordinatorAgentId;
   try {
-    sendMail({
+    await sendMail({
       convoyId: convoy.convoyId,
       fromAgentId,
       toAgentId: convoy.coordinatorAgentId,

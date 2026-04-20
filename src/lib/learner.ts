@@ -8,6 +8,7 @@
 import { queryOne, queryAll, run } from '@/lib/db';
 import { getMissionControlUrl } from '@/lib/config';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
 import type { KnowledgeEntry, TaskRole, OpenClawSession } from '@/lib/types';
 
 /**
@@ -98,7 +99,16 @@ Focus on:
     }
 
     if (session) {
-      const prefix = learnerRole.session_key_prefix || 'agent:main:';
+      // learnerRole has name/session_key_prefix but not gateway_agent_id;
+      // fetch the full agent row so the prefix resolver can choose the
+      // gateway namespace when appropriate instead of the old main catchall.
+      const learnerAgent = queryOne<import('@/lib/types').Agent>(
+        'SELECT * FROM agents WHERE id = ?',
+        [learnerRole.agent_id]
+      );
+      const prefix = learnerAgent
+        ? resolveAgentSessionKeyPrefix(learnerAgent)
+        : `agent:${learnerRole.agent_id}:`;
       const sessionKey = `${prefix}${session.openclaw_session_id}`;
       await client.call('chat.send', {
         sessionKey,

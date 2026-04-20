@@ -8,9 +8,12 @@ import { getAgentRoster, formatRosterForPrompt } from '@/lib/agent-resolver';
 
 export const dynamic = 'force-dynamic';
 
-// Default planning session prefix for OpenClaw
-// Can be overridden per-agent via the session_key_prefix column on agents table
-const DEFAULT_SESSION_KEY_PREFIX = 'agent:main:';
+// Last-resort fallback when no agent context is available. Normally the
+// per-agent prefix resolver (resolveAgentSessionKeyPrefix) picks the
+// gateway-id or name-slug based prefix for the specific target agent.
+// The old `agent:main:` default silently routed every planning session
+// to the gateway's "main" agent regardless of which agent was planning.
+const FALLBACK_SESSION_KEY_PREFIX = 'agent:main:';
 
 // GET /api/tasks/[id]/planning - Get planning state
 export async function GET(
@@ -99,20 +102,22 @@ export async function POST(
       return NextResponse.json({ error: 'Planning already started', sessionKey: task.planning_session_key }, { status: 400 });
     }
 
-    // Check if there are other orchestrators available before starting planning with the default master agent
-    // Get the default master agent for this workspace
-    const defaultMaster = queryOne<{ id: string; session_key_prefix?: string }>(
-      `SELECT id, session_key_prefix FROM agents WHERE is_master = 1 AND workspace_id = ? ORDER BY created_at ASC LIMIT 1`,
+    // Check if there are other orchestrators available before starting planning with the default master agent.
+    // Fetch the full master agent so we can feed it to resolveAgentSessionKeyPrefix
+    // instead of reading session_key_prefix directly — the resolver falls
+    // back to the agent's own gateway namespace when no explicit prefix is set.
+    const defaultMaster = queryOne<import('@/lib/types').Agent>(
+      `SELECT * FROM agents WHERE is_master = 1 AND workspace_id = ? ORDER BY created_at ASC LIMIT 1`,
       [task.workspace_id]
     );
 
-    // Get assigned agent if any (for session_key_prefix)
+    // Get assigned agent (for session_key_prefix via the resolver).
     const taskWithAgent = getDb().prepare(`
-      SELECT a.session_key_prefix 
-      FROM tasks t 
-      LEFT JOIN agents a ON t.assigned_agent_id = a.id 
+      SELECT a.session_key_prefix, a.gateway_agent_id, a.name
+      FROM tasks t
+      LEFT JOIN agents a ON t.assigned_agent_id = a.id
       WHERE t.id = ?
-    `).get(taskId) as { session_key_prefix?: string } | undefined;
+    `).get(taskId) as { session_key_prefix?: string; gateway_agent_id?: string; name?: string } | undefined;
 
     const otherOrchestrators = queryAll<{
       id: string;
@@ -136,9 +141,26 @@ export async function POST(
       }, { status: 409 }); // 409 Conflict
     }
 
-    // Create session key for this planning task
-    // Priority: custom prefix > assigned agent's prefix > master agent's prefix > default prefix
-    const basePrefix = customSessionKeyPrefix || taskWithAgent?.session_key_prefix || defaultMaster?.session_key_prefix || DEFAULT_SESSION_KEY_PREFIX;
+    // Create session key for this planning task.
+    // Priority: custom prefix > assigned agent (via resolver) > master agent
+    // (via resolver) > fallback. The resolver picks `agent:<gateway_id>:`
+    // or `agent:<name>:` when the column is null, keeping messages in the
+    // specific agent's namespace.
+    const { resolveAgentSessionKeyPrefix } = await import('@/lib/openclaw/session-key');
+    let basePrefix: string;
+    if (customSessionKeyPrefix) {
+      basePrefix = customSessionKeyPrefix.endsWith(':') ? customSessionKeyPrefix : customSessionKeyPrefix + ':';
+    } else if (taskWithAgent?.name) {
+      basePrefix = resolveAgentSessionKeyPrefix({
+        session_key_prefix: taskWithAgent.session_key_prefix,
+        gateway_agent_id: taskWithAgent.gateway_agent_id,
+        name: taskWithAgent.name,
+      } as import('@/lib/types').Agent);
+    } else if (defaultMaster) {
+      basePrefix = resolveAgentSessionKeyPrefix(defaultMaster);
+    } else {
+      basePrefix = FALLBACK_SESSION_KEY_PREFIX;
+    }
     const planningPrefix = basePrefix + 'planning:';
     const sessionKey = `${planningPrefix}${taskId}`;
 

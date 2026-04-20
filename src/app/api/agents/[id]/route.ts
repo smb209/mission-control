@@ -94,6 +94,14 @@ export async function PATCH(
       const trimmed = body.session_key_prefix?.trim();
       values.push(!trimmed ? null : trimmed.endsWith(':') ? trimmed : trimmed + ':');
     }
+    if ((body as { is_active?: unknown }).is_active !== undefined) {
+      // Operator-set flag that excludes this agent from routing / convoy /
+      // roll-call consideration regardless of real-time status. Nothing in
+      // the DB row is destructive — flipping is_active back to 1 restores
+      // candidacy immediately.
+      updates.push('is_active = ?');
+      values.push((body as { is_active?: boolean }).is_active ? 1 : 0);
+    }
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No updates provided' }, { status: 400 });

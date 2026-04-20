@@ -39,7 +39,13 @@ async function handlePlanningCompletion(taskId: string, parsed: any, messages: a
         `SELECT session_key_prefix FROM agents WHERE is_master = 1 AND workspace_id = ? ORDER BY created_at ASC LIMIT 1`
       ).get(task.workspace_id) as { session_key_prefix?: string } | undefined : undefined;
 
-      const sessionKeyPrefix = masterAgent?.session_key_prefix || 'agent:main:';
+      // Only inherit an explicit prefix if the master has one set. When it's
+      // null we leave the new agent's prefix null too — the runtime
+      // resolver (resolveAgentSessionKeyPrefix) will default to the new
+      // agent's own namespace at send time instead of baking in the
+      // `agent:main:` catchall that misrouted everything to the gateway's
+      // main agent.
+      const sessionKeyPrefix = masterAgent?.session_key_prefix || null;
 
       const insertAgent = db.prepare(`
         INSERT INTO agents (id, workspace_id, name, role, description, avatar_emoji, status, soul_md, session_key_prefix, created_at, updated_at)
