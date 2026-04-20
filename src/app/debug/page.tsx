@@ -31,6 +31,11 @@ const EVENT_TYPE_OPTIONS: Array<{ value: '' | DebugEventType; label: string }> =
   { value: 'stall.flagged', label: '• stall.flagged' },
   { value: 'stall.cleared', label: '• stall.cleared' },
   { value: 'diagnostic.step', label: '• diagnostic.step' },
+  // Product Autopilot
+  { value: 'autopilot.research_llm', label: '↕ autopilot.research_llm' },
+  { value: 'autopilot.ideation_llm', label: '↕ autopilot.ideation_llm' },
+  { value: 'autopilot.cycle_stalled', label: '• autopilot.cycle_stalled' },
+  { value: 'autopilot.cycle_aborted', label: '• autopilot.cycle_aborted' },
 ];
 
 const DIRECTION_OPTIONS: Array<{ value: '' | DebugEventDirection; label: string }> = [

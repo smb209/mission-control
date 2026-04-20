@@ -215,9 +215,10 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
   const resetAllSessions = async () => {
     if (!confirm(
       'Reset ALL agent sessions?\n\n' +
-      'This does two things:\n' +
-      '  1. Wipes Mission Control\'s session tracking (the "OpenClaw Connected" badges).\n' +
-      '  2. Sends `/reset` to every active gateway-synced agent\'s main session, which forces OpenClaw to re-initialize the session and reload the agent\'s SOUL.md / AGENTS.md / MESSAGING-PROTOCOL.md on its next turn.\n\n' +
+      'This does three things:\n' +
+      '  1. Aborts any in-flight Product Autopilot research/ideation cycles (marks them interrupted).\n' +
+      '  2. Wipes Mission Control\'s session tracking (the "OpenClaw Connected" badges).\n' +
+      '  3. Sends `/reset` to every active gateway-synced agent\'s main session, which forces OpenClaw to re-initialize the session and reload the agent\'s SOUL.md / AGENTS.md / MESSAGING-PROTOCOL.md on its next turn.\n\n' +
       'Use this after editing agent persona files, or when sessionKey routing has drifted.'
     )) return;
     setResetSessionsBusy(true);
@@ -238,9 +239,18 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
       const resets: Array<{ name: string; ok: boolean; error?: string }> = data.agents_reset || [];
       const ok = resets.filter(r => r.ok).map(r => r.name);
       const failed = resets.filter(r => !r.ok);
+      const aborted: Array<{ cycle_id: string; cycle_type: string }> = data.aborted_cycles || [];
       const lines: string[] = [
         `Cleared ${data.deleted} MC session record(s).`,
       ];
+      if (aborted.length) {
+        const researchCount = aborted.filter(c => c.cycle_type === 'research').length;
+        const ideationCount = aborted.filter(c => c.cycle_type === 'ideation').length;
+        const parts: string[] = [];
+        if (researchCount) parts.push(`${researchCount} research`);
+        if (ideationCount) parts.push(`${ideationCount} ideation`);
+        lines.push(`Aborted ${aborted.length} in-flight autopilot cycle(s): ${parts.join(', ')}.`);
+      }
       if (ok.length) lines.push(`Sent /reset to: ${ok.join(', ')}`);
       if (failed.length) {
         lines.push(`Failed to /reset: ${failed.map(f => `${f.name} (${f.error || 'unknown'})`).join('; ')}`);

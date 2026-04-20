@@ -4,7 +4,8 @@ import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { logDebugEvent } from '@/lib/debug-log';
 import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
-import type { Agent, OpenClawSession } from '@/lib/types';
+import { emitAutopilotActivity } from '@/lib/autopilot/activity';
+import type { Agent, OpenClawSession, ResearchCycle, IdeationCycle } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 // GET /api/openclaw/sessions - List OpenClaw sessions
@@ -103,14 +104,18 @@ export async function POST(request: Request) {
 // edits (SOUL.md / AGENTS.md / MESSAGING-PROTOCOL.md) that need agents to
 // reload, or when sessionKey routing has drifted.
 //
-// Two phases:
+// Three phases:
+//   0. Abort any in-flight Product Autopilot research / ideation cycles
+//      (status='running') so their runners can't overwrite a cycle after
+//      the reset with a late 'completed' / 'failed'. Marked 'interrupted'
+//      with error_message='aborted_by_reset: ...'.
 //   1. Wipe MC's `openclaw_sessions` table + clean up legacy Sub-Agent rows.
 //   2. Send `/reset` via chat.send to each gateway-synced agent's main
 //      session, which forces the gateway to re-init that session — the
 //      agent's next message reloads SOUL.md/AGENTS.md/etc. `/reset` and
 //      `/new` are OpenClaw's built-in session-init commands.
 //
-// Either phase can fail independently; the response reports both so the
+// Any phase can fail independently; the response reports all three so the
 // operator can see what landed. `agents_reset` entries with `ok: false`
 // usually mean the gateway didn't route the command (agent offline,
 // allow-list restriction, etc.) — operator can fall back to `/reset` in
@@ -119,6 +124,58 @@ export async function DELETE() {
   try {
     const sessions = queryAll<OpenClawSession>('SELECT * FROM openclaw_sessions');
     const count = sessions.length;
+
+    // Phase 0: abort in-flight autopilot cycles. Without this, a research or
+    // ideation cycle whose LLM fetch is mid-flight when the operator hits
+    // "Reset all sessions" sits in status='running' until its async runner
+    // completes (then overwrites to 'completed'/'failed' — but the guard in
+    // research.ts/ideation.ts now blocks that) or until the cycle scanner
+    // catches it ~15 minutes later. Explicit abort here makes the reset
+    // semantics match the operator's intent: "stop everything in flight".
+    const inflightResearch = queryAll<ResearchCycle>(
+      `SELECT * FROM research_cycles WHERE status = 'running'`
+    );
+    const inflightIdeation = queryAll<IdeationCycle>(
+      `SELECT * FROM ideation_cycles WHERE status = 'running'`
+    );
+    const abortedCycles: Array<{ cycle_id: string; cycle_type: 'research' | 'ideation'; product_id: string; phase: string }> = [];
+    const cycleAbortNow = new Date().toISOString();
+    const cycleAbortReason = `aborted_by_reset: operator triggered bulk session reset at ${cycleAbortNow}`;
+    for (const cycle of inflightResearch) {
+      run(
+        `UPDATE research_cycles SET status = 'interrupted', error_message = ?, completed_at = ? WHERE id = ? AND status = 'running'`,
+        [cycleAbortReason, cycleAbortNow, cycle.id]
+      );
+      abortedCycles.push({ cycle_id: cycle.id, cycle_type: 'research', product_id: cycle.product_id, phase: cycle.current_phase || 'init' });
+    }
+    for (const cycle of inflightIdeation) {
+      run(
+        `UPDATE ideation_cycles SET status = 'interrupted', error_message = ?, completed_at = ? WHERE id = ? AND status = 'running'`,
+        [cycleAbortReason, cycleAbortNow, cycle.id]
+      );
+      abortedCycles.push({ cycle_id: cycle.id, cycle_type: 'ideation', product_id: cycle.product_id, phase: cycle.current_phase || 'init' });
+    }
+    for (const c of abortedCycles) {
+      emitAutopilotActivity({
+        productId: c.product_id,
+        cycleId: c.cycle_id,
+        cycleType: c.cycle_type,
+        eventType: 'cycle_aborted',
+        message: `${c.cycle_type} cycle aborted by session reset`,
+        detail: `Phase was ${c.phase}`,
+      });
+      logDebugEvent({
+        type: 'autopilot.cycle_aborted',
+        direction: 'internal',
+        metadata: {
+          cycle_id: c.cycle_id,
+          cycle_type: c.cycle_type,
+          product_id: c.product_id,
+          current_phase: c.phase,
+          trigger: 'session_reset',
+        },
+      });
+    }
 
     transaction(() => {
       // Same cleanup as the per-session DELETE in [id]/route.ts: remove
@@ -179,6 +236,7 @@ export async function DELETE() {
           success: true,
           deleted: count,
           agents_reset: [],
+          aborted_cycles: abortedCycles,
           gateway_error: (err as Error).message,
         });
       }
@@ -207,13 +265,14 @@ export async function DELETE() {
 
     broadcast({
       type: 'agent_completed',
-      payload: { reset: true, count, agents_reset: agentsReset.length, deleted: true },
+      payload: { reset: true, count, agents_reset: agentsReset.length, aborted_cycles: abortedCycles.length, deleted: true },
     });
 
     return NextResponse.json({
       success: true,
       deleted: count,
       agents_reset: agentsReset,
+      aborted_cycles: abortedCycles,
     });
   } catch (error) {
     console.error('Failed to reset OpenClaw sessions:', error);

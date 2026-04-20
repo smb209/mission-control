@@ -42,7 +42,14 @@ export type DebugEventType =
   | 'stall.flagged'
   | 'stall.cleared'
   // Diagnostic flow (internal)
-  | 'diagnostic.step';
+  | 'diagnostic.step'
+  // Product Autopilot — stateless LLM calls via Gateway /v1/chat/completions
+  // (distinct from chat.send which targets agent sessions) plus cycle
+  // lifecycle events for research / ideation.
+  | 'autopilot.research_llm'
+  | 'autopilot.ideation_llm'
+  | 'autopilot.cycle_stalled'
+  | 'autopilot.cycle_aborted';
 
 export type DebugEventDirection = 'outbound' | 'inbound' | 'internal';
 

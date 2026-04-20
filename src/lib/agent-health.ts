@@ -5,6 +5,7 @@ import { getMissionControlUrl } from '@/lib/config';
 import { buildCheckpointContext } from '@/lib/checkpoint';
 import { logTaskActivityThrottled } from '@/lib/activity-log';
 import { scanStalledTasks } from '@/lib/stall-detection';
+import { scanStalledCycles } from '@/lib/autopilot/stall-detection';
 import type { Agent, AgentHealth, AgentHealthState, Task } from '@/lib/types';
 
 // Heartbeat rows are throttled so the activity feed stays readable. 5 min
@@ -239,6 +240,16 @@ export async function runHealthCheckCycle(): Promise<AgentHealth[]> {
     await scanStalledTasks();
   } catch (err) {
     console.error('[Health] scanStalledTasks failed:', err);
+  }
+
+  // Autopilot cycle scanner. Same rationale as scanStalledTasks: piggyback
+  // on the existing cadence. research_cycles / ideation_cycles live in
+  // separate tables and have their own heartbeat fields, so task scan
+  // doesn't see them.
+  try {
+    await scanStalledCycles();
+  } catch (err) {
+    console.error('[Health] scanStalledCycles failed:', err);
   }
 
   return results;

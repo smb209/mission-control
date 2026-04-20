@@ -72,6 +72,18 @@ export const ReleaseStallSchema = z.object({
   released_by: z.string().max(200).optional(),
 });
 
+// Admin release-cycle schema — equivalent for autopilot cycles stuck in
+// status='running'. Only one terminal state (`interrupted`) because
+// research_cycles / ideation_cycles have no notion of "completed but
+// cancelled by operator"; the CHECK constraint already enforces
+// running|completed|failed|interrupted|cancelled (research) and
+// running|completed|failed|interrupted (ideation), and `interrupted` is
+// the shared vocabulary used by recovery.ts.
+export const ReleaseCycleSchema = z.object({
+  reason: z.string().min(1, 'reason is required').max(500),
+  released_by: z.string().max(200).optional(),
+});
+
 // Activity validation schema
 export const CreateActivitySchema = z.object({
   activity_type: ActivityType,

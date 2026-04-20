@@ -3,10 +3,18 @@
  * Uses /v1/chat/completions for stateless prompt→response (no agent sessions).
  */
 
+import { logDebugEvent, type DebugEventType } from '@/lib/debug-log';
+
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 5_000; // 5s, 10s, 20s exponential backoff
 const OPENCLAW_GATEWAY_MODEL = 'openclaw/default';
+
+export interface AutopilotDebugContext {
+  productId: string;
+  cycleId: string;
+  cycleType: 'research' | 'ideation';
+}
 
 function getGatewayUrl(): string {
   return process.env.OPENCLAW_GATEWAY_URL?.replace('ws://', 'http://').replace('wss://', 'https://') || 'http://127.0.0.1:18789';
@@ -34,6 +42,15 @@ export interface CompletionOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  /**
+   * When provided, the call is mirrored into the /debug event log as a pair
+   * of autopilot.{research,ideation}_llm events. The outbound entry carries
+   * the prompt and request body; the inbound entry carries the response (or
+   * error) and total duration across retries. Without this, the call is
+   * silent to the debug console — which is fine for tests and scripts but
+   * hides operator-relevant autopilot traffic.
+   */
+  debug?: AutopilotDebugContext;
 }
 
 export interface CompletionResult {
@@ -57,6 +74,7 @@ export async function complete(prompt: string, options: CompletionOptions = {}):
     temperature = 0.7,
     maxTokens = 8192,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    debug,
   } = options;
   const { gatewayModel, modelOverride } = resolveGatewayModel(model);
 
@@ -65,6 +83,38 @@ export async function complete(prompt: string, options: CompletionOptions = {}):
     messages.push({ role: 'system', content: systemPrompt });
   }
   messages.push({ role: 'user', content: prompt });
+
+  const requestBody = {
+    model: gatewayModel,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+  };
+
+  // Log one outbound event per call (not per attempt) — operators care about
+  // "this cycle made a research LLM call at time T", not the internal retry
+  // bookkeeping. Retry count ends up on the inbound event as metadata.
+  const debugEventType: DebugEventType | null = debug
+    ? debug.cycleType === 'research' ? 'autopilot.research_llm' : 'autopilot.ideation_llm'
+    : null;
+  const callStartedAt = Date.now();
+
+  if (debug && debugEventType) {
+    logDebugEvent({
+      type: debugEventType,
+      direction: 'outbound',
+      metadata: {
+        product_id: debug.productId,
+        cycle_id: debug.cycleId,
+        cycle_type: debug.cycleType,
+        model,
+        gateway_model: gatewayModel,
+        prompt_chars: prompt.length,
+        system_prompt_chars: systemPrompt?.length || 0,
+      },
+      requestBody,
+    });
+  }
 
   let lastError: Error | null = null;
 
@@ -86,12 +136,7 @@ export async function complete(prompt: string, options: CompletionOptions = {}):
           'Authorization': `Bearer ${getGatewayToken()}`,
           ...(modelOverride ? { 'x-openclaw-model': modelOverride } : {}),
         },
-        body: JSON.stringify({
-          model: gatewayModel,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -110,6 +155,25 @@ export async function complete(prompt: string, options: CompletionOptions = {}):
       const resolvedModel = modelOverride || data.model || gatewayModel;
 
       console.log(`[LLM] Response usage:`, JSON.stringify(data.usage || null), `model: ${resolvedModel}`);
+
+      if (debug && debugEventType) {
+        logDebugEvent({
+          type: debugEventType,
+          direction: 'inbound',
+          durationMs: Date.now() - callStartedAt,
+          metadata: {
+            product_id: debug.productId,
+            cycle_id: debug.cycleId,
+            cycle_type: debug.cycleType,
+            model: resolvedModel,
+            attempts: attempt + 1,
+            prompt_tokens: data.usage?.prompt_tokens || 0,
+            completion_tokens: data.usage?.completion_tokens || 0,
+            total_tokens: data.usage?.total_tokens || 0,
+          },
+          responseBody: data,
+        });
+      }
 
       return {
         content,
@@ -132,12 +196,43 @@ export async function complete(prompt: string, options: CompletionOptions = {}):
       }
 
       // Non-retryable error (e.g. 400 bad request, parse error)
+      if (debug && debugEventType) {
+        logDebugEvent({
+          type: debugEventType,
+          direction: 'inbound',
+          durationMs: Date.now() - callStartedAt,
+          error: lastError.message,
+          metadata: {
+            product_id: debug.productId,
+            cycle_id: debug.cycleId,
+            cycle_type: debug.cycleType,
+            attempts: attempt + 1,
+            retryable: false,
+          },
+        });
+      }
       throw lastError;
     } finally {
       clearTimeout(timeout);
     }
   }
 
+  if (debug && debugEventType) {
+    logDebugEvent({
+      type: debugEventType,
+      direction: 'inbound',
+      durationMs: Date.now() - callStartedAt,
+      error: lastError?.message || 'LLM completion failed after retries',
+      metadata: {
+        product_id: debug.productId,
+        cycle_id: debug.cycleId,
+        cycle_type: debug.cycleType,
+        attempts: MAX_RETRIES + 1,
+        retryable: true,
+        exhausted: true,
+      },
+    });
+  }
   throw lastError || new Error('LLM completion failed after retries');
 }
 
