@@ -72,7 +72,7 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       );
     }
 
-    const { deliverable_type, title, path, description } = validation.data;
+    const { deliverable_type, title, path, description, spec_deliverable_id } = validation.data;
 
     // Reject the reserved ssh:// prefix — the column is widened for future
     // remote storage, but nothing reads it yet. Failing here avoids half-wired
@@ -113,8 +113,8 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
 
     // Insert deliverable
     db.prepare(`
-      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       taskId,
@@ -123,7 +123,8 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       path || null,
       description || null,
       storageScheme,
-      sizeBytes ?? null
+      sizeBytes ?? null,
+      spec_deliverable_id || null
     );
 
     // Get the created deliverable

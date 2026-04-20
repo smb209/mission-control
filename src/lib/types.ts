@@ -268,7 +268,37 @@ export interface TaskDeliverable {
   description?: string;
   storage_scheme?: DeliverableStorageScheme;
   size_bytes?: number;
+  /** When the builder is fulfilling a planning-spec deliverable, this names
+   *  which one (matches SpecDeliverable.id). Null for ad-hoc deliverables
+   *  from tasks that never went through planning. */
+  spec_deliverable_id?: string | null;
   created_at: string;
+}
+
+/** Structured spec deliverable emitted by the planner's final output. The
+ *  old shape (array of strings) is still accepted by readers for backward
+ *  compatibility, but new tasks always get this shape. */
+export interface SpecDeliverable {
+  /** Stable machine id the builder uses when registering fulfillment. */
+  id: string;
+  title: string;
+  /** `file` = expects one or more output files matching path_pattern;
+   *  `behavior` = runtime assertion the tester verifies;
+   *  `artifact` = non-file deliverable (URL, config change, doc entry). */
+  kind: 'file' | 'behavior' | 'artifact';
+  /** For kind=file: glob-like pattern under the deliverables dir
+   *  (e.g. "src/shot-logger.js", "manifest.json"). */
+  path_pattern?: string;
+  /** Binary, testable description — the tester uses this as the assertion. */
+  acceptance: string;
+}
+
+export interface SpecSuccessCriterion {
+  id: string;
+  /** Binary assertion (passes or fails, no ambiguity). */
+  assertion: string;
+  /** How the tester can verify it (command, manual step, spec reference). */
+  how_to_test: string;
 }
 
 // Planning types

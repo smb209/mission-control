@@ -1,5 +1,6 @@
 import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { notifyLearner } from '@/lib/learner';
+import { parsePlanningSpec } from '@/lib/planning-spec';
 import type { Task } from '@/lib/types';
 
 const ACTIVE_STATUSES = ['assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification'];
@@ -9,13 +10,89 @@ export function isTerminalStatus(status: string): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
-export function hasStageEvidence(taskId: string): boolean {
-  const deliverable = queryOne<{ count: number }>('SELECT COUNT(*) as count FROM task_deliverables WHERE task_id = ?', [taskId]);
-  const activity = queryOne<{ count: number }>(
-    `SELECT COUNT(*) as count FROM task_activities WHERE task_id = ? AND activity_type IN ('completed','file_created','updated')`,
+export interface StageEvidenceResult {
+  ok: boolean;
+  /** Single-line reason suitable for surfacing to agents + operators. */
+  reason?: string;
+  /** Ids from planning_spec.deliverables that have no registered fulfillment.
+   *  Empty when the task had no structured spec or all deliverables are done. */
+  missingDeliverableIds?: string[];
+}
+
+/**
+ * Check if a task has enough evidence to transition forward into a quality
+ * stage. Baseline bar (always enforced): at least one deliverable + one
+ * progress activity. Upgraded bar (enforced when the task has a structured
+ * planning spec): every spec deliverable must be registered via a
+ * task_deliverables row carrying the matching spec_deliverable_id, otherwise
+ * the gate rejects and lists the missing ones.
+ */
+export function checkStageEvidence(taskId: string): StageEvidenceResult {
+  const deliverableCount = Number(
+    queryOne<{ count: number }>('SELECT COUNT(*) as count FROM task_deliverables WHERE task_id = ?', [taskId])?.count || 0
+  );
+  const activityCount = Number(
+    queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM task_activities WHERE task_id = ? AND activity_type IN ('completed','file_created','updated')`,
+      [taskId]
+    )?.count || 0
+  );
+
+  if (deliverableCount === 0) {
+    return { ok: false, reason: 'Evidence gate: no deliverables registered for this task' };
+  }
+  if (activityCount === 0) {
+    return { ok: false, reason: 'Evidence gate: no progress activity logged for this task' };
+  }
+
+  // Spec reconciliation: when planning produced a structured spec, every
+  // deliverables[] entry must have a matching registration. Tasks without a
+  // spec (or with a legacy string[] spec) skip this check — the baseline bar
+  // above still applies.
+  const task = queryOne<{ planning_spec?: string; convoy_id?: string | null }>(
+    'SELECT planning_spec, convoy_id FROM tasks WHERE id = ?',
     [taskId]
   );
-  return Number(deliverable?.count || 0) > 0 && Number(activity?.count || 0) > 0;
+
+  // Convoy subtasks don't each carry the parent's spec — they carry their
+  // own descriptions. Reconciliation happens at the parent level when the
+  // convoy transitions. So for subtasks we fall back to the baseline bar.
+  if (task?.convoy_id) {
+    return { ok: true };
+  }
+
+  const spec = parsePlanningSpec(task?.planning_spec);
+  if (!spec || !spec.isStructured || spec.deliverables.length === 0) {
+    return { ok: true };
+  }
+
+  const fulfilled = new Set(
+    queryAll<{ spec_deliverable_id: string }>(
+      `SELECT spec_deliverable_id FROM task_deliverables
+       WHERE task_id = ? AND spec_deliverable_id IS NOT NULL AND spec_deliverable_id != ''`,
+      [taskId]
+    ).map(r => r.spec_deliverable_id)
+  );
+
+  const missing = spec.deliverables.filter(d => !fulfilled.has(d.id)).map(d => d.id);
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `Evidence gate: ${missing.length} spec deliverable(s) not fulfilled — missing: ${missing.join(', ')}. Register each with {"spec_deliverable_id": "<id>"} when POSTing to /deliverables.`,
+      missingDeliverableIds: missing,
+    };
+  }
+
+  return { ok: true };
+}
+
+/**
+ * Legacy boolean wrapper. Prefer checkStageEvidence() in new code so callers
+ * can surface the rejection reason. Kept because several call sites upstream
+ * still expect a plain bool.
+ */
+export function hasStageEvidence(taskId: string): boolean {
+  return checkStageEvidence(taskId).ok;
 }
 
 export function canUseBoardOverride(request: Request): boolean {

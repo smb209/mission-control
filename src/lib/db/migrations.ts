@@ -1911,6 +1911,27 @@ const migrations: Migration[] = [
 
       console.log(`[Migration 034] Complete: rewrote depends_on on ${updated} convoy_subtasks row(s).`);
     }
+  },
+  {
+    id: '035',
+    name: 'deliverable_spec_id_for_reconciliation',
+    up: (db) => {
+      // Evidence gate upgrade: every deliverable listed in planning_spec must
+      // be registered with a matching spec_deliverable_id before a task can
+      // transition into testing/review/verification/done. Agents POST their
+      // deliverables with a spec_deliverable_id naming the spec entry they
+      // fulfill. Column is nullable so legacy rows + ad-hoc deliverables (no
+      // spec) still work — the gate only reconciles when a spec exists.
+      console.log('[Migration 035] Adding task_deliverables.spec_deliverable_id...');
+
+      const info = db.prepare('PRAGMA table_info(task_deliverables)').all() as { name: string }[];
+      if (!info.some(c => c.name === 'spec_deliverable_id')) {
+        db.exec('ALTER TABLE task_deliverables ADD COLUMN spec_deliverable_id TEXT');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_task_deliverables_spec_id ON task_deliverables(task_id, spec_deliverable_id)');
+      }
+
+      console.log('[Migration 035] Complete.');
+    }
   }
 ];
 
