@@ -128,6 +128,7 @@ export async function runResearchCycle(productId: string, existingCycleId?: stri
         const { data: report, model: responseModel, usage } = await completeJSON(prompt, {
           systemPrompt: 'You are a product research agent. Analyze the product and respond with a JSON research report only.',
           timeoutMs: 300_000,
+          debug: { productId, cycleId, cycleType: 'research' },
         });
 
         allReports.push({ report, variantId: programEntry.variantId, variantName: programEntry.variantName });
@@ -163,9 +164,11 @@ export async function runResearchCycle(productId: string, existingCycleId?: stri
       });
       broadcast({ type: 'research_phase', payload: { productId, cycleId, phase: 'report_received' } });
 
-      // Phase: completed
+      // Phase: completed. Guard on status='running' so a release-stall or
+      // bulk-reset that interrupted this cycle while the fetch was in flight
+      // cannot be overwritten by a late-arriving success.
       run(
-        `UPDATE research_cycles SET status = 'completed', report = ?, completed_at = ?, current_phase = 'completed' WHERE id = ?`,
+        `UPDATE research_cycles SET status = 'completed', report = ?, completed_at = ?, current_phase = 'completed' WHERE id = ? AND status = 'running'`,
         [JSON.stringify(combinedReport), new Date().toISOString(), cycleId]
       );
 
@@ -199,8 +202,9 @@ export async function runResearchCycle(productId: string, existingCycleId?: stri
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      // Same guard as the success path — don't resurrect an interrupted cycle.
       run(
-        `UPDATE research_cycles SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ?`,
+        `UPDATE research_cycles SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ? AND status = 'running'`,
         [errMsg, new Date().toISOString(), cycleId]
       );
       emitAutopilotActivity({

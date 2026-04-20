@@ -172,6 +172,7 @@ export async function runIdeationCycle(productId: string, cycleId?: string, exis
         const { data: rawIdeas, model: responseModel, usage } = await completeJSON<unknown[]>(prompt, {
           systemPrompt: 'You are a product ideation agent. Respond with a JSON array of idea objects only.',
           timeoutMs: 300_000,
+          debug: { productId, cycleId: ideationId, cycleType: 'ideation' },
         });
 
         // Normalize: handle { ideas: [...] } wrapper
@@ -217,8 +218,10 @@ export async function runIdeationCycle(productId: string, cycleId?: string, exis
       console.log(`[Ideation] Cycle ${ideationId} completed: ${totalIdeasCount} ideas (tokens: ${totalTokensUsed})`);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
+      // Guard on status='running' so a release-stall / bulk-reset that
+      // interrupted the cycle while we were mid-fetch isn't overwritten.
       run(
-        `UPDATE ideation_cycles SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ?`,
+        `UPDATE ideation_cycles SET status = 'failed', error_message = ?, completed_at = ? WHERE id = ? AND status = 'running'`,
         [errMsg, new Date().toISOString(), ideationId]
       );
       emitAutopilotActivity({
@@ -396,7 +399,7 @@ export async function storeIdeasFromPhaseData(
   }
 
   run(
-    `UPDATE ideation_cycles SET status = 'completed', completed_at = ?, current_phase = 'completed' WHERE id = ?`,
+    `UPDATE ideation_cycles SET status = 'completed', completed_at = ?, current_phase = 'completed' WHERE id = ? AND status = 'running'`,
     [new Date().toISOString(), ideationId]
   );
   emitAutopilotActivity({
