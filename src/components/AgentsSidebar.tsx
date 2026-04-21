@@ -7,6 +7,7 @@ import type { Agent, AgentStatus, AgentHealthState, OpenClawSession } from '@/li
 import { AgentModal } from './AgentModal';
 import { DiscoverAgentsModal } from './DiscoverAgentsModal';
 import { HealthIndicator } from './HealthIndicator';
+import { AgentPingIndicator } from './AgentPingIndicator';
 
 interface RollCallEntryView {
   id: string;
@@ -37,7 +38,7 @@ interface AgentsSidebarProps {
 }
 
 export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = true }: AgentsSidebarProps) {
-  const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession, updateAgent } = useMissionControl();
+  const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession, updateAgent, agentPings, setAgentPings } = useMissionControl();
   const [filter, setFilter] = useState<FilterTab>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
@@ -129,6 +130,22 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
     const interval = setInterval(loadHealth, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Hydrate ping indicators on mount. Live updates arrive via SSE
+  // `agent_pinged` events — this only handles the first paint so an agent
+  // that last spoke seconds before the page loaded still shows green.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/agents/activity');
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as Record<string, { sentAt?: string; receivedAt?: string }>;
+        setAgentPings(data);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [setAgentPings]);
 
   // Toggle is_active for an agent. Optimistic update — on failure we roll
   // back and surface the error.
@@ -502,6 +519,10 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                 </div>
 
                 <div className="flex items-center gap-1.5">
+                  <AgentPingIndicator
+                    sentAt={agentPings[agent.id]?.sentAt}
+                    receivedAt={agentPings[agent.id]?.receivedAt}
+                  />
                   <span
                     role="button"
                     tabIndex={0}

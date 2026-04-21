@@ -35,6 +35,11 @@ interface MissionControlState {
   agentOpenClawSessions: Record<string, OpenClawSession | null>; // agentId -> session
   openclawMessages: Message[]; // Messages from OpenClaw (displayed alongside regular messages)
 
+  // Per-agent last-sent / last-received ISO timestamps, powering the
+  // sidebar ping indicators. Populated from /api/agents/activity on mount
+  // and updated live by SSE `agent_pinged` events.
+  agentPings: Record<string, { sentAt?: string; receivedAt?: string }>;
+
   // UI State
   selectedAgent: Agent | null;
   selectedTask: Task | null;
@@ -71,6 +76,10 @@ interface MissionControlState {
   setAgentOpenClawSession: (agentId: string, session: OpenClawSession | null) => void;
   setOpenclawMessages: (messages: Message[]) => void;
   addOpenclawMessage: (message: Message) => void;
+
+  // Ping actions
+  setAgentPings: (pings: Record<string, { sentAt?: string; receivedAt?: string }>) => void;
+  recordAgentPing: (agentId: string, direction: 'sent' | 'received', at: string) => void;
 }
 
 export const useMissionControl = create<MissionControlState>((set) => ({
@@ -83,6 +92,7 @@ export const useMissionControl = create<MissionControlState>((set) => ({
   messages: [],
   agentOpenClawSessions: {},
   openclawMessages: [],
+  agentPings: {},
   selectedAgent: null,
   selectedTask: null,
   isOnline: false,
@@ -197,4 +207,14 @@ export const useMissionControl = create<MissionControlState>((set) => ({
   setOpenclawMessages: (messages) => set({ openclawMessages: messages }),
   addOpenclawMessage: (message) =>
     set((state) => ({ openclawMessages: [...state.openclawMessages, message] })),
+
+  setAgentPings: (pings) => set({ agentPings: pings }),
+  recordAgentPing: (agentId, direction, at) =>
+    set((state) => {
+      const existing = state.agentPings[agentId] ?? {};
+      const next = direction === 'sent'
+        ? { ...existing, sentAt: at }
+        : { ...existing, receivedAt: at };
+      return { agentPings: { ...state.agentPings, [agentId]: next } };
+    }),
 }));
