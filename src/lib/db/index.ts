@@ -12,17 +12,29 @@ let db: Database.Database | null = null;
 export function getDb(): Database.Database {
   if (!db) {
     const isNewDb = !fs.existsSync(DB_PATH);
-    
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
 
-    // Initialize base schema (creates tables if they don't exist)
-    db.exec(schema);
+    const instance = new Database(DB_PATH);
+    instance.pragma('journal_mode = WAL');
+    instance.pragma('foreign_keys = ON');
 
-    // Run migrations for schema updates
-    // This handles both new and existing databases
-    runMigrations(db);
+    // Seed the full schema only for brand-new databases. Running schema.exec
+    // against an existing DB is redundant (everything is CREATE ... IF NOT
+    // EXISTS) and can actively *block* migrations: if schema.ts adds an index
+    // or constraint referencing a column that a pending migration will add,
+    // SQLite throws mid-exec — and because `db` would already be assigned,
+    // the half-initialized handle gets cached and migrations never run. For
+    // existing DBs, migrations are the sole source of schema truth.
+    if (isNewDb) {
+      instance.exec(schema);
+    }
+
+    // Run migrations for schema updates (handles both new and existing DBs).
+    runMigrations(instance);
+
+    // Only publish the singleton after init fully succeeds. If anything above
+    // throws, `db` stays null and the next call retries cleanly instead of
+    // returning a poisoned handle.
+    db = instance;
 
     // Recover orphaned autopilot cycles from prior crash/restart
     import('@/lib/autopilot/recovery').then(({ recoverOrphanedCycles }) =>
@@ -31,7 +43,7 @@ export function getDb(): Database.Database {
 
     // Keep Mission Control's agent catalog synced with OpenClaw-installed agents
     ensureCatalogSyncScheduled();
-    
+
     if (isNewDb) {
       console.log('[DB] New database created at:', DB_PATH);
     }
