@@ -15,11 +15,21 @@ services:
       DATABASE_PATH: /app/data/mission-control.db
       WORKSPACE_BASE_PATH: /app/workspace
       PROJECTS_PATH: /app/workspace/projects
+      # Deliverables live on a bind-mounted host directory so files can be
+      # downloaded directly from the host. Agents (running on the host) write
+      # to MC_DELIVERABLES_HOST_PATH; MC (in this container) reads the same
+      # bytes via MC_DELIVERABLES_CONTAINER_PATH.
+      MC_DELIVERABLES_HOST_PATH: ${MC_DELIVERABLES_HOST_DIR:-${HOME}/mission-control/deliverables}
+      MC_DELIVERABLES_CONTAINER_PATH: /app/deliverables
       # Set this if OpenClaw runs on the host machine:
       # OPENCLAW_GATEWAY_URL: ws://host.docker.internal:18789
     volumes:
       - mission-control-data:/app/data
       - mission-control-workspace:/app/workspace
+      # Bind-mount the host deliverables directory. Override the source with
+      # MC_DELIVERABLES_HOST_DIR (must be an absolute host path, since it is
+      # also injected into agent dispatch prompts).
+      - ${MC_DELIVERABLES_HOST_DIR:-${HOME}/mission-control/deliverables}:/app/deliverables
     restart: unless-stopped
 
 volumes:

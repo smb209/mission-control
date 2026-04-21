@@ -40,7 +40,7 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
-RUN mkdir -p /app/data /app/workspace/projects \
+RUN mkdir -p /app/data /app/workspace/projects /app/deliverables \
   && chown -R node:node /app
 
 USER node
