@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Trash2, Play, Pause, ChevronDown, ChevronRight, Users, ListX, Activity } from 'lucide-react';
+import { ArrowLeft, Trash2, Play, Pause, ChevronDown, ChevronRight, Users, ListX, Activity, Download } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import type { DebugEvent, DebugEventType, DebugEventDirection } from '@/lib/debug-log';
 
@@ -58,6 +58,7 @@ export default function DebugConsolePage() {
   });
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [diagnosticResult, setDiagnosticResult] = useState<null | {
     ok: boolean;
     message: string;
@@ -140,6 +141,34 @@ export default function DebugConsolePage() {
     setTotal(0);
     setExpandedIds(new Set());
   };
+
+  // Build the query string for the export endpoint using the current
+  // filter. The backend reads identical param names as GET /events, so
+  // whatever the operator sees in the list is what they get in the file.
+  const exportFiltered = (format: 'json' | 'jsonl') => {
+    const qs = new URLSearchParams();
+    if (filter.taskId) qs.set('task_id', filter.taskId);
+    if (filter.agentId) qs.set('agent_id', filter.agentId);
+    if (filter.eventType) qs.set('event_type', filter.eventType);
+    if (filter.direction) qs.set('direction', filter.direction);
+    qs.set('format', format);
+    // Navigating to the URL triggers the browser's Save dialog via the
+    // Content-Disposition: attachment header the endpoint returns.
+    window.location.href = `/api/debug/events/export?${qs.toString()}`;
+    setExportMenuOpen(false);
+  };
+
+  // Click-outside handler for the export dropdown. Mirrors the pattern
+  // used by the agents sidebar action menu.
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest('[data-debug-export-menu]')) setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [exportMenuOpen]);
 
   const clearLocalAgents = async () => {
     if (!confirm('Delete all non-gateway (local) agents from Mission Control? Gateway-synced agents will be kept.')) return;
@@ -233,6 +262,42 @@ export default function DebugConsolePage() {
               {enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
               {enabled === null ? '...' : enabled ? 'Stop collection' : 'Start collection'}
             </button>
+            <div className="relative" data-debug-export-menu>
+              <button
+                onClick={() => setExportMenuOpen(v => !v)}
+                disabled={total === 0}
+                className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                title={total === 0 ? 'Nothing to export yet' : 'Download events matching the current filters'}
+              >
+                <Download className="w-4 h-4" />
+                Export
+                <ChevronDown className="w-3.5 h-3.5 opacity-60" />
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-mc-border bg-mc-bg shadow-lg z-30 py-1">
+                  <button
+                    onClick={() => exportFiltered('json')}
+                    className="w-full flex items-start gap-2 px-3 py-2 text-sm text-mc-text hover:bg-mc-bg-tertiary text-left"
+                  >
+                    <Download className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      <div>JSON</div>
+                      <div className="text-[11px] text-mc-text-secondary">Single self-describing file</div>
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => exportFiltered('jsonl')}
+                    className="w-full flex items-start gap-2 px-3 py-2 text-sm text-mc-text hover:bg-mc-bg-tertiary text-left"
+                  >
+                    <Download className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                      <div>JSONL</div>
+                      <div className="text-[11px] text-mc-text-secondary">One event per line (jq / streaming)</div>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               onClick={clearAll}
               disabled={total === 0}
