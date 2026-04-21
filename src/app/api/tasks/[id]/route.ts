@@ -10,6 +10,7 @@ import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
 import { UpdateTaskSchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
+import { authorizeAgentForTask } from '@/lib/authz/http';
 import type { Task, UpdateTaskRequest, Agent, TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -96,6 +97,17 @@ export async function PATCH(
         requested_status: validatedData.status ?? null,
       },
     });
+
+    // Agent-task authorization: enforce when updated_by_agent_id is provided.
+    // Skipped for operator flows (no agent_id, trusted via proxy.ts
+    // same-origin bypass). The existing master-role check below layers on
+    // top of this for review→done transitions.
+    const authzFail = authorizeAgentForTask(
+      validatedData.updated_by_agent_id,
+      id,
+      'status',
+    );
+    if (authzFail) return authzFail;
 
     // Keep OpenClaw agent catalog synced opportunistically on task updates
     await syncGatewayAgentsToCatalog({ reason: 'task_patch' }).catch(err => {

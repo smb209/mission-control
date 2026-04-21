@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { saveCheckpoint, getLatestCheckpoint } from '@/lib/checkpoint';
 import { deliverPendingNotesAtCheckpoint } from '@/lib/task-notes';
 import { CheckpointSchema } from '@/lib/validation';
+import { authorizeAgentForTask } from '@/lib/authz/http';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
     const { agent_id, checkpoint_type, state_summary, files_snapshot, context_data } = validation.data;
+
+    // Agent-task authorization: agent_id is required on CheckpointSchema, so
+    // this always runs (no operator-skip path).
+    const authzFail = authorizeAgentForTask(agent_id, id, 'checkpoint');
+    if (authzFail) return authzFail;
 
     const checkpoint = saveCheckpoint({
       taskId: id,
