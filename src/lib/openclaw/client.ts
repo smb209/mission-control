@@ -6,6 +6,7 @@ import { loadOrCreateDeviceIdentity, signDevicePayload, buildDeviceAuthPayload, 
 import { createHash } from 'crypto';
 import { logDebugEvent } from '../debug-log';
 import { extractTaskIdFromSessionKey } from './session-key';
+import { pingAgentBySessionKey } from '../agent-pings';
 
 // Types for gateway model discovery (matches OpenClaw models.list response)
 export interface GatewayModelChoice {
@@ -325,6 +326,12 @@ export class OpenClawClient extends EventEmitter {
             if (data.type === 'event' && data.event === 'chat' && data.payload) {
               this.emit('chat_event', data.payload);
               const sessionKey = (data.payload as { sessionKey?: string })?.sessionKey ?? null;
+              // Only count final/assistant frames as a "received" ping — streaming
+              // token deltas would otherwise spam the SSE channel once per chunk.
+              const state = (data.payload as { state?: string })?.state;
+              if (state === 'final') {
+                pingAgentBySessionKey(sessionKey, 'received');
+              }
               logDebugEvent({
                 type: 'chat.response',
                 direction: 'inbound',
@@ -524,6 +531,15 @@ export class OpenClawClient extends EventEmitter {
     const id = crypto.randomUUID();
     const message = { type: 'req', id, method, params };
     const started = Date.now();
+
+    // Sidebar ping: any direct-to-agent chat send is a "sent" signal. We
+    // fire on enqueue (not on ack) so the indicator flashes the moment MC
+    // commits to the message — the operator cares about outbound intent,
+    // not gateway round-trip.
+    if (method === 'chat.send') {
+      const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey ?? null;
+      pingAgentBySessionKey(sessionKey, 'sent');
+    }
 
     // Keep the request body summary out of the hot path's closure so the
     // GC can release the full payload once the debug row is serialised.

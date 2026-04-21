@@ -22,6 +22,7 @@ export function useSSE() {
     setIsOnline,
     selectedTask,
     setSelectedTask,
+    recordAgentPing,
   } = useMissionControl();
 
   // Update ref when selectedTask changes (outside the SSE effect)
@@ -184,6 +185,14 @@ export function useSSE() {
               });
               break;
 
+            case 'agent_pinged': {
+              const p = sseEvent.payload as { agentId?: string; direction?: 'sent' | 'received'; at?: string };
+              if (p.agentId && p.direction && p.at) {
+                recordAgentPing(p.agentId, p.direction, p.at);
+              }
+              break;
+            }
+
             default:
               debug.sse('Unknown event type', sseEvent);
           }
@@ -225,5 +234,5 @@ export function useSSE() {
     };
   // selectedTask removed from deps to prevent re-connection loop
   // We use selectedTaskIdRef to check the current selected task ID without triggering re-renders
-  }, [addTask, removeTask, updateTask, setIsOnline, setSelectedTask]);
+  }, [addTask, removeTask, updateTask, setIsOnline, setSelectedTask, recordAgentPing]);
 }

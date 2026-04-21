@@ -901,7 +901,8 @@ export type SSEEventType =
   | 'tasks_cleared'
   | 'rollcall_started'
   | 'rollcall_delivered'
-  | 'rollcall_entry_updated';
+  | 'rollcall_entry_updated'
+  | 'agent_pinged';
 
 export interface SSEEvent {
   type: SSEEventType;
