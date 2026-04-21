@@ -214,7 +214,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Deliverables directory: MC-managed location the agent writes FINAL
     // deliverables into so they become web-downloadable. Separate from
     // taskProjectDir, which may be an isolated worktree the agent codes in.
-    const deliverablesDir = getTaskDeliverableDir(task.id, 'host');
+    const deliverablesDir = getTaskDeliverableDir(
+      { id: task.id, title: task.title, created_at: task.created_at },
+      'host'
+    );
 
     // Create isolated workspace if parallel builds are possible
     // Only for builder dispatches (assigned/in_progress), not tester/reviewer
