@@ -11,7 +11,12 @@
  * mount makes host → container translation.
  *
  * On-disk layout for MC-managed deliverables:
- *   <root>/<task_id>/<filename>
+ *   <root>/<YYYY-MM-DD>-<sanitized-title>-<task_id>/<filename>
+ *
+ * The UUID suffix keeps the folder unique; the date + title prefix makes it
+ * human-identifiable when browsing the deliverables root directly. Older
+ * folders use the legacy `<root>/<task_id>/` layout — reads resolve either
+ * form by scanning for a directory whose name ends with the task UUID.
  *
  * (The agent writes the file before it knows the deliverable_id, so we don't
  * prefix with it at write-time. Collisions between deliverables in the same
@@ -68,9 +73,73 @@ export function getDeliverablesContainerPath(): string {
   );
 }
 
-export function getTaskDeliverableDir(taskId: string, perspective: 'host' | 'container'): string {
+/**
+ * Sanitize a task title into a filesystem-safe slug. Lowercase, non-alphanumeric
+ * runs collapsed to `-`, trimmed, and capped at 60 chars so the full folder
+ * name stays well under filesystem limits.
+ */
+function sanitizeTitleForFolder(title: string): string {
+  const slug = (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '');
+  return slug || 'untitled';
+}
+
+export function buildTaskDeliverableFolderName(task: { id: string; title: string; created_at: string }): string {
+  const date = (task.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+  return `${date}-${sanitizeTitleForFolder(task.title)}-${task.id}`;
+}
+
+/**
+ * Resolve an existing task deliverable directory by task UUID. Scans the
+ * deliverables root for a directory whose name equals the task id (legacy)
+ * or ends with `-<task_id>` (new friendly-name layout). Returns null when no
+ * such directory exists yet.
+ */
+function findExistingTaskDir(taskId: string, root: string): string | null {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const suffix = `-${taskId}`;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === taskId || entry.name.endsWith(suffix)) {
+      return path.join(root, entry.name);
+    }
+  }
+  return null;
+}
+
+/**
+ * Returns the deliverables directory for a task.
+ *
+ * Pass a full task object when writing (dispatch) — the returned path uses
+ * the friendly `YYYY-MM-DD-title-uuid` layout. Pass just a task id when
+ * reading — the layout is resolved by scanning the root, falling back to the
+ * friendly name (if caller plans to create it) or UUID-only if neither form
+ * exists yet.
+ */
+export function getTaskDeliverableDir(
+  taskOrId: string | { id: string; title: string; created_at: string },
+  perspective: 'host' | 'container'
+): string {
   const root = perspective === 'host' ? getDeliverablesHostPath() : getDeliverablesContainerPath();
-  return path.join(root, taskId);
+
+  if (typeof taskOrId !== 'string') {
+    const existing = findExistingTaskDir(taskOrId.id, root);
+    if (existing) return existing;
+    return path.join(root, buildTaskDeliverableFolderName(taskOrId));
+  }
+
+  const existing = findExistingTaskDir(taskOrId, root);
+  if (existing) return existing;
+  return path.join(root, taskOrId);
 }
 
 /**
