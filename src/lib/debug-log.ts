@@ -178,7 +178,12 @@ export interface DebugEventFilter {
   limit?: number;
 }
 
-export function getDebugEvents(filter: DebugEventFilter = {}): DebugEvent[] {
+/**
+ * Build the WHERE clause and param list shared by the live listing and the
+ * export path. Kept internal so the two call sites can't drift apart — any
+ * new filter column only needs to be added here.
+ */
+function buildEventWhere(filter: DebugEventFilter): { where: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
 
@@ -211,8 +216,33 @@ export function getDebugEvents(filter: DebugEventFilter = {}): DebugEvent[] {
     }
   }
 
-  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  return {
+    where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+export function getDebugEvents(filter: DebugEventFilter = {}): DebugEvent[] {
+  const { where, params } = buildEventWhere(filter);
   const limit = Math.max(1, Math.min(filter.limit ?? 200, 1000));
+
+  return queryAll<DebugEvent>(
+    `SELECT * FROM debug_events ${where} ORDER BY created_at DESC LIMIT ?`,
+    [...params, limit]
+  );
+}
+
+/**
+ * Export-mode read: newest-first rows, no 1000-row cap. The hard ceiling
+ * still applies (default 100k) so a runaway query can't exhaust memory,
+ * but it's high enough to cover any realistic operator export in one go.
+ * Callers that need unbounded access should stream the SQLite cursor
+ * directly rather than bumping this.
+ */
+const EXPORT_HARD_CAP = 100_000;
+export function getDebugEventsForExport(filter: DebugEventFilter = {}): DebugEvent[] {
+  const { where, params } = buildEventWhere(filter);
+  const limit = Math.max(1, Math.min(filter.limit ?? EXPORT_HARD_CAP, EXPORT_HARD_CAP));
 
   return queryAll<DebugEvent>(
     `SELECT * FROM debug_events ${where} ORDER BY created_at DESC LIMIT ?`,
