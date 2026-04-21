@@ -5,10 +5,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { broadcast } from '@/lib/events';
 import { CreateActivitySchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
-import { authorizeAgentForTask } from '@/lib/authz/http';
+import { AuthzError } from '@/lib/authz/agent-task';
+import { authzErrorResponse } from '@/lib/authz/http';
+import { logActivity } from '@/lib/services/task-activities';
 import type { TaskActivity } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -99,66 +100,19 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
 
     const { activity_type, message, agent_id, metadata } = validation.data;
 
-    // Agent-task authorization: enforce when agent_id is provided.
-    const authzFail = authorizeAgentForTask(agent_id, taskId, 'activity');
-    if (authzFail) return authzFail;
-
-    const db = getDb();
-    const id = crypto.randomUUID();
-
-    // Insert activity
-    db.prepare(`
-      INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      taskId,
-      agent_id || null,
-      activity_type,
-      message,
-      metadata ? JSON.stringify(metadata) : null
-    );
-
-    // Get the created activity with agent info
-    const activity = db.prepare(`
-      SELECT 
-        a.*,
-        ag.id as agent_id,
-        ag.name as agent_name,
-        ag.avatar_emoji as agent_avatar_emoji
-      FROM task_activities a
-      LEFT JOIN agents ag ON a.agent_id = ag.id
-      WHERE a.id = ?
-    `).get(id) as any;
-
-    const result: TaskActivity = {
-      id: activity.id,
-      task_id: activity.task_id,
-      agent_id: activity.agent_id,
-      activity_type: activity.activity_type,
-      message: activity.message,
-      metadata: activity.metadata,
-      created_at: activity.created_at,
-      agent: activity.agent_id ? {
-        id: activity.agent_id,
-        name: activity.agent_name,
-        avatar_emoji: activity.agent_avatar_emoji,
-        role: '',
-        status: 'working' as const,
-        is_master: false,
-        workspace_id: 'default',
-        source: 'local' as const,
-        description: '',
-        created_at: '',
-        updated_at: '',
-      } : undefined,
-    };
-
-    // Broadcast to SSE clients
-    broadcast({
-      type: 'activity_logged',
-      payload: result,
-    });
+    let result;
+    try {
+      result = logActivity({
+        taskId,
+        actingAgentId: agent_id ?? null,
+        activityType: activity_type,
+        message,
+        metadata: metadata ? JSON.stringify(metadata) : undefined,
+      });
+    } catch (err) {
+      if (err instanceof AuthzError) return authzErrorResponse(err);
+      throw err;
+    }
 
     logDebugEvent({
       type: 'agent.activity_post',

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { queryOne } from '@/lib/db';
-import { getUnreadMail, markAsRead, sendMail } from '@/lib/mailbox';
-import { recordRollCallReplyIfMatch } from '@/lib/rollcall';
-import { authorizeAgentActive, authorizeAgentForTask } from '@/lib/authz/http';
-import type { Agent } from '@/lib/types';
+import { getUnreadMail, markAsRead } from '@/lib/mailbox';
+import { AuthzError } from '@/lib/authz/agent-task';
+import { authzErrorResponse } from '@/lib/authz/http';
+import { sendAgentMail } from '@/lib/services/agent-mailbox';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,52 +57,36 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Authorize the sender: must be an existing, active agent. Replaces the
-    // looser "agent row exists" check — disabled agents should not send mail.
-    const senderFail = authorizeAgentActive(body.from_agent_id);
-    if (senderFail) return senderFail;
-
-    // If the mail is scoped to a task (help_request, task-local coordination),
-    // the sender must be on that task. Cross-task probing via mail is a real
-    // vector — an agent that learns of a task_id could otherwise use mail to
-    // pressure other agents outside its assignment.
-    if (body.task_id) {
-      const taskFail = authorizeAgentForTask(body.from_agent_id, body.task_id, 'activity');
-      if (taskFail) return taskFail;
+    let result;
+    try {
+      result = await sendAgentMail({
+        fromAgentId: body.from_agent_id,
+        toAgentId,
+        body: body.body,
+        subject: body.subject,
+        convoyId: body.convoy_id ?? null,
+        taskId: body.task_id ?? null,
+        push: body.push,
+      });
+    } catch (err) {
+      if (err instanceof AuthzError) return authzErrorResponse(err);
+      throw err;
     }
 
-    // Recipient existence still needs a plain lookup — the recipient doesn't
-    // authorize the call; they just need to exist so the FK on agent_mailbox
-    // doesn't blow up with an opaque 500.
-    const recipient = queryOne<Agent>('SELECT id FROM agents WHERE id = ?', [toAgentId]);
-    if (!recipient) {
-      return NextResponse.json({ error: `Recipient agent ${toAgentId} not found` }, { status: 404 });
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: result.error },
+        { status: 404 }
+      );
     }
-
-    const result = await sendMail({
-      convoyId: body.convoy_id || null,
-      taskId: body.task_id || null,
-      fromAgentId: body.from_agent_id,
-      toAgentId,
-      subject: body.subject,
-      body: body.body,
-      push: Boolean(body.push),
-    });
-
-    // If this mail looks like a reply to an open roll-call, record it
-    // against the matching rollcall_entries row so the UI's live status
-    // view flips from "waiting" to "responded" for this agent. No-op if
-    // there's no match — stray replies are just regular mail.
-    const rollcallMatch = recordRollCallReplyIfMatch({
-      mailId: result.message.id,
-      fromAgentId: body.from_agent_id,
-      toAgentId,
-      subject: body.subject,
-      body: body.body,
-    });
 
     return NextResponse.json(
-      { ...result, rollcall_matched: rollcallMatch.matched, rollcall_id: rollcallMatch.rollcallId },
+      {
+        message: result.message,
+        push: result.push,
+        rollcall_matched: result.rollcallMatched,
+        rollcall_id: result.rollcallId,
+      },
       { status: 201 }
     );
   } catch (error) {
