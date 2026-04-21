@@ -1,0 +1,14 @@
+{
+  "name": "mcp-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 de-risking spike for the sc-mission-control MCP adapter. Throwaway.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.19.2"
+  }
+}

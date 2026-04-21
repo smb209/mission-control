@@ -21,6 +21,12 @@ services:
       # bytes via MC_DELIVERABLES_CONTAINER_PATH.
       MC_DELIVERABLES_HOST_PATH: ${MC_DELIVERABLES_HOST_DIR:-${HOME}/mission-control/deliverables}
       MC_DELIVERABLES_CONTAINER_PATH: /app/deliverables
+      # Bind-mounted openclaw workspaces dir. MC writes MC-CONTEXT.json into
+      # each agent's workspace so agents have a stable, on-disk way to
+      # discover mc_url / mc_token / their own agent_id without scraping the
+      # transient dispatch message.
+      OPENCLAW_WORKSPACES_HOST_PATH: ${OPENCLAW_WORKSPACES_HOST_DIR:-${HOME}/.openclaw/workspaces}
+      OPENCLAW_WORKSPACES_CONTAINER_PATH: /app/openclaw-workspaces
       # Set this if OpenClaw runs on the host machine:
       # OPENCLAW_GATEWAY_URL: ws://host.docker.internal:18789
     volumes:
@@ -30,6 +36,9 @@ services:
       # MC_DELIVERABLES_HOST_DIR (must be an absolute host path, since it is
       # also injected into agent dispatch prompts).
       - ${MC_DELIVERABLES_HOST_DIR:-${HOME}/mission-control/deliverables}:/app/deliverables
+      # Bind-mount openclaw's workspaces dir so MC can drop MC-CONTEXT.json
+      # into each agent's workspace. MC only writes MC-CONTEXT.json here.
+      - ${OPENCLAW_WORKSPACES_HOST_DIR:-${HOME}/.openclaw/workspaces}:/app/openclaw-workspaces
     restart: unless-stopped
 
 volumes:

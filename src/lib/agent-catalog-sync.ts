@@ -1,6 +1,7 @@
 import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { logDebugEvent } from '@/lib/debug-log';
+import { writeAllWorkerContexts } from '@/lib/openclaw/worker-context';
 
 interface GatewayAgent {
   id?: string;
@@ -119,6 +120,28 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
         ]
       );
     });
+
+    // Refresh MC-CONTEXT.json for every gateway agent now that the catalog
+    // is up to date. This is best-effort — a failed write shouldn't break
+    // the sync (e.g. the bind mount is missing in local `next dev`).
+    try {
+      const results = writeAllWorkerContexts();
+      const written = results.filter((r) => !r.error && !r.skipped).length;
+      const skipped = results.filter((r) => r.skipped).length;
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        console.warn(
+          `[AgentCatalog] MC-CONTEXT.json: wrote=${written} skipped=${skipped} failed=${failed.length}`,
+          failed.map((f) => `${f.gateway_agent_id}: ${f.error}`).join('; ')
+        );
+      } else if (results.length > 0) {
+        console.log(
+          `[AgentCatalog] MC-CONTEXT.json refreshed for ${written} agent(s)${skipped ? `, skipped ${skipped}` : ''}`
+        );
+      }
+    } catch (err) {
+      console.warn('[AgentCatalog] MC-CONTEXT.json refresh failed:', (err as Error).message);
+    }
 
     lastSyncAt = Date.now();
     return changed;

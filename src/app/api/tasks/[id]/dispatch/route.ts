@@ -393,14 +393,37 @@ their persona, memory, and channel bindings.
     }
 
     // Every /api/tasks/* and /api/agents/* callback requires the MC bearer
-    // token when MC_API_TOKEN is set — which is always in practice, since
-    // unauthenticated dev mode is only for local experiments. Every
-    // completion-instruction branch embeds this header line so agents
-    // paste a ready-to-use curl rather than being told to POST to a URL
-    // and silently 401-ing.
+    // token when MC_API_TOKEN is set. Gateway agents read their token from
+    // MC-CONTEXT.json (see src/lib/openclaw/worker-context.ts) rather than
+    // having it embedded inline in the dispatch message — that keeps the
+    // secret out of chat archives / replay logs and gives agents a durable
+    // on-disk recovery path if the dispatch message scrolls out of context.
+    // Non-gateway ad-hoc agents fall back to the old embedded-token form
+    // since they have no workspace directory to read from.
     const mcAuthToken = process.env.MC_API_TOKEN || '';
-    const authHeaderLine = mcAuthToken
-      ? `  -H "Authorization: Bearer ${mcAuthToken}" \\\n`
+    const gatewayIdForContext = (agent as { gateway_agent_id?: string | null }).gateway_agent_id || '';
+    const mcContextPath = gatewayIdForContext
+      ? `~/.openclaw/workspaces/${gatewayIdForContext}/MC-CONTEXT.json`
+      : null;
+    const authHeaderLine = mcContextPath
+      ? `  -H "Authorization: Bearer $(jq -r .mc_token ${mcContextPath})" \\\n`
+      : mcAuthToken
+        ? `  -H "Authorization: Bearer ${mcAuthToken}" \\\n`
+        : '';
+
+    // Banner appended near the top of the dispatch message so agents always
+    // see (a) where their call-home credentials live and (b) the hard rule
+    // that MC's database is off-limits. Only shown for gateway agents (the
+    // only ones with workspaces on disk to read from).
+    const callHomeSection = mcContextPath
+      ? `\n---
+**🔒 CALL-HOME CONTEXT** — your MC identity + bearer token live on disk at:
+  \`${mcContextPath}\`
+
+Every \`curl\` below pulls the token via \`jq\` substitution. The file also holds \`mc_url\`, \`my_agent_id\`, and a \`peer_agent_ids\` map. Read it with \`cat\` if you need any of those values — do not embed them from the dispatch message (they rotate).
+
+**⚠️ Never read \`~/docker/mission-control/data/mission-control.db\` or any other MC-internal file.** Mission Control's state is ONLY reachable via the HTTP endpoints below. Agents that query the DB directly get stale data and bypass every evidence gate. If you need a value you can't find, mail the Coordinator via the mailbox endpoint.
+`
       : '';
 
     let completionInstructions: string;
@@ -722,7 +745,7 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
+${callHomeSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
 ${isBuilder ? (workspaceIsolated
   ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
   : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)

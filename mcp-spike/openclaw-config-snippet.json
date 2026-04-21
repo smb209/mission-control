@@ -1,0 +1,53 @@
+{
+  "_comment_1": "Real openclaw.json shape for 2026.4.10 — confirmed via `openclaw config schema`. Three things to configure: (1) register the server under mcp.servers, (2) allow-list it on a specific agent, (3) maybe flip the ACPX bridge. See README.md for the ordered probes.",
+
+  "_1_register_via_cli": "Preferred — avoids editing JSON by hand:",
+  "_1_command": "openclaw mcp set spike-echo '{\"command\":\"node\",\"args\":[\"/Users/snappytwo/snappytwo-sandbox/mission-control/mcp-spike/server.mjs\"],\"env\":{\"SPIKE_MARKER\":\"from-static-config\"}}'",
+
+  "_1_equivalent_json_block": {
+    "note": "If hand-editing, this goes under $.mcp.servers.spike-echo",
+    "command": "node",
+    "args": [
+      "/Users/snappytwo/snappytwo-sandbox/mission-control/mcp-spike/server.mjs"
+    ],
+    "env": { "SPIKE_MARKER": "from-static-config" }
+  },
+
+  "_2_per_agent_allowlist": {
+    "note": "Patch the mc-writer entry inside $.agents.list. The allowlist-string format is one of the three unknowns the spike answers — start with candidate A, iterate through B/C/D in the README if A doesn't surface the tool.",
+    "candidate_A_bare_name": {
+      "id": "mc-writer",
+      "tools": { "alsoAllow": ["spike-echo"] }
+    },
+    "candidate_B_namespaced_tool": {
+      "id": "mc-writer",
+      "tools": { "alsoAllow": ["spike-echo.whoami"] }
+    },
+    "candidate_C_wildcard_colon": {
+      "id": "mc-writer",
+      "tools": { "alsoAllow": ["spike-echo:*"] }
+    },
+    "candidate_D_mcp_prefix": {
+      "id": "mc-writer",
+      "tools": { "alsoAllow": ["mcp:spike-echo:*"] }
+    }
+  },
+
+  "_3_acpx_bridge_fallback": {
+    "note": "Only needed if the top-level mcp.servers path doesn't surface the tool to any agent regardless of allowlist candidate. Merge into $.plugins.entries.acpx.config",
+    "config_patch": {
+      "pluginToolsMcpBridge": true,
+      "mcpServers": {
+        "spike-echo": {
+          "command": "node",
+          "args": [
+            "/Users/snappytwo/snappytwo-sandbox/mission-control/mcp-spike/server.mjs"
+          ],
+          "env": { "SPIKE_MARKER": "from-acpx-fallback" }
+        }
+      }
+    }
+  },
+
+  "_cleanup_stale_block": "Also delete the old `plugins.entries.mcp-adapter` block from ~/.openclaw/openclaw.json — openclaw warns about it at every startup."
+}
