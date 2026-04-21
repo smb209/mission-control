@@ -43,6 +43,7 @@ next-env.d.ts
 # claude code local files
 .claude/settings.local.json
 .claude/tsc-cache/
+.claude/launch.json
 
 # local development notes/handoffs (may contain sensitive context)
 /thoughts/
