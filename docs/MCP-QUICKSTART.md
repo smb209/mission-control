@@ -67,14 +67,58 @@ cd /Users/snappytwo/docker && docker compose up -d mission-control
 Verify:
 
 ```bash
-curl -sS -H "Authorization: Bearer $MC_API_TOKEN" \
+# Use YOUR MC_API_TOKEN — never the example below.
+MC_API_TOKEN="<paste your token>"
+
+# The MCP Streamable-HTTP spec requires Accept: application/json + text/event-stream
+# on every POST, even though our server runs with enableJsonResponse=true
+# (returns plain JSON, not SSE frames). Omitting text/event-stream gets 406.
+curl -sS \
+  -H "Authorization: Bearer $MC_API_TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-  http://localhost:4001/mcp | jq '.result.tools | length'
-# → 11
+  http://localhost:4001/api/mcp | jq '.result.tools | map(.name)'
+# [
+#   "whoami", "list_peers", "get_task", "fetch_mail",
+#   "register_deliverable", "log_activity", "update_task_status",
+#   "fail_task", "save_checkpoint", "send_mail", "delegate"
+# ]
 ```
 
-If it returns `{"error": "MCP endpoint is disabled", ...}` the env var didn't take — check `docker inspect mission-control | grep MC_MCP_ENABLED`.
+Common error responses:
+
+| Response | Cause | Fix |
+|---|---|---|
+| `{"error":"MCP endpoint is disabled"}` status 503 | `MC_MCP_ENABLED` isn't `1` | Check `docker inspect mission-control \| grep MC_MCP_ENABLED`; restart after setting |
+| `Not Acceptable: Client must accept both application/json and text/event-stream` status 406 | Missing `Accept` header | Add `-H "Accept: application/json, text/event-stream"` |
+| 404 HTML page | Hit `/mcp` instead of `/api/mcp` | Use the full path |
+| `{"error":"Unauthorized"}` status 401 | Wrong `MC_API_TOKEN` | Match the value from `docker-compose.yml` |
+
+### One-shot whoami for a gateway agent
+
+Once the endpoint responds, confirm authz + the DB layer are reachable:
+
+```bash
+MC_API_TOKEN="<paste your token>"
+WRITER_ID=$(sqlite3 ~/docker/mission-control/data/mission-control.db \
+  "SELECT id FROM agents WHERE gateway_agent_id='mc-writer' LIMIT 1")
+
+curl -sS \
+  -H "Authorization: Bearer $MC_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"whoami\",\"arguments\":{\"agent_id\":\"$WRITER_ID\"}}}" \
+  http://localhost:4001/api/mcp | jq '.result.structuredContent | {id, name, gateway_agent_id, peer_count: (.peers | length)}'
+# {
+#   "id": "…",
+#   "name": "Writer",
+#   "gateway_agent_id": "mc-writer",
+#   "peer_count": 7
+# }
+```
+
+> This is the ONLY place this guide tells you to read the database directly — for a one-time setup sanity check. After this step, agents use `whoami` itself to discover their id. Agents must not read the DB; see `MESSAGING-PROTOCOL.md`.
 
 ---
 
