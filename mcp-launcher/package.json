@@ -1,0 +1,16 @@
+{
+  "name": "sc-mission-control-mcp-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "stdio ↔ HTTP proxy so OpenClaw can reach Mission Control's MCP endpoint. Spawned by openclaw via `openclaw mcp set sc-mission-control '{command:\"node\",args:[...]}'`.",
+  "bin": {
+    "sc-mc-launcher": "./launcher.mjs"
+  },
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}
