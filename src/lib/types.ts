@@ -2,7 +2,15 @@
 
 export type AgentStatus = 'standby' | 'working' | 'offline';
 
-export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'convoy_active' | 'testing' | 'review' | 'verification' | 'done' | 'cancelled';
+export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'convoy_active' | 'testing' | 'review' | 'verification' | 'done' | 'cancelled' | 'needs_user_input';
+
+/**
+ * Phase of the enhanced planning flow. Drives which prompt the backend sends
+ * next and which UI the PlanningTab renders. 'clarify' is the default for new
+ * planning sessions; 'complete' is set once the user locks the spec and
+ * dispatch fires.
+ */
+export type PlanningPhase = 'clarify' | 'research' | 'plan' | 'confirm' | 'complete';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -41,6 +49,10 @@ export interface Agent {
   gateway_agent_id?: string;
   session_key_prefix?: string;
   is_active?: number;
+  /** Migration 036: set to 1 for agents spawned by the planning flow to act
+   *  as a one-shot planner for a single task. Cleanup passes drop these
+   *  rows when the task completes or planning is cancelled. */
+  ephemeral?: number;
   total_cost_usd?: number;
   total_tokens_used?: number;
   created_at: string;
@@ -76,6 +88,20 @@ export interface Task {
   planning_complete?: number;
   planning_dispatch_error?: string;
   planning_session_key?: string;
+  // Enhanced planning flow (migration 036): phased state machine driven by
+  // the planner's JSON envelopes. See src/lib/planning-envelope.ts.
+  planning_phase?: PlanningPhase;
+  planning_understanding?: string;
+  planning_unknowns?: string; // JSON string[]
+  planning_research?: string; // JSON { summary, updated_unknowns?, done_at }
+  planner_agent_id?: string;
+  // needs_user_input surface: any agent (planner or worker) can park a task
+  // pending a user decision. Restored to status_before_input_request when the
+  // user responds.
+  status_before_input_request?: string;
+  input_request?: string;
+  input_request_context?: string; // JSON
+  input_request_created_at?: string;
   images?: string; // JSON array of TaskImage objects
   convoy_id?: string;
   is_subtask?: number;
@@ -180,6 +206,7 @@ export interface WorkspaceStats {
     verification: number;
     done: number;
     cancelled: number;
+    needs_user_input: number;
     total: number;
   };
   agentCount: number;
