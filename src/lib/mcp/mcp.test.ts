@@ -73,6 +73,7 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     'save_checkpoint',
     'send_mail',
     'delegate',
+    'save_knowledge',
   ]) {
     assert.ok(names.has(expected), `missing tool: ${expected}`);
   }
@@ -256,4 +257,84 @@ test('send_mail with task_id rejects an off-task sender', async () => {
   assert.equal(res.isError, true);
   const payload = parseStructured<{ error: string; code: string }>(res);
   assert.equal(payload.error, 'authz_denied');
+});
+
+// ─── save_knowledge ─────────────────────────────────────────────────
+
+test('save_knowledge happy path writes an entry for a learner agent', async () => {
+  const { client } = await makePair();
+  const learner = seedAgent({ role: 'learner' });
+  const task = seedTask({ assigned: learner });
+
+  const res = await client.callTool({
+    name: 'save_knowledge',
+    arguments: {
+      agent_id: learner,
+      workspace_id: 'default',
+      task_id: task,
+      category: 'failure',
+      title: 'Build failed due to missing import',
+      content: 'The builder forgot to import foo.',
+      tags: ['build', 'imports'],
+      confidence: 0.85,
+    },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{
+    entry: {
+      task_id: string;
+      category: string;
+      title: string;
+      tags: string[];
+      confidence: number;
+      created_by_agent_id: string;
+    };
+  }>(res);
+  assert.equal(payload.entry.task_id, task);
+  assert.equal(payload.entry.category, 'failure');
+  assert.equal(payload.entry.created_by_agent_id, learner);
+  assert.deepEqual(payload.entry.tags, ['build', 'imports']);
+  assert.equal(payload.entry.confidence, 0.85);
+});
+
+test('save_knowledge returns authz_denied when agent is not on the task', async () => {
+  const { client } = await makePair();
+  const outsider = seedAgent({ role: 'learner' });
+  const task = seedTask();
+
+  const res = await client.callTool({
+    name: 'save_knowledge',
+    arguments: {
+      agent_id: outsider,
+      workspace_id: 'default',
+      task_id: task,
+      category: 'pattern',
+      title: 'nope',
+      content: 'should not land',
+    },
+  });
+  assert.equal(res.isError, true);
+  const payload = parseStructured<{ error: string; code: string }>(res);
+  assert.equal(payload.error, 'authz_denied');
+  assert.equal(payload.code, 'agent_not_on_task');
+});
+
+test('save_knowledge workspace-only (no task_id) requires only active agent', async () => {
+  const { client } = await makePair();
+  const learner = seedAgent({ role: 'learner' });
+
+  const res = await client.callTool({
+    name: 'save_knowledge',
+    arguments: {
+      agent_id: learner,
+      workspace_id: 'default',
+      category: 'pattern',
+      title: 'General pattern',
+      content: 'Use dependency injection for db handles.',
+    },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{ entry: { task_id?: string; confidence: number } }>(res);
+  assert.equal(payload.entry.task_id, undefined);
+  assert.equal(payload.entry.confidence, 0.5);
 });

@@ -230,6 +230,7 @@ try {
     'save_checkpoint',
     'send_mail',
     'delegate',
+    'save_knowledge',
   ]) {
     expect(names.has(t), `tools/list should expose ${t}`);
   }
@@ -346,6 +347,40 @@ try {
   const peerIds = new Set(structured(peers).peers.map((p) => p.id));
   expect(peerIds.has(outsiderId), 'list_peers should include outsider agent');
   expect(peerIds.has(recipientId), 'list_peers should include recipient agent');
+
+  // ── 13. save_knowledge writes a knowledge_entries row ──
+  const saved = await callTool('save_knowledge', {
+    agent_id: agentId,
+    workspace_id: 'default',
+    task_id: taskId,
+    category: 'pattern',
+    title: 'E2E pattern',
+    content: 'Learned during the e2e run.',
+    tags: ['e2e'],
+    confidence: 0.7,
+  });
+  expect(!isError(saved), `save_knowledge should succeed; got ${JSON.stringify(saved)}`);
+  const savedEntry = structured(saved).entry;
+  expect(savedEntry?.title === 'E2E pattern', 'save_knowledge should echo the title');
+  const knowledgeRow = queryOne(
+    `SELECT id, category, title FROM knowledge_entries WHERE id = ?`,
+    [savedEntry?.id],
+  );
+  expect(knowledgeRow?.title === 'E2E pattern', 'knowledge_entries row should exist with the title');
+
+  const deniedKnowledge = await callTool('save_knowledge', {
+    agent_id: outsiderId,
+    workspace_id: 'default',
+    task_id: taskId,
+    category: 'pattern',
+    title: 'should not land',
+    content: 'outsider attempt',
+  });
+  expect(isError(deniedKnowledge), 'save_knowledge should reject off-task outsider');
+  expect(
+    structured(deniedKnowledge).error === 'authz_denied',
+    `expected authz_denied; got ${JSON.stringify(structured(deniedKnowledge))}`,
+  );
 } finally {
   launcher.kill('SIGTERM');
   await new Promise((r) => launcher.once('close', r));
@@ -365,4 +400,4 @@ if (failures.length) {
   for (const f of failures) console.error('  -', f);
   process.exit(1);
 }
-console.log('[e2e] OK — full flow validated (handshake → tools/list → whoami → evidence gate → register → log → transition → authz → send_mail → list_peers)');
+console.log('[e2e] OK — full flow validated (handshake → tools/list → whoami → evidence gate → register → log → transition → authz → send_mail → list_peers → save_knowledge)');

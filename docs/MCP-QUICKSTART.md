@@ -87,7 +87,8 @@ curl -sS \
 # [
 #   "whoami", "list_peers", "get_task", "fetch_mail",
 #   "register_deliverable", "log_activity", "update_task_status",
-#   "fail_task", "save_checkpoint", "send_mail", "delegate"
+#   "fail_task", "save_checkpoint", "send_mail", "delegate",
+#   "save_knowledge"
 # ]
 ```
 
@@ -179,7 +180,8 @@ Edit `~/.openclaw/openclaw.json`. Find `mc-writer` in `agents.list` and add the 
       "sc-mission-control__fail_task",
       "sc-mission-control__save_checkpoint",
       "sc-mission-control__send_mail",
-      "sc-mission-control__delegate"
+      "sc-mission-control__delegate",
+      "sc-mission-control__save_knowledge"
     ]
   }
 }
@@ -211,7 +213,7 @@ openclaw agent --agent mc-writer \
   --timeout 45
 ```
 
-Expect 11 names, all prefixed with `sc-mission-control__`:
+Expect 12 names, all prefixed with `sc-mission-control__`:
 
 ```
 sc-mission-control__whoami
@@ -225,6 +227,7 @@ sc-mission-control__fail_task
 sc-mission-control__save_checkpoint
 sc-mission-control__send_mail
 sc-mission-control__delegate
+sc-mission-control__save_knowledge
 ```
 
 If the tools are missing, the launcher almost certainly failed to connect upstream. The launcher's own `diagnose()` helper (see `mcp-launcher/launcher.mjs`) emits a targeted hint to stderr that openclaw captures in the gateway log. Tail it and look for `[launcher]` lines:
@@ -285,7 +288,7 @@ The debug export also shows the `ok=true` / `duration_ms=N` on each tool-call ro
 
 Open **[http://localhost:4001/debug/mcp](http://localhost:4001/debug/mcp)** — the purpose-built MCP dashboard added in PR 9. You'll see:
 
-- Endpoint status + tool count (should be 11)
+- Endpoint status + tool count (should be 12)
 - Calls last hour / last day / lifetime + error counts (tone-coded: red when there are errors)
 - Per-tool table with call volumes, average / max latency, last-called
 - Per-agent breakdown
@@ -299,7 +302,7 @@ If **Endpoint = Disabled**, step 1 didn't stick. If **Tools = 0**, the MC build 
 
 Once mc-writer has completed two back-to-back tasks cleanly:
 
-Copy the same 11-entry `alsoAllow` block (from step 3) into each of the other `mc-*` agents in `openclaw.json`, OR merge **PR 5** which flips `MC_MCP_PILOT_AGENTS` default from "explicit allowlist" to "all gateway agents". After PR 5, no agent-list maintenance is needed — every dispatch to a gateway agent uses the MCP path.
+Copy the same 12-entry `alsoAllow` block (from step 3) into each of the other `mc-*` agents in `openclaw.json`, OR merge **PR 5** which flips `MC_MCP_PILOT_AGENTS` default from "explicit allowlist" to "all gateway agents". After PR 5, no agent-list maintenance is needed — every dispatch to a gateway agent uses the MCP path.
 
 A one-liner to fan out the same allowlist to every `mc-*` agent (after editing one agent by hand):
 
@@ -310,7 +313,8 @@ p = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
 TOOLS = [f'sc-mission-control__{t}' for t in
     ['whoami','list_peers','get_task','fetch_mail',
      'register_deliverable','log_activity','update_task_status',
-     'fail_task','save_checkpoint','send_mail','delegate']]
+     'fail_task','save_checkpoint','send_mail','delegate',
+     'save_knowledge']]
 c = json.loads(p.read_text())
 for a in c.get('agents', {}).get('list', []):
     if not a.get('id','').startswith('mc-'): continue
@@ -395,7 +399,7 @@ openclaw gateway restart
 |---|---|
 | `src/app/api/mcp/route.ts` | HTTP entry for `/mcp` (stateless per-request `McpServer`) |
 | `src/lib/mcp/server.ts` | Builds the server, registers tools |
-| `src/lib/mcp/tools.ts` | All 11 tool definitions + handlers |
+| `src/lib/mcp/tools.ts` | All 12 tool definitions + handlers |
 | `src/lib/mcp/errors.ts` | Maps `AuthzError` → tool-error result |
 | `src/lib/mcp/debug.ts` | `mcp.tool_call` debug-log rows |
 | `src/lib/authz/agent-task.ts` | `assertAgentCanActOnTask` — every state change passes through |
@@ -407,7 +411,7 @@ openclaw gateway restart
 | `scripts/mcp-next-e2e.seed.ts` | Sibling seeder for the Next.js E2E |
 | `src/lib/openclaw/worker-context.ts` | Writes MC-CONTEXT.json (just `my_agent_id` now) |
 
-## 9. Reference: all 11 tools
+## 9. Reference: all 12 tools
 
 | Tool | Args | Use |
 |---|---|---|
@@ -422,3 +426,4 @@ openclaw gateway restart
 | `save_checkpoint` | `agent_id, task_id, state_summary[, …]` | Checkpoint snapshot |
 | `send_mail` | `agent_id, to_agent_id, body[, subject, task_id, …]` | Inter-agent mail |
 | `delegate` | `coordinator_agent_id, task_id, peer_gateway_id, slice, message[, timeout_seconds]` | Coordinator-only; atomic send+audit |
+| `save_knowledge` | `agent_id, workspace_id, category, title, content[, task_id, tags, confidence]` | Learner writes a lesson to the workspace knowledge base |

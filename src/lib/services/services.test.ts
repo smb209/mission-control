@@ -17,6 +17,7 @@ import { failTask } from './task-failure';
 import { saveTaskCheckpoint } from './task-checkpoint';
 import { sendAgentMail } from './agent-mailbox';
 import { transitionTaskStatus } from './task-status';
+import { saveKnowledge } from './knowledge';
 
 function seedAgent(opts: { id?: string; workspace?: string; role?: string } = {}): string {
   const id = opts.id ?? crypto.randomUUID();
@@ -269,4 +270,166 @@ test('sendAgentMail happy path writes and returns a message', async () => {
     assert.equal(result.message.to_agent_id, recipient);
     assert.equal(result.message.body, 'hello');
   }
+});
+
+// ─── knowledge ──────────────────────────────────────────────────────
+
+test('saveKnowledge throws AuthzError when agent_id is set with task_id but agent is off-task', () => {
+  const outsider = seedAgent();
+  const task = seedTask();
+  assert.throws(
+    () =>
+      saveKnowledge({
+        actingAgentId: outsider,
+        workspaceId: 'default',
+        taskId: task,
+        category: 'pattern',
+        title: 't',
+        content: 'c',
+      }),
+    (err: unknown) => err instanceof AuthzError,
+  );
+});
+
+test('saveKnowledge happy path (workspace-only, no task_id)', () => {
+  const agent = seedAgent({ role: 'learner' });
+  const entry = saveKnowledge({
+    actingAgentId: agent,
+    workspaceId: 'default',
+    category: 'pattern',
+    title: 'Learned thing',
+    content: 'Some detail',
+    tags: ['testing'],
+    confidence: 0.75,
+  });
+  assert.equal(entry.workspace_id, 'default');
+  assert.equal(entry.category, 'pattern');
+  assert.equal(entry.title, 'Learned thing');
+  assert.equal(entry.confidence, 0.75);
+  assert.deepEqual(entry.tags, ['testing']);
+  assert.equal(entry.created_by_agent_id, agent);
+  assert.equal(entry.task_id, undefined);
+});
+
+test('saveKnowledge happy path when agent is on the task', () => {
+  const agent = seedAgent({ role: 'learner' });
+  const task = seedTask({ assigned: agent });
+  const entry = saveKnowledge({
+    actingAgentId: agent,
+    workspaceId: 'default',
+    taskId: task,
+    category: 'failure',
+    title: 'Boom',
+    content: 'It exploded',
+  });
+  assert.equal(entry.task_id, task);
+  assert.equal(entry.confidence, 0.5);
+  assert.deepEqual(entry.tags, []);
+});
+
+test('saveKnowledge skips authz when actingAgentId is null (operator flow)', () => {
+  const entry = saveKnowledge({
+    actingAgentId: null,
+    workspaceId: 'default',
+    category: 'checklist',
+    title: 'op note',
+    content: 'x',
+  });
+  assert.equal(entry.title, 'op note');
+  assert.equal(entry.created_by_agent_id, undefined);
+});
+
+test('saveKnowledge throws AuthzError for missing acting agent', () => {
+  assert.throws(
+    () =>
+      saveKnowledge({
+        actingAgentId: crypto.randomUUID(),
+        workspaceId: 'default',
+        category: 'pattern',
+        title: 't',
+        content: 'c',
+      }),
+    (err: unknown) => err instanceof AuthzError,
+  );
+});
+
+// ─── knowledge ──────────────────────────────────────────────────────
+
+test('saveKnowledge throws AuthzError when agent_id is set with task_id but agent is off-task', () => {
+  const outsider = seedAgent();
+  const task = seedTask();
+  assert.throws(
+    () =>
+      saveKnowledge({
+        actingAgentId: outsider,
+        workspaceId: 'default',
+        taskId: task,
+        category: 'pattern',
+        title: 't',
+        content: 'c',
+      }),
+    (err: unknown) => err instanceof AuthzError,
+  );
+});
+
+test('saveKnowledge happy path (workspace-only, no task_id)', () => {
+  const agent = seedAgent({ role: 'learner' });
+  const entry = saveKnowledge({
+    actingAgentId: agent,
+    workspaceId: 'default',
+    category: 'pattern',
+    title: 'Learned thing',
+    content: 'Some detail',
+    tags: ['testing'],
+    confidence: 0.75,
+  });
+  assert.equal(entry.workspace_id, 'default');
+  assert.equal(entry.category, 'pattern');
+  assert.equal(entry.title, 'Learned thing');
+  assert.equal(entry.confidence, 0.75);
+  assert.deepEqual(entry.tags, ['testing']);
+  assert.equal(entry.created_by_agent_id, agent);
+  assert.equal(entry.task_id, undefined);
+});
+
+test('saveKnowledge happy path when agent is on the task', () => {
+  const agent = seedAgent({ role: 'learner' });
+  const task = seedTask({ assigned: agent });
+  const entry = saveKnowledge({
+    actingAgentId: agent,
+    workspaceId: 'default',
+    taskId: task,
+    category: 'failure',
+    title: 'Boom',
+    content: 'It exploded',
+  });
+  assert.equal(entry.task_id, task);
+  assert.equal(entry.confidence, 0.5); // default
+  assert.deepEqual(entry.tags, []); // null → []
+});
+
+test('saveKnowledge skips authz when actingAgentId is null (operator flow)', () => {
+  const entry = saveKnowledge({
+    actingAgentId: null,
+    workspaceId: 'default',
+    category: 'checklist',
+    title: 'op note',
+    content: 'x',
+  });
+  assert.equal(entry.title, 'op note');
+  assert.equal(entry.created_by_agent_id, undefined);
+});
+
+test('saveKnowledge throws AuthzError for missing acting agent', () => {
+  assert.throws(
+    () =>
+      saveKnowledge({
+        actingAgentId: crypto.randomUUID(),
+        workspaceId: 'default',
+        category: 'pattern',
+        title: 't',
+        content: 'c',
+      }),
+    (err: unknown) => err instanceof AuthzError,
+  );
 });

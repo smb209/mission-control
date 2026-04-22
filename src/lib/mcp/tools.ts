@@ -1,7 +1,7 @@
 /**
  * sc-mission-control MCP tools.
  *
- * All 11 tools consolidated into one file. Each tool is a thin wrapper
+ * All 12 tools consolidated into one file. Each tool is a thin wrapper
  * around a service-layer function (src/lib/services/*) that handles
  * authorization, DB work, and broadcasts.
  *
@@ -26,6 +26,7 @@ import { transitionTaskStatus } from '@/lib/services/task-status';
 import { failTask } from '@/lib/services/task-failure';
 import { saveTaskCheckpoint } from '@/lib/services/task-checkpoint';
 import { sendAgentMail } from '@/lib/services/agent-mailbox';
+import { saveKnowledge } from '@/lib/services/knowledge';
 import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 
@@ -510,6 +511,61 @@ export function registerAllTools(server: McpServer): void {
         rollcall_id: result.rollcallId ?? null,
       };
       return textResult(JSON.stringify(payload, null, 2), payload);
+    }),
+  );
+
+  // save_knowledge ────────────────────────────────────────────────
+  // Used by the Learner agent at stage transitions to capture lessons
+  // learned (failure patterns, fixes, checklists, best practices). The
+  // learner-knowledge pipeline (src/lib/learner.ts) injects these into
+  // future builder dispatches via `formatKnowledgeForDispatch`.
+  server.registerTool(
+    'save_knowledge',
+    {
+      title: 'Save a learning / lesson to workspace knowledge',
+      description:
+        "Record a lesson learned from a task transition. Used by the Learner agent at stage transitions (pass/fail) to capture failure patterns, fixes, checklists, and best practices that future dispatches can inject via the learner-knowledge pipeline.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe(
+            'The workspace this lesson applies to. Use the workspace of the task being observed.',
+          ),
+        task_id: z
+          .string()
+          .optional()
+          .describe(
+            'When the lesson is derived from a specific task, the task id. Enables cross-referencing.',
+          ),
+        category: z.enum(['failure', 'fix', 'pattern', 'checklist']),
+        title: z.string().min(1).max(500),
+        content: z.string().min(1).max(20000),
+        tags: z.array(z.string().min(1).max(100)).optional(),
+        confidence: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            '0..1. Higher for patterns seen multiple times; lower for first-time observations.',
+          ),
+      },
+      annotations: { destructiveHint: true, openWorldHint: false },
+    },
+    trace('save_knowledge', async (args) => {
+      const entry = saveKnowledge({
+        actingAgentId: args.agent_id,
+        workspaceId: args.workspace_id,
+        taskId: args.task_id,
+        category: args.category,
+        title: args.title,
+        content: args.content,
+        tags: args.tags,
+        confidence: args.confidence,
+      });
+      return textResult(JSON.stringify(entry, null, 2), { entry });
     }),
   );
 

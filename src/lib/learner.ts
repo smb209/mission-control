@@ -6,7 +6,6 @@
  */
 
 import { queryOne, queryAll, run } from '@/lib/db';
-import { getMissionControlUrl } from '@/lib/config';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
 import type { KnowledgeEntry, TaskRole, OpenClawSession } from '@/lib/types';
@@ -48,8 +47,6 @@ export async function notifyLearner(
     [learnerRole.agent_id, 'active']
   );
 
-  const missionControlUrl = getMissionControlUrl();
-
   const learningMessage = `📚 **STAGE TRANSITION — LEARNING CAPTURE**
 
 **Task:** ${task.title} (${taskId})
@@ -59,17 +56,18 @@ ${event.failReason ? `**Failure Reason:** ${event.failReason}` : ''}
 ${event.context ? `**Context:** ${event.context}` : ''}
 
 **Your job:** Analyze this transition and capture any lessons learned.
-When done, call this API to save your findings:
+When done, call this MCP tool to save your findings:
 
-POST ${missionControlUrl}/api/workspaces/${task.workspace_id}/knowledge
-Body: {
-  "task_id": "${taskId}",
-  "category": "failure" | "fix" | "pattern" | "checklist",
-  "title": "Brief lesson title",
-  "content": "Detailed description of what was learned",
-  "tags": ["relevant", "tags"],
-  "confidence": 0.8
-}
+sc-mission-control__save_knowledge({
+  agent_id: "<your agent_id — call sc-mission-control__whoami if unknown>",
+  workspace_id: "${task.workspace_id}",
+  task_id: "${taskId}",
+  category: "failure" | "fix" | "pattern" | "checklist",
+  title: "<brief lesson title>",
+  content: "<detailed description of what was learned>",
+  tags: ["relevant", "tags"],
+  confidence: 0.8
+})
 
 Focus on:
 - What went wrong (if failed)

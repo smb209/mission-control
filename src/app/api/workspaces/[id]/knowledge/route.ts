@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { queryAll, run } from '@/lib/db';
+import { queryAll } from '@/lib/db';
+import { saveKnowledge, type KnowledgeCategory } from '@/lib/services/knowledge';
+import { AuthzError } from '@/lib/authz/agent-task';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,21 +70,22 @@ export async function POST(
       );
     }
 
-    const id = crypto.randomUUID();
+    const entry = saveKnowledge({
+      actingAgentId: created_by_agent_id || null,
+      workspaceId,
+      taskId: task_id || undefined,
+      category: category as KnowledgeCategory,
+      title,
+      content,
+      tags,
+      confidence,
+    });
 
-    run(
-      `INSERT INTO knowledge_entries (id, workspace_id, task_id, category, title, content, tags, confidence, created_by_agent_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-      [
-        id, workspaceId, task_id || null, category, title, content,
-        tags ? JSON.stringify(tags) : null,
-        confidence ?? 0.5,
-        created_by_agent_id || null
-      ]
-    );
-
-    return NextResponse.json({ id, message: 'Knowledge entry created' }, { status: 201 });
+    return NextResponse.json({ id: entry.id, message: 'Knowledge entry created' }, { status: 201 });
   } catch (error) {
+    if (error instanceof AuthzError) {
+      return NextResponse.json({ error: error.code, message: error.message }, { status: 403 });
+    }
     console.error('Failed to create knowledge entry:', error);
     return NextResponse.json({ error: 'Failed to create entry' }, { status: 500 });
   }
