@@ -159,7 +159,7 @@ openclaw mcp show sc-mission-control
 
 ## 3. Scope to one agent (mc-writer)
 
-Edit `~/.openclaw/openclaw.json`. Find `mc-writer` in `agents.list` and add `sc-mission-control` to its `tools.alsoAllow`:
+Edit `~/.openclaw/openclaw.json`. Find `mc-writer` in `agents.list` and add the MCP tool names to its `tools.alsoAllow`:
 
 ```jsonc
 {
@@ -168,12 +168,26 @@ Edit `~/.openclaw/openclaw.json`. Find `mc-writer` in `agents.list` and add `sc-
   // ... existing fields ...
   "tools": {
     "profile": "coding",
-    "alsoAllow": ["sc-mission-control"]
+    "alsoAllow": [
+      "sc-mission-control__whoami",
+      "sc-mission-control__list_peers",
+      "sc-mission-control__get_task",
+      "sc-mission-control__fetch_mail",
+      "sc-mission-control__register_deliverable",
+      "sc-mission-control__log_activity",
+      "sc-mission-control__update_task_status",
+      "sc-mission-control__fail_task",
+      "sc-mission-control__save_checkpoint",
+      "sc-mission-control__send_mail",
+      "sc-mission-control__delegate"
+    ]
   }
 }
 ```
 
-> Phase 0 note: OpenClaw's per-agent allowlist is informational — the spike showed a non-allow-listed agent could still call the tool. **Authorization is enforced on MC's side** (every state-changing tool calls `assertAgentCanActOnTask`). The `alsoAllow` entry still matters for documentation and for future openclaw releases that may start honoring it.
+> **Use the full tool names, not the bare server name.** OpenClaw exposes MCP tools as `<server-name>__<tool-name>` and matches `alsoAllow` entries against those full names. The bare string `"sc-mission-control"` produces a startup warning and doesn't match any tool. If you want fewer tools per agent, list the specific ones (e.g. a read-only agent might only get `__whoami`, `__list_peers`, `__get_task`, `__fetch_mail`).
+>
+> **Phase 0 note**: this allowlist is informational — the Phase 0 spike showed a non-allow-listed agent can still call the tool, and MC enforces authz server-side (`assertAgentCanActOnTask` inside every state-changing tool). The list still matters for documentation and for future openclaw releases that may start honoring it as a gate.
 
 Restart the gateway:
 
@@ -189,19 +203,58 @@ Open a chat with **mc-writer** and try these prompts in order:
 
 ### 4.1 — Is the server visible?
 
-> list your available tools
+From a terminal:
 
-Expect to see `whoami`, `list_peers`, `get_task`, `register_deliverable`, `log_activity`, `update_task_status`, `fail_task`, `save_checkpoint`, `fetch_mail`, `send_mail`, `delegate` in the response.
+```bash
+openclaw agent --agent mc-writer \
+  --message "List the sc-mission-control tool names you have access to, one per line." \
+  --timeout 45
+```
 
-If the tools are missing:
-- `openclaw gateway logs` → check for plugin-load errors mentioning `sc-mission-control`
-- `tail -f mcp-launcher/*.log` doesn't exist — the launcher writes to stderr which openclaw captures; check the gateway logs.
+Expect 11 names, all prefixed with `sc-mission-control__`:
+
+```
+sc-mission-control__whoami
+sc-mission-control__list_peers
+sc-mission-control__get_task
+sc-mission-control__fetch_mail
+sc-mission-control__register_deliverable
+sc-mission-control__log_activity
+sc-mission-control__update_task_status
+sc-mission-control__fail_task
+sc-mission-control__save_checkpoint
+sc-mission-control__send_mail
+sc-mission-control__delegate
+```
+
+If the tools are missing, the launcher almost certainly failed to connect upstream. The launcher's own `diagnose()` helper (see `mcp-launcher/launcher.mjs`) emits a targeted hint to stderr that openclaw captures in the gateway log. Tail it and look for `[launcher]` lines:
+
+```bash
+tail -f /tmp/openclaw/openclaw-$(date -u +%Y-%m-%d).log | grep launcher
+```
+
+Common messages and their fixes:
+
+| Launcher hint | Cause | Fix |
+|---|---|---|
+| "Response was HTML (likely a Next.js 404). Your MC_URL path is X but sc-mission-control mounts at /api/mcp" | Stale `openclaw mcp set` pointing at the pre-PR-7 path | Re-run step 2 above with `MC_URL=.../api/mcp` |
+| "MC returned 503 — MC_MCP_ENABLED isn't set" | Step 1 didn't take | Re-check `docker inspect mission-control \| grep MC_MCP_ENABLED` |
+| "MC returned 401 — MC_API_TOKEN mismatch" | Wrong bearer in the openclaw config | Copy token from `docker inspect`, re-run step 2 |
+| "Connection refused to http://localhost:4001" | MC isn't running | `docker compose up -d mission-control` |
 
 ### 4.2 — Can the agent self-identify?
 
-> call whoami with your agent_id
+```bash
+MC_API_TOKEN="<paste your token>"
+WRITER_ID=$(sqlite3 ~/docker/mission-control/data/mission-control.db \
+  "SELECT id FROM agents WHERE gateway_agent_id='mc-writer' LIMIT 1")
 
-If the agent doesn't know its own ID yet, prompt it to read `~/.openclaw/workspaces/mc-writer/MC-CONTEXT.json` — the `my_agent_id` field is the only thing that file carries post-PR 6.
+openclaw agent --agent mc-writer \
+  --message "Call sc-mission-control__whoami with agent_id=\"$WRITER_ID\". Report name, gateway_id, and peer_count." \
+  --timeout 60
+```
+
+If the agent doesn't know its own ID in its own prompt flow, it can read `~/.openclaw/workspaces/mc-writer/MC-CONTEXT.json` — the `my_agent_id` field is the only thing that file carries post-PR 6.
 
 Expected response shape:
 ```json
@@ -228,13 +281,47 @@ From the Mission Control UI or CLI, dispatch a small task to `mc-writer`. Expect
 
 The debug export also shows the `ok=true` / `duration_ms=N` on each tool-call row. Zero HTTP calls to `/api/tasks/*` from this agent is the success signal.
 
+### 4.4 — Check the dashboard
+
+Open **[http://localhost:4001/debug/mcp](http://localhost:4001/debug/mcp)** — the purpose-built MCP dashboard added in PR 9. You'll see:
+
+- Endpoint status + tool count (should be 11)
+- Calls last hour / last day / lifetime + error counts (tone-coded: red when there are errors)
+- Per-tool table with call volumes, average / max latency, last-called
+- Per-agent breakdown
+- Live feed of every `mcp.tool_call` event as it happens
+
+If **Endpoint = Disabled**, step 1 didn't stick. If **Tools = 0**, the MC build is stale (rebuild the container). If **per-tool table is empty but you've run tool calls**, debug collection is off — click through to `/debug` and toggle it on.
+
 ---
 
 ## 5. Expand to all agents
 
 Once mc-writer has completed two back-to-back tasks cleanly:
 
-Add `sc-mission-control` to `alsoAllow` for each of the other `mc-*` agents in `openclaw.json`, OR merge **PR 5** which flips `MC_MCP_PILOT_AGENTS` default from "explicit allowlist" to "all gateway agents". After PR 5, no agent-list maintenance is needed — every dispatch to a gateway agent uses the MCP path.
+Copy the same 11-entry `alsoAllow` block (from step 3) into each of the other `mc-*` agents in `openclaw.json`, OR merge **PR 5** which flips `MC_MCP_PILOT_AGENTS` default from "explicit allowlist" to "all gateway agents". After PR 5, no agent-list maintenance is needed — every dispatch to a gateway agent uses the MCP path.
+
+A one-liner to fan out the same allowlist to every `mc-*` agent (after editing one agent by hand):
+
+```bash
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path.home() / '.openclaw' / 'openclaw.json'
+TOOLS = [f'sc-mission-control__{t}' for t in
+    ['whoami','list_peers','get_task','fetch_mail',
+     'register_deliverable','log_activity','update_task_status',
+     'fail_task','save_checkpoint','send_mail','delegate']]
+c = json.loads(p.read_text())
+for a in c.get('agents', {}).get('list', []):
+    if not a.get('id','').startswith('mc-'): continue
+    tools = a.setdefault('tools', {}).setdefault('alsoAllow', [])
+    for t in TOOLS:
+        if t not in tools: tools.append(t)
+p.write_text(json.dumps(c, indent=2) + '\n')
+print('done')
+PY
+openclaw gateway restart
+```
 
 Restart openclaw after each config change:
 ```bash
