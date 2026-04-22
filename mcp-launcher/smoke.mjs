@@ -258,9 +258,51 @@ try {
   await new Promise((r) => mock.close(r));
 }
 
+// ─── Regression test: launcher's diagnose() must emit a friendly hint
+// when MC returns HTML 404 instead of JSON-RPC. This is the exact
+// failure mode a stale openclaw mcp set (MC_URL pointing at /mcp
+// instead of /api/mcp) produces in production.
+{
+  const htmlMock = http.createServer((_req, res) => {
+    // Minimal Next.js-ish 404 page. The launcher's diagnose() matches on
+    // "<!DOCTYPE html" / "<html".
+    res.writeHead(404, { 'content-type': 'text/html' });
+    res.end(
+      '<!DOCTYPE html><html><body><h1>404</h1><p>This page could not be found.</p></body></html>',
+    );
+  });
+  await new Promise((r) => htmlMock.listen(0, r));
+  const htmlPort = htmlMock.address().port;
+
+  // Use a path that doesn't match /api/mcp so the path-specific branch
+  // of diagnose() fires (the highest-value message).
+  const badUrl = `http://127.0.0.1:${htmlPort}/mcp`;
+  const proc2 = spawn('node', [LAUNCHER], {
+    env: { ...process.env, MC_URL: badUrl, MC_API_TOKEN: 'spike-token-42' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const stderrChunks = [];
+  proc2.stderr.on('data', (c) => stderrChunks.push(c));
+
+  const code = await new Promise((r) => proc2.once('close', r));
+  const stderr = Buffer.concat(stderrChunks).toString('utf8');
+
+  expect(code === 2, `launcher should exit 2 on connect failure, got ${code}`);
+  expect(
+    stderr.includes('Response was HTML') && stderr.includes('/api/mcp'),
+    `expected diagnose() HTML-404 hint in stderr, got: ${stderr.slice(0, 300)}`,
+  );
+  expect(
+    !stderr.includes('<!DOCTYPE html'),
+    "diagnose() should replace the raw HTML dump with a hint — don't leak the HTML to stderr",
+  );
+
+  await new Promise((r) => htmlMock.close(r));
+}
+
 if (failures.length) {
   console.error('\n[smoke] FAILED:');
   for (const f of failures) console.error('  -', f);
   process.exit(1);
 }
-console.log(`[smoke] OK — ${mockCalls.filter((c) => c.method === 'POST').length} proxied POSTs validated`);
+console.log(`[smoke] OK — ${mockCalls.filter((c) => c.method === 'POST').length} proxied POSTs validated + HTML-404 diagnosis regression`);
