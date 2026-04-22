@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { saveCheckpoint, getLatestCheckpoint } from '@/lib/checkpoint';
-import { deliverPendingNotesAtCheckpoint } from '@/lib/task-notes';
+import { getLatestCheckpoint } from '@/lib/checkpoint';
 import { CheckpointSchema } from '@/lib/validation';
-import { authorizeAgentForTask } from '@/lib/authz/http';
+import { AuthzError } from '@/lib/authz/agent-task';
+import { authzErrorResponse } from '@/lib/authz/http';
+import { saveTaskCheckpoint } from '@/lib/services/task-checkpoint';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,27 +37,24 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
     const { agent_id, checkpoint_type, state_summary, files_snapshot, context_data } = validation.data;
 
-    // Agent-task authorization: agent_id is required on CheckpointSchema, so
-    // this always runs (no operator-skip path).
-    const authzFail = authorizeAgentForTask(agent_id, id, 'checkpoint');
-    if (authzFail) return authzFail;
-
-    const checkpoint = saveCheckpoint({
-      taskId: id,
-      agentId: agent_id,
-      checkpointType: checkpoint_type,
-      stateSummary: state_summary,
-      filesSnapshot: files_snapshot,
-      contextData: context_data,
-    });
-
-    // Deliver any pending operator notes at this checkpoint
-    deliverPendingNotesAtCheckpoint(id).catch(err => {
-      console.warn('[Checkpoint] Failed to deliver pending notes:', err);
-    });
+    let checkpoint;
+    try {
+      checkpoint = saveTaskCheckpoint({
+        taskId: id,
+        agentId: agent_id,
+        checkpointType: checkpoint_type,
+        stateSummary: state_summary,
+        filesSnapshot: files_snapshot,
+        contextData: context_data,
+      });
+    } catch (err) {
+      if (err instanceof AuthzError) return authzErrorResponse(err);
+      throw err;
+    }
 
     return NextResponse.json(checkpoint, { status: 201 });
   } catch (error) {
+    console.error('Failed to save checkpoint:', error);
     return NextResponse.json({ error: 'Failed to save checkpoint' }, { status: 500 });
   }
 }

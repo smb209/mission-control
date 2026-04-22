@@ -5,18 +5,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { broadcast } from '@/lib/events';
 import { CreateDeliverableSchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
-import { authorizeAgentForTask } from '@/lib/authz/http';
-import { existsSync } from 'fs';
-import {
-  isUnderDeliverablesHostRoot,
-  hostPathToContainerPath,
-  fileSizeBytes,
-} from '@/lib/deliverables/storage';
+import { AuthzError } from '@/lib/authz/agent-task';
+import { authzErrorResponse } from '@/lib/authz/http';
+import { registerDeliverable } from '@/lib/services/task-deliverables';
 
-import type { TaskDeliverable, DeliverableStorageScheme } from '@/lib/types';
+import type { TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 /**
@@ -75,14 +70,10 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
 
     const { deliverable_type, title, path, description, spec_deliverable_id, agent_id } = validation.data;
 
-    // Agent-task authorization: enforce when agent_id is provided.
-    // Operator flows (UI) skip this and are trusted via proxy.ts same-origin.
-    const authzFail = authorizeAgentForTask(agent_id, taskId, 'deliverable');
-    if (authzFail) return authzFail;
-
     // Reject the reserved ssh:// prefix — the column is widened for future
-    // remote storage, but nothing reads it yet. Failing here avoids half-wired
-    // deliverables accumulating.
+    // remote storage, but nothing reads it yet. HTTP-only pre-validation;
+    // kept out of the service since MCP tools can impose their own input
+    // constraints at schema time.
     if (path && path.startsWith('ssh://')) {
       return NextResponse.json(
         { error: 'Remote (ssh://) deliverable storage is not yet supported' },
@@ -90,82 +81,42 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       );
     }
 
-    // Decide storage_scheme + capture file metadata.
-    let storageScheme: DeliverableStorageScheme = 'host';
-    let sizeBytes: number | undefined;
-    let fileExists = true;
-    let normalizedPath = path;
-
-    if (deliverable_type === 'file' && path) {
-      normalizedPath = path.replace(/^~/, process.env.HOME || '');
-      if (isUnderDeliverablesHostRoot(path)) {
-        storageScheme = 'mc';
-        // Existence + size measured against the container-perspective path
-        // (MC reads from there; the path the agent wrote is host-perspective).
-        const containerPath = hostPathToContainerPath(path);
-        fileExists = existsSync(containerPath);
-        if (fileExists) sizeBytes = fileSizeBytes(containerPath);
-      } else {
-        // Legacy host-path: just use as-given (tilde-expanded).
-        fileExists = existsSync(normalizedPath);
-      }
-      if (!fileExists) {
-        console.warn(`[DELIVERABLE] Warning: File does not exist: ${normalizedPath}`);
-      }
+    let result;
+    try {
+      result = registerDeliverable({
+        taskId,
+        actingAgentId: agent_id ?? null,
+        deliverableType: deliverable_type,
+        title,
+        path,
+        description,
+        specDeliverableId: spec_deliverable_id,
+      });
+    } catch (err) {
+      if (err instanceof AuthzError) return authzErrorResponse(err);
+      throw err;
     }
-
-    const db = getDb();
-    const id = crypto.randomUUID();
-
-    // Insert deliverable
-    db.prepare(`
-      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      taskId,
-      deliverable_type,
-      title,
-      path || null,
-      description || null,
-      storageScheme,
-      sizeBytes ?? null,
-      spec_deliverable_id || null
-    );
-
-    // Get the created deliverable
-    const deliverable = db.prepare(`
-      SELECT *
-      FROM task_deliverables
-      WHERE id = ?
-    `).get(id) as TaskDeliverable;
-
-    // Broadcast to SSE clients
-    broadcast({
-      type: 'deliverable_added',
-      payload: deliverable,
-    });
 
     logDebugEvent({
       type: 'agent.deliverable_post',
       direction: 'inbound',
       taskId,
       requestBody: body,
-      metadata: { deliverable_type, title, file_exists: fileExists },
+      metadata: { deliverable_type, title, file_exists: result.fileExists },
     });
 
     // Return with warning if file doesn't exist
-    if (deliverable_type === 'file' && !fileExists) {
+    if (deliverable_type === 'file' && !result.fileExists) {
       return NextResponse.json(
         {
-          ...deliverable,
-          warning: `File does not exist at path: ${normalizedPath}. Please create the file.`
+          ...result.deliverable,
+          warning: `File does not exist at path: ${result.normalizedPath}. Please create the file.`
         },
         { status: 201 }
       );
     }
 
-    return NextResponse.json(deliverable, { status: 201 });
+    return NextResponse.json(result.deliverable, { status: 201 });
   } catch (error) {
     console.error('Error creating deliverable:', error);
     return NextResponse.json(

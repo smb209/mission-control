@@ -17,7 +17,12 @@ import {
   assertAgentCanActOnTask,
 } from './agent-task';
 
-function authzErrorResponse(err: AuthzError): NextResponse {
+/**
+ * Map an AuthzError to a 403 NextResponse. Exported because service-layer
+ * functions (src/lib/services/*) throw AuthzError instead of returning
+ * early; the HTTP route catches and maps with this helper.
+ */
+export function authzErrorResponse(err: AuthzError): NextResponse {
   return NextResponse.json(
     {
       error: err.message,
