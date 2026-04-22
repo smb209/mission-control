@@ -392,69 +392,26 @@ their persona, memory, and channel bindings.
       }
     }
 
-    // Every /api/tasks/* and /api/agents/* callback requires the MC bearer
-    // token when MC_API_TOKEN is set. Gateway agents read their token from
-    // MC-CONTEXT.json (see src/lib/openclaw/worker-context.ts) rather than
-    // having it embedded inline in the dispatch message — that keeps the
-    // secret out of chat archives / replay logs and gives agents a durable
-    // on-disk recovery path if the dispatch message scrolls out of context.
-    // Non-gateway ad-hoc agents fall back to the old embedded-token form
-    // since they have no workspace directory to read from.
-    const mcAuthToken = process.env.MC_API_TOKEN || '';
+    // Call-home context for every gateway agent. Agents call MC via the
+    // sc-mission-control MCP tools (one tool per route). The dispatch
+    // message embeds the agent_id + task_id literally so agents can paste
+    // them directly into tool-call argument objects without rereading
+    // MC-CONTEXT.json. MC_MCP_ENABLED stays as a kill switch at the
+    // /api/mcp endpoint — turning it off makes every tool call 503 and
+    // the agent surfaces that to the operator.
     const gatewayIdForContext = (agent as { gateway_agent_id?: string | null }).gateway_agent_id || '';
     const mcContextPath = gatewayIdForContext
       ? `~/.openclaw/workspaces/${gatewayIdForContext}/MC-CONTEXT.json`
       : null;
-    const authHeaderLine = mcContextPath
-      ? `  -H "Authorization: Bearer $(jq -r .mc_token ${mcContextPath})" \\\n`
-      : mcAuthToken
-        ? `  -H "Authorization: Bearer ${mcAuthToken}" \\\n`
-        : '';
 
-    // MCP switch. MC_MCP_ENABLED=1 routes every gateway agent through the
-    // MCP completion path. MC_MCP_PILOT_AGENTS stays as an optional
-    // narrowing override for staged rollouts: when set to a non-empty
-    // comma-separated list of gateway ids, only those agents get MCP.
-    // When unset or set to "*"/"all", all gateway agents match.
-    //
-    // Semantics changed in PR 5: previously an empty MC_MCP_PILOT_AGENTS
-    // meant "no agents piloted" (conservative PR-4 behaviour). After PR 5
-    // the default is "all agents" — the operator flips MC_MCP_ENABLED and
-    // every gateway agent is on MCP. PR 6 removes the curl path entirely.
-    //
-    // Non-gateway agents always fall through to the curl path — they have
-    // no MC-CONTEXT.json and their openclaw wiring doesn't include the
-    // sc-mission-control launcher.
-    const mcpEnabled =
-      process.env.MC_MCP_ENABLED === '1' || process.env.MC_MCP_ENABLED === 'true';
-    const pilotAllowlist = (process.env.MC_MCP_PILOT_AGENTS || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const pilotAllowsAll =
-      pilotAllowlist.length === 0 ||
-      pilotAllowlist.includes('*') ||
-      pilotAllowlist.includes('all');
-    const isMcpPilot =
-      mcpEnabled &&
-      Boolean(gatewayIdForContext) &&
-      (pilotAllowsAll || pilotAllowlist.includes(gatewayIdForContext));
-
-    // Banner appended near the top of the dispatch message so agents always
-    // see (a) where their call-home credentials live and (b) the hard rule
-    // that MC's database is off-limits. Only shown for gateway agents (the
-    // only ones with workspaces on disk to read from).
-    const callHomeSection = !mcContextPath
-      ? ''
-      : isMcpPilot
-        ? `\n---
+    const callHomeSection = `\n---
 **🔒 CALL-HOME: use the \`sc-mission-control\` MCP tools**
 
-Your openclaw allowlist has the \`sc-mission-control\` tool server. Prefer these tools over curl for every MC interaction:
+Every MC interaction goes through the \`sc-mission-control\` tool server. Preferred calls by action:
 
 | When you want to... | Call tool |
 |---|---|
-| Learn your own \`agent_id\` + peers | \`whoami({ agent_id: … })\` — but see below |
+| Learn your own \`agent_id\` + peers | \`whoami({ agent_id: … })\` |
 | Register a deliverable | \`register_deliverable(...)\` |
 | Log a progress / completion note | \`log_activity(...)\` |
 | Move the task to the next stage | \`update_task_status(...)\` |
@@ -464,20 +421,11 @@ Your openclaw allowlist has the \`sc-mission-control\` tool server. Prefer these
 | Delegate a slice (coordinator) | \`delegate(...)\` — auto-logs the audit activity |
 
 Every state-changing tool takes \`agent_id\` as the first argument. **Your \`agent_id\` is:** \`${agent.id}\`  \\
-Your \`gateway_id\` is: \`${gatewayIdForContext}\`  \\
-Task id: \`${task.id}\`
+${gatewayIdForContext ? `Your \`gateway_id\` is: \`${gatewayIdForContext}\`  \\\n` : ''}Task id: \`${task.id}\`
 
-Read \`${mcContextPath}\` if you need other identity fields. **Never read \`~/docker/mission-control/data/*.db\`** — MC state is reachable only via these tools.
+${mcContextPath ? `Read \`${mcContextPath}\` (MC-CONTEXT.json) if you need to re-derive your \`agent_id\` — \`my_agent_id\` is the only field that file now carries.\n\n` : ''}**⚠️ Never read \`~/docker/mission-control/data/*.db\` or any other MC-internal file.** MC state is reachable only via these tools.
 
-If a tool returns a 503-shaped error ("MCP endpoint is disabled"), the operator has turned off MC_MCP_ENABLED. Fall back to the curl scaffolding at the bottom of this message.
-`
-        : `\n---
-**🔒 CALL-HOME CONTEXT** — your MC identity + bearer token live on disk at:
-  \`${mcContextPath}\`
-
-Every \`curl\` below pulls the token via \`jq\` substitution. The file also holds \`mc_url\`, \`my_agent_id\`, and a \`peer_agent_ids\` map. Read it with \`cat\` if you need any of those values — do not embed them from the dispatch message (they rotate).
-
-**⚠️ Never read \`~/docker/mission-control/data/mission-control.db\` or any other MC-internal file.** Mission Control's state is ONLY reachable via the HTTP endpoints below. Agents that query the DB directly get stale data and bypass every evidence gate. If you need a value you can't find, mail the Coordinator via the mailbox endpoint.
+If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the kill-switch \`MC_MCP_ENABLED=0\`. Surface the failure and wait — do not try to reconstruct curls.
 `;
 
     // Capture non-null ids once — TS's flow analysis narrows `agent` and
@@ -489,7 +437,7 @@ Every \`curl\` below pulls the token via \`jq\` substitution. The file also hold
     // criteria) but swap curl for tool calls. When MCP tools fail, the
     // agent can fall through to the existing curl scaffolding below —
     // that's the "defence in depth" during pilot.
-    function buildMcpCompletionInstructions(): string {
+    function buildCompletionInstructions(): string {
       const deliverableExampleIds =
         normalizedSpec && normalizedSpec.deliverables.length > 0
           ? normalizedSpec.deliverables.map((d) => `\`${d.id}\``).join(', ')
@@ -604,250 +552,17 @@ update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status:
 \`\`\``;
     }
 
-    let completionInstructions: string;
-    if (isMcpPilot) {
-      completionInstructions = buildMcpCompletionInstructions();
-    } else if (isCoordinator) {
-      // This prompt is the response to a specific failure mode observed on
-      // task cc3d40e1 (2026-04-20): the Coordinator posted one umbrella
-      // "Delegated parallel research+write+review to 3 agents" activity
-      // *without* ever invoking the sessions_send tool. Gateway logs showed
-      // zero outbound peer messages. The Coordinator then went idle waiting
-      // for callbacks that could never happen.
-      //
-      // Defense in depth below:
-      //   (a) Ordering: sessions_send BEFORE the activity, not after.
-      //   (b) One activity per sessions_send call, each tagged with a parseable
-      //       marker that includes the tool_call_id the gateway returned.
-      //   (c) Explicit ban on umbrella "I delegated to N agents" claims.
-      //   (d) Server-side audit (see auditCoordinatorDelegations in
-      //       src/lib/coordinator-audit.ts) flags tasks where claimed
-      //       delegations > 0 but zero peer callbacks arrived.
-      completionInstructions = `**YOUR ROLE: COORDINATOR** — Delegate to the persistent agents above via the gateway. Mission Control cannot see tool invocations on the gateway side, so YOU are responsible for emitting structured proof of each delegation after it fires.
+    // Every gateway agent gets the same MCP-oriented completion
+    // instructions. When MC_MCP_ENABLED is off, the /api/mcp endpoint
+    // returns 503 and tool calls surface that to the agent — which is the
+    // kill switch. The curl scaffolding that lived here previously (PRs
+    // 1-5 built the dispatch message with role-specific curl templates
+    // agents pasted into shells) has been removed now that every agent
+    // has ≥1 week of clean mcp.tool_call traffic. See the PR 6 cutover
+    // note in ~/.claude/plans/can-you-make-that-async-eich.md.
+    const completionInstructions = buildCompletionInstructions();
 
-**DELEGATION PROTOCOL — strict ordering:**
-
-For each peer agent you want to delegate work to:
-
-1. **Invoke \`sessions_send\` FIRST.** Do NOT announce the delegation before the tool call returns. Capture the tool-call result id the gateway returns.
-   - \`sessionKey\`: construct a FRESH per-task session key as \`agent:<peer_gateway_id>:task-${task.id}\` — substitute the peer's gateway id from the list above (e.g. \`agent:mc-researcher:task-${task.id}\`). The gateway creates the session implicitly on first send.
-   - **Do NOT target the peer's \`:main\` session.** Shared \`:main\` sessions carry context from prior tasks, collide when multiple tasks run in parallel, and appear to get aborted more aggressively by the gateway's run lifecycle (see the task cc3d40e1 post-mortem: every peer delegation landed on \`:main\` and was aborted before responding). Per-task session keys give each delegation an isolated lane.
-   - \`message\`: include the task id (\`${task.id}\`), the specific slice of work, any context, and prefix it with "You are the <role> for this task".
-   - \`timeoutSeconds\`: \`0\` for fire-and-forget parallel work.
-
-2. **IMMEDIATELY AFTER the tool call returns successfully, POST ONE activity** logging that specific delegation. Each activity message MUST start with the \`[DELEGATION]\` marker in the exact format below. Mission Control audits these — messages that don't match the format are treated as unverified:
-
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"updated","message":"[DELEGATION] target=\\"<agent name>\\" gateway_id=\\"<gateway_agent_id>\\" tool_call_id=\\"<id returned by sessions_send>\\" slice=\\"<one-line summary of what you asked them to do>\\""}'
-\`\`\`
-
-**ONE activity per sessions_send call.** Do NOT bundle multiple delegations into a single activity. Do NOT post an umbrella "Delegated work to 3 agents" activity — it will be rejected by the audit and the stall detector will flag the task as suspected hallucinated delegation.
-
-**DO NOT use \`sessions_spawn\`.** Spawned subagents inherit a stripped context and won't know their role.
-
-**If \`sessions_send\` is rejected** with an allow-list error (*"Session send visibility is restricted"*), the OpenClaw allow-list on this coordinator needs \`tools.sessions.visibility: "all"\`. Surface the blocker immediately — do not post a \`[DELEGATION]\` activity since no delegation actually happened:
-
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"reason":"sessions_send blocked by allow-list: <error text>"}'
-\`\`\`
-
-**AGGREGATION & COMPLETION** (after every peer has reported back):
-
-\`\`\`bash
-# Register the aggregated deliverable. Save it to the DELIVERABLES DIR below.
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"deliverable_type":"file","title":"<title>","path":"${deliverablesDir}/<filename>"}'
-
-# Transition the task.
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-When complete, reply with:
-\`TASK_COMPLETE: [one line per delegated agent with tool_call_id + outcome]\``;
-    } else if (isBuilder) {
-      // Build the builder's completion block. When a structured spec exists,
-      // require one deliverable POST per spec id (the evidence gate enforces
-      // this server-side) and instruct an explicit self-check before the
-      // status transition. When no spec exists, fall back to the legacy
-      // single-deliverable flow so ad-hoc tasks still work.
-      const hasStructuredSpec = Boolean(normalizedSpec && normalizedSpec.deliverables.length > 0);
-
-      if (hasStructuredSpec && normalizedSpec) {
-        const exampleId = normalizedSpec.deliverables[0].id;
-        const examplePath = normalizedSpec.deliverables[0].path_pattern || `${deliverablesDir}/<filename>`;
-        const fileIds = normalizedSpec.deliverables.filter(d => d.kind === 'file').map(d => d.id);
-        const allIds = normalizedSpec.deliverables.map(d => d.id);
-        const fileCheckHint = fileIds.length > 0
-          ? `For each \`kind: "file"\` deliverable above (${fileIds.map(id => `\`${id}\``).join(', ')}), \`ls -la\` the \`path_pattern\` under ${deliverablesDir}. If any file is missing, FIX IT before transitioning — the evidence gate will reject the status PATCH otherwise.`
-          : 'No file-kind deliverables — verify behavior deliverables by manually reproducing each acceptance statement.';
-
-        completionInstructions = `**✅ DEFINITION OF DONE** — you cannot transition this task until EVERY entry in the checklist above is registered.
-
-**Step 1 — produce every deliverable in the checklist.** Do not ship a skeleton referencing files that don't exist. If the checklist lists \`styles.css\` and \`app.js\` as separate entries, they must each exist as separate files under the deliverables dir with real content.
-
-**Step 2 — self-check before transitioning:**
-${fileCheckHint}
-
-If your output includes an HTML entry point, grep it for every \`href=\`/\`src=\` reference and confirm each target file actually exists. A page that references a missing \`app.js\` is not shippable.
-
-**Step 3 — register one deliverable per spec id** (the Authorization header is required on every call):
-
-\`\`\`bash
-# Repeat this POST for each deliverables[] entry in the checklist, using the matching spec_deliverable_id.
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"deliverable_type":"file","title":"<human name>","path":"${examplePath}","spec_deliverable_id":"${exampleId}"}'
-\`\`\`
-
-Expected spec_deliverable_id values: ${allIds.map(id => `\`${id}\``).join(', ')}
-
-**Step 4 — log a completion activity:**
-
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"<what you built — one line>"}'
-\`\`\`
-
-**Step 5 — transition status.** If this returns HTTP 400 with "missing: <ids>", you're missing deliverables. Produce them and retry — do NOT try to force the transition.
-
-\`\`\`bash
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-When complete, reply with:
-\`TASK_COMPLETE: [brief summary — which deliverables you registered]\``;
-      } else {
-        // Legacy / unplanned task path — evidence gate only enforces the
-        // baseline bar (1 deliverable + 1 activity).
-        completionInstructions = `**IMPORTANT:** After completing work, you MUST make these three calls in order — all require the Authorization header:
-
-\`\`\`bash
-# 1. Register deliverable
-# Save the file to the **DELIVERABLES DIR** below so it becomes web-downloadable.
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/deliverables" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"deliverable_type":"file","title":"<file name>","path":"${deliverablesDir}/<filename>"}'
-
-# 2. Log activity (must have both a deliverable AND an activity before step 3 will pass the evidence gate)
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"<what you built in one line>"}'
-
-# 3. Transition status
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-When complete, reply with:
-\`TASK_COMPLETE: [brief summary of what you did]\``;
-      }
-    } else if (isTester) {
-      // Testers get the success_criteria list as a pass/fail checklist — this
-      // is the difference between "I glanced at the deliverable" and "I
-      // actually verified each assertion".
-      const hasCriteria = Boolean(normalizedSpec && normalizedSpec.success_criteria.length > 0);
-      const criteriaGuidance = hasCriteria && normalizedSpec
-        ? `\n**Your job: verify each success criterion in the checklist above.** For each one:
-1. Run the \`how_to_test\` step.
-2. Record the result (pass or fail) with the criterion's id.
-
-Do NOT pass the stage unless every criterion passes. "Looks good to me" is not verification.
-
-**When you pass all criteria:**
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"All ${normalizedSpec.success_criteria.length} success criteria passed: [<sc-1> ok; <sc-2> ok; ...]"}'
-
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-**When any criterion fails** — name the failing ids explicitly so the builder knows what to fix:
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"reason":"Failed criteria: <sc-id1>: <what you observed>; <sc-id2>: <what you observed>. Builder must address each named criterion."}'
-\`\`\``
-        : `\n**No structured success criteria on this task.** Review the deliverables against the spec/description and use your judgment.
-
-**If tests pass:**
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"Tests passed: <summary>"}'
-
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-**If tests fail:**
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"reason":"<detailed description of what failed and what needs fixing>"}'
-\`\`\``;
-
-      completionInstructions = `**YOUR ROLE: TESTER** — Verify deliverables against the success criteria above.
-${criteriaGuidance}
-
-Reply with: \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed, by criterion id]\``;
-    } else if (isVerifier) {
-      const hasCriteria = Boolean(normalizedSpec && normalizedSpec.success_criteria.length > 0);
-      const criteriaReminder = hasCriteria
-        ? `\n\nEvery success criterion in the checklist above must pass. "Looks good" is not verification — confirm each assertion using its \`how_to_test\` step, then list the ids you confirmed in your activity message.`
-        : '';
-
-      completionInstructions = `**YOUR ROLE: VERIFIER** — Verify that all work meets quality standards.${criteriaReminder}
-
-Review deliverables, test results, and task requirements.
-
-**If verification PASSES** — all calls require the Authorization header:
-
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/activities" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"activity_type":"completed","message":"Verification passed: <summary; criteria verified: [<ids>]>"}'
-
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\`
-
-**If verification FAILS** — name the specific criterion ids that failed:
-
-\`\`\`bash
-curl -sS -X POST "${missionControlUrl}/api/tasks/${task.id}/fail" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"reason":"Failed criteria: <sc-id1>: <what you observed>; <sc-id2>: ...</what you observed>"}'
-\`\`\`
-
-Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed, by criterion id]\``;
-    } else {
-      // Fallback for unknown roles
-      completionInstructions = `**IMPORTANT:** After completing work, update status — the call requires the Authorization header:
-
-\`\`\`bash
-curl -sS -X PATCH "${missionControlUrl}/api/tasks/${task.id}" \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{"status":"${nextStatus}"}'
-\`\`\``;
-    }
-
-    // Build image references section
+        // Build image references section
     let imagesSection = '';
     if (task.images) {
       try {
