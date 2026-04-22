@@ -26,16 +26,21 @@ One launcher subprocess proxies every agent's stdio JSON-RPC to MC's HTTP endpoi
 
 ## 0. Pre-flight — before touching anything live
 
-Run both test harnesses locally. No openclaw, no Docker. Both should pass in under 15 seconds:
+Three harnesses, cheapest first:
 
 ```bash
 # From the mission-control repo root:
 yarn install
 cd mcp-launcher && npm install && cd ..
 
-yarn mcp:smoke         # launcher ⇄ mock MC (validates stdio↔HTTP proxy)
-yarn mcp:integration   # real launcher ⇄ real MCP server ⇄ real sqlite
+yarn mcp:smoke         # ~5s — launcher ⇄ mock MC  (stdio↔HTTP proxy only)
+yarn mcp:integration   # ~10s — real MCP server mounted on node:http ⇄ real launcher ⇄ sqlite
+yarn mcp:e2e:next      # ~10s — real Next.js dev server ⇄ real /api/mcp route ⇄ sqlite
 ```
+
+The three layers catch disjoint bug classes — `mcp:e2e:next` is the one that would have caught the `WebStandardStreamableHTTPServerTransport` regression and the `Accept: application/json, text/event-stream` requirement before hitting production. Run all three before any rollout.
+
+> `mcp:e2e:next` spawns `next dev` and writes to `.next/`. Don't run it while `yarn dev` is running on the default port — they'll clobber each other's compilation cache.
 
 Expected output of `mcp:integration`:
 
@@ -309,8 +314,10 @@ openclaw gateway restart
 | `src/lib/authz/agent-task.ts` | `assertAgentCanActOnTask` — every state change passes through |
 | `src/lib/services/*.ts` | Business logic shared by HTTP routes and MCP tools |
 | `mcp-launcher/launcher.mjs` | stdio↔HTTP proxy spawned by openclaw |
-| `mcp-launcher/smoke.mjs` | Proxy smoke (no MC) |
-| `scripts/mcp-integration-test.mjs` | End-to-end (real server + real launcher + real sqlite) |
+| `mcp-launcher/smoke.mjs` | Proxy-only smoke (no MC, no DB) |
+| `scripts/mcp-integration-test.mjs` | Service-layer E2E (node:http + real launcher + real sqlite) |
+| `scripts/mcp-next-e2e.mjs` | Next.js E2E (real `next dev` + real `/api/mcp` + real sqlite) |
+| `scripts/mcp-next-e2e.seed.ts` | Sibling seeder for the Next.js E2E |
 | `src/lib/openclaw/worker-context.ts` | Writes MC-CONTEXT.json (just `my_agent_id` now) |
 
 ## 9. Reference: all 11 tools
