@@ -8,6 +8,7 @@ import { getDb } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { CreateDeliverableSchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
+import { authorizeAgentForTask } from '@/lib/authz/http';
 import { existsSync } from 'fs';
 import {
   isUnderDeliverablesHostRoot,
@@ -72,7 +73,12 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       );
     }
 
-    const { deliverable_type, title, path, description, spec_deliverable_id } = validation.data;
+    const { deliverable_type, title, path, description, spec_deliverable_id, agent_id } = validation.data;
+
+    // Agent-task authorization: enforce when agent_id is provided.
+    // Operator flows (UI) skip this and are trusted via proxy.ts same-origin.
+    const authzFail = authorizeAgentForTask(agent_id, taskId, 'deliverable');
+    if (authzFail) return authzFail;
 
     // Reject the reserved ssh:// prefix — the column is widened for future
     // remote storage, but nothing reads it yet. Failing here avoids half-wired

@@ -8,6 +8,7 @@ import { getDb } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { CreateActivitySchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
+import { authorizeAgentForTask } from '@/lib/authz/http';
 import type { TaskActivity } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -97,6 +98,10 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
     }
 
     const { activity_type, message, agent_id, metadata } = validation.data;
+
+    // Agent-task authorization: enforce when agent_id is provided.
+    const authzFail = authorizeAgentForTask(agent_id, taskId, 'activity');
+    if (authzFail) return authzFail;
 
     const db = getDb();
     const id = crypto.randomUUID();

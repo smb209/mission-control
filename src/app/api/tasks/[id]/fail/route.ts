@@ -4,6 +4,7 @@ import { handleStageFailure, drainQueue } from '@/lib/workflow-engine';
 import { notifyLearner } from '@/lib/learner';
 import { logDebugEvent } from '@/lib/debug-log';
 import { FailTaskSchema } from '@/lib/validation';
+import { authorizeAgentForTask } from '@/lib/authz/http';
 import type { Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,11 @@ export async function POST(
         { status: 400 }
       );
     }
-    const { reason } = validation.data;
+    const { reason, agent_id } = validation.data;
+
+    // Agent-task authorization: enforce when agent_id is provided.
+    const authzFail = authorizeAgentForTask(agent_id, taskId, 'fail');
+    if (authzFail) return authzFail;
 
     const task = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
     if (!task) {

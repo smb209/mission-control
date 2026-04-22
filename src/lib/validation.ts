@@ -107,6 +107,11 @@ export const CreateDeliverableSchema = z.object({
   title: z.string().min(1, 'Title is required'),
   path: z.string().optional(),
   description: z.string().optional(),
+  /** The agent posting this deliverable. When present, the agent-task
+   *  authorization check (src/lib/authz/agent-task.ts) enforces the agent
+   *  is actually on this task. Optional for backward compatibility with
+   *  operator flows; MCP-dispatched agents always provide it. */
+  agent_id: agentId.optional(),
   /** When fulfilling a planning-spec deliverable, name which one. The
    *  evidence gate reconciles this against planning_spec.deliverables[].id
    *  before allowing a transition into testing/review/verification/done. */
@@ -136,6 +141,10 @@ export const SpecSuccessCriterionSchema = z.object({
 // from testing/review/verification back to in_progress.
 export const FailTaskSchema = z.object({
   reason: z.string().min(1, 'reason is required').max(5000),
+  /** The agent reporting the failure. When present, the agent-task
+   *  authorization check enforces the agent is the tester/reviewer for
+   *  this task. Optional for backward compatibility. */
+  agent_id: agentId.optional(),
 });
 
 // Checkpoint validation schema — agents save work-state snapshots so

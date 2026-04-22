@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { queryOne } from '@/lib/db';
 import { getUnreadMail, markAsRead, sendMail } from '@/lib/mailbox';
 import { recordRollCallReplyIfMatch } from '@/lib/rollcall';
+import { authorizeAgentActive, authorizeAgentForTask } from '@/lib/authz/http';
 import type { Agent } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -57,14 +58,26 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Sanity-check both agents exist so FK errors surface as clean 4xx.
+    // Authorize the sender: must be an existing, active agent. Replaces the
+    // looser "agent row exists" check — disabled agents should not send mail.
+    const senderFail = authorizeAgentActive(body.from_agent_id);
+    if (senderFail) return senderFail;
+
+    // If the mail is scoped to a task (help_request, task-local coordination),
+    // the sender must be on that task. Cross-task probing via mail is a real
+    // vector — an agent that learns of a task_id could otherwise use mail to
+    // pressure other agents outside its assignment.
+    if (body.task_id) {
+      const taskFail = authorizeAgentForTask(body.from_agent_id, body.task_id, 'activity');
+      if (taskFail) return taskFail;
+    }
+
+    // Recipient existence still needs a plain lookup — the recipient doesn't
+    // authorize the call; they just need to exist so the FK on agent_mailbox
+    // doesn't blow up with an opaque 500.
     const recipient = queryOne<Agent>('SELECT id FROM agents WHERE id = ?', [toAgentId]);
     if (!recipient) {
       return NextResponse.json({ error: `Recipient agent ${toAgentId} not found` }, { status: 404 });
-    }
-    const sender = queryOne<Agent>('SELECT id FROM agents WHERE id = ?', [body.from_agent_id]);
-    if (!sender) {
-      return NextResponse.json({ error: `Sender agent ${body.from_agent_id} not found` }, { status: 400 });
     }
 
     const result = await sendMail({
