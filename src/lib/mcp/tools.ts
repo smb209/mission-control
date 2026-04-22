@@ -16,7 +16,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { queryAll, queryOne } from '@/lib/db';
-import { AuthzError } from '@/lib/authz/agent-task';
+import { AuthzError, assertAgentActive } from '@/lib/authz/agent-task';
 import { authzErrorToToolResult, internalErrorToToolResult } from './errors';
 import { logMcpToolCall } from './debug';
 
@@ -250,6 +250,11 @@ export function registerAllTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     trace('fetch_mail', async ({ agent_id }) => {
+      // Enforce existence + active flag before reading — the bearer gates
+      // the transport but the agent_id is self-asserted, so someone with
+      // the token can otherwise peek at any agent's mailbox by enumerating
+      // UUIDs. Authz throws AuthzError which trace maps to isError.
+      assertAgentActive(agent_id);
       const messages = getUnreadMail(agent_id);
       return textResult(JSON.stringify({ messages }, null, 2), { messages });
     }),
