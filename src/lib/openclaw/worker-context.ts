@@ -1,33 +1,27 @@
 /**
  * Worker context provisioning.
  *
- * MC drops a single MC-CONTEXT.json file into each gateway agent's openclaw
- * workspace so the agent has a stable, durable way to discover:
- *   - mc_url            — host-reachable URL to call Mission Control
- *   - mc_token          — bearer token for every MC callback
- *   - my_agent_id       — the agent's own MC agent_id (for From: headers in mail)
- *   - my_gateway_id     — the gateway handle (e.g. "mc-writer")
- *   - peer_agent_ids    — map of peer gateway id → MC agent_id
- *   - written_at        — ISO8601 timestamp
- *   - schema_version    — integer, bumped on breaking changes
+ * MC drops a single MC-CONTEXT.json file into each gateway agent's
+ * openclaw workspace. After PR 6, the file carries exactly one durable
+ * piece of information: the agent's own MC agent_id, which it needs to
+ * pass as the first arg to every sc-mission-control MCP tool call. The
+ * `mc_url`, `mc_token`, and `peer_agent_ids` fields were removed — the
+ * MCP launcher already carries the URL + token in its env, and peers
+ * are discovered via the live `list_peers` tool.
  *
- * Why a file and not env vars / message-embedded secrets:
- *   - env vars are scoped to MC's container; openclaw runs on the host and
- *     those vars do not propagate into the agent's exec shell.
- *   - message-embedded secrets leak into `agent.event` streams and get
- *     rotated out of context by long work — the writer failure mode in the
- *     2026-04-21 debug export was exactly this.
- *   - a file on disk survives compaction, is re-readable at any time, and
- *     has no secondary transport to go wrong.
+ * Schema:
+ *   - my_agent_id       — the agent's own MC agent_id
+ *   - my_gateway_id     — the gateway handle (e.g. "mc-writer")
+ *   - written_at        — ISO8601 timestamp
+ *   - schema_version    — integer, bumped on breaking changes (v2 in PR 6)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { queryAll } from '@/lib/db';
-import { getMissionControlUrl } from '@/lib/config';
 
 export const MC_CONTEXT_FILENAME = 'MC-CONTEXT.json';
-export const MC_CONTEXT_SCHEMA_VERSION = 1;
+export const MC_CONTEXT_SCHEMA_VERSION = 2;
 
 /** Resolve the container-mounted path to openclaw's workspaces dir. */
 export function getOpenclawWorkspacesPath(): string | null {
@@ -47,11 +41,8 @@ export function getOpenclawWorkspacesPath(): string | null {
 export interface WorkerContextFile {
   schema_version: number;
   written_at: string;
-  mc_url: string;
-  mc_token: string;
   my_agent_id: string;
   my_gateway_id: string;
-  peer_agent_ids: Record<string, string>;
 }
 
 interface GatewayAgentRow {
@@ -65,15 +56,6 @@ function loadAllGatewayAgents(): GatewayAgentRow[] {
     `SELECT id, gateway_agent_id, name FROM agents
      WHERE gateway_agent_id IS NOT NULL AND gateway_agent_id != ''`
   );
-}
-
-function buildPeerMap(agents: GatewayAgentRow[], excludeGatewayId: string): Record<string, string> {
-  const peers: Record<string, string> = {};
-  for (const a of agents) {
-    if (!a.gateway_agent_id || a.gateway_agent_id === excludeGatewayId) continue;
-    peers[a.gateway_agent_id] = a.id;
-  }
-  return peers;
 }
 
 /** Atomically write MC-CONTEXT.json into a single agent's workspace. */
@@ -120,15 +102,11 @@ export function writeWorkerContext(gatewayAgentId: string): { path: string; skip
     throw new Error(`No agent in catalog with gateway_agent_id="${gatewayAgentId}"`);
   }
 
-  const token = process.env.MC_API_TOKEN || '';
   const payload: WorkerContextFile = {
     schema_version: MC_CONTEXT_SCHEMA_VERSION,
     written_at: new Date().toISOString(),
-    mc_url: getMissionControlUrl(),
-    mc_token: token,
     my_agent_id: me.id,
     my_gateway_id: gatewayAgentId,
-    peer_agent_ids: buildPeerMap(agents, gatewayAgentId),
   };
 
   return writeContextFile(workspacesDir, gatewayAgentId, payload);
@@ -151,8 +129,6 @@ export function writeAllWorkerContexts(): Array<{
   }
 
   const agents = loadAllGatewayAgents();
-  const token = process.env.MC_API_TOKEN || '';
-  const mcUrl = getMissionControlUrl();
   const now = new Date().toISOString();
   const results: Array<{ gateway_agent_id: string; path: string; skipped?: string; error?: string }> = [];
 
@@ -161,11 +137,8 @@ export function writeAllWorkerContexts(): Array<{
     const payload: WorkerContextFile = {
       schema_version: MC_CONTEXT_SCHEMA_VERSION,
       written_at: now,
-      mc_url: mcUrl,
-      mc_token: token,
       my_agent_id: me.id,
       my_gateway_id: me.gateway_agent_id,
-      peer_agent_ids: buildPeerMap(agents, me.gateway_agent_id),
     };
     try {
       const out = writeContextFile(workspacesDir, me.gateway_agent_id, payload);
