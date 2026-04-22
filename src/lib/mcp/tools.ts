@@ -591,14 +591,28 @@ export function registerAllTools(server: McpServer): void {
       // post-mortem for task cc3d40e1 — :main delegations were aborted).
       const sessionKey = `agent:${args.peer_gateway_id}:task-${args.task_id}`;
 
-      // Use the low-level call so we can provide timeoutSeconds + idempotency.
-      // sessions.send is the RPC method name in the gateway.
+      // We use `chat.send` (not `sessions.send`) — same RPC the dispatch
+      // route uses — because it implicitly creates the session on first
+      // send. `sessions.send` requires the session to already exist and
+      // fails with "session not found" for a fresh per-task key. The
+      // observed live failure was:
+      //
+      //   invalid sessions.send params: must have required property 'key';
+      //   at root: unexpected property 'sessionKey'; at root: unexpected
+      //   property 'timeoutSeconds'
+      //
+      // fixed by moving to chat.send, whose param shape is
+      // `{sessionKey, message, idempotencyKey}`. The `timeout_seconds`
+      // argument on the MCP tool is now advisory-only: chat.send is
+      // fire-and-forget by default; the gateway decides session lifecycle.
+      // We keep the argument on the tool schema for forward-compat.
+      const idempotencyKey = `delegate-${args.task_id}-${args.peer_gateway_id}-${Date.now()}`;
       let sendResult: Record<string, unknown> = {};
       try {
-        sendResult = ((await client.call('sessions.send', {
+        sendResult = ((await client.call('chat.send', {
           sessionKey,
           message: args.message,
-          timeoutSeconds: args.timeout_seconds ?? 0,
+          idempotencyKey,
         })) as Record<string, unknown>) ?? {};
       } catch (err) {
         return {
