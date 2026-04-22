@@ -138,60 +138,57 @@ export async function initiateRollCall(params: {
   //
   // Each target gets a personalized mail body that hard-codes:
   //   - their own MC agent_id (they don't need to guess / introspect)
-  //   - the fully-qualified MC URL (no "localhost:3120?" probing)
-  //   - a bearer-token hint (the middleware rejects agent POSTs without
-  //     the MC_API_TOKEN in prod; dev without a token omits the header)
-  //   - a ready-to-paste curl command so there's one unambiguous shape
-  //     to mimic
+  //   - the master's MC agent_id (they don't need to resolve via list_peers)
+  //   - a ready-to-invoke MCP tool-call shape (sc-mission-control__send_mail)
+  //     so there's one unambiguous pattern to mimic
+  //
   // Prior versions of this prompt showed agents trying every port from
   // 3000 upward, probing with PUT when POST was right, and filling
   // `from_agent_id` with whatever random uuid they could scrape off
-  // their own session. Being explicit here eliminates all of that.
+  // their own session. Being explicit eliminates that.
+  //
+  // The curl recipe was retired here after PR 28 (cutover). Transport auth
+  // (MC_API_TOKEN bearer) is handled by the mcp-launcher and never appears
+  // in agent-facing text. The sc-mission-control__send_mail tool routes
+  // through sendAgentMail(), which calls recordRollCallReplyIfMatch —
+  // same side effect as the old HTTP path, so rollcall-entry matching
+  // still flips the UI status from "waiting" to "responded".
   const missionControlUrl = getMissionControlUrl();
-  const token = process.env.MC_API_TOKEN;
 
-  // Sanity check: roll-call replies must be reachable from whichever host
-  // the target agent is running on. If MISSION_CONTROL_URL points to
-  // localhost / 127.0.0.1 / ::1, agents on any other host will see
-  // "connection refused" when they try to reply. We don't block — the
-  // operator may legitimately be running a single-host dev setup — but
-  // log loudly so misconfiguration surfaces before the first 30s timeout.
+  // Sanity check: roll-call replies go back through the MC MCP endpoint.
+  // If MISSION_CONTROL_URL points to localhost / 127.0.0.1 / ::1, any
+  // launcher running on a different host won't be able to reach it.
+  // We don't block — a single-host dev setup is legitimate — but log
+  // loudly so the misconfiguration surfaces before the first 30s timeout.
   if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(missionControlUrl)) {
     console.warn(
       `[RollCall] MISSION_CONTROL_URL is set to ${missionControlUrl}. ` +
-      `If any target agent runs on a different host it will not be able ` +
-      `to reach this URL to reply. Set MISSION_CONTROL_URL to an address ` +
-      `reachable from the agent host (e.g. your LAN IP) and restart MC.`
+      `If any sc-mission-control mcp-launcher runs on a different host it ` +
+      `will not be able to reach MC to post replies. Set ` +
+      `MISSION_CONTROL_URL to an address reachable from that host (e.g. ` +
+      `your LAN IP) and restart MC.`
     );
   }
-  const authHeaderLine = token
-    ? `  -H "Authorization: Bearer ${token}" \\\n`
-    : '';
-  const authNote = token
-    ? `The Authorization header above is required — Mission Control runs with MC_API_TOKEN set and rejects unauthenticated agent callbacks with 403.`
-    : `No Authorization header is required in this dev environment (MC_API_TOKEN is not set).`;
 
   for (const target of targets) {
-    const replyEndpoint = `${missionControlUrl}/api/agents/${master.agent.id}/mail`;
     const body = `ROLL CALL — please reply briefly with your current status.
 
 **Your Mission Control agent_id:** \`${target.id}\`
 **Your role:** ${target.role}
 **Reply within:** ${timeoutSeconds}s
 
-**REPLY FORMAT** — copy and run this exact curl, substituting your short status note:
+**REPLY** — call the \`sc-mission-control__send_mail\` MCP tool with your short status note substituted:
 
-\`\`\`bash
-curl -sS -X POST '${replyEndpoint}' \\
-  -H "Content-Type: application/json" \\
-${authHeaderLine}  -d '{
-    "from_agent_id": "${target.id}",
-    "subject": "roll_call_reply:${rollcallId}",
-    "body": "CHECKED_IN: ${target.role}, status=ok, note=<your short note>"
-  }'
+\`\`\`
+sc-mission-control__send_mail({
+  agent_id: "${target.id}",
+  to_agent_id: "${master.agent.id}",
+  subject: "roll_call_reply:${rollcallId}",
+  body: "CHECKED_IN: ${target.role}, status=ok, note=<your short note>"
+})
 \`\`\`
 
-${authNote}
+Transport authentication is handled by your MCP launcher — no token or Authorization header required from you.
 
 Keep the reply brief — a single \`CHECKED_IN:\` line is enough.`;
 
