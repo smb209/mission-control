@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
           verification: 0,
           done: 0,
           cancelled: 0,
+          needs_user_input: 0,
           total: 0
         };
         

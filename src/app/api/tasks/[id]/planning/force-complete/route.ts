@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
-import { extractJSON } from '@/lib/planning-utils';
+import { parsePlanningEnvelope, type PlanEnvelope } from '@/lib/planning-envelope';
 import { broadcast } from '@/lib/events';
 import { getMissionControlUrl } from '@/lib/config';
 import { v4 as uuidv4 } from 'uuid';
@@ -42,13 +42,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];
     
-    // Scan messages from the end looking for the completion JSON
-    let completionParsed: any = null;
+    // Scan messages from the end looking for a plan envelope (new shape) or
+    // a legacy `status: complete` completion (old shape). parsePlanningEnvelope
+    // classifies both.
+    let completionParsed: PlanEnvelope | null = null;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'assistant') {
-        const parsed = extractJSON(messages[i].content);
-        if (parsed && (parsed as any).status === 'complete') {
-          completionParsed = parsed;
+        const { envelope } = parsePlanningEnvelope(messages[i].content);
+        if (envelope?.kind === 'plan') {
+          completionParsed = envelope;
           break;
         }
       }
@@ -104,10 +106,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Update task
+    // Update task — set planning_phase to 'complete' to match new flow.
     run(
-      `UPDATE tasks SET 
+      `UPDATE tasks SET
          planning_complete = 1,
+         planning_phase = 'complete',
          planning_spec = ?,
          planning_agents = ?,
          assigned_agent_id = ?,

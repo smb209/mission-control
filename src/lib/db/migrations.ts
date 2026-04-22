@@ -1932,6 +1932,143 @@ const migrations: Migration[] = [
 
       console.log('[Migration 035] Complete.');
     }
+  },
+  {
+    id: '036',
+    name: 'planning_phases_and_needs_user_input',
+    up: (db) => {
+      // Two related changes rolled into one migration:
+      //
+      // (a) Phased planning: the planner now validates (clarify → optional
+      //     research → plan → user-gated confirm/tweak → complete) instead
+      //     of a single Q&A→dispatch loop. New columns on `tasks` store the
+      //     current phase, planner's restatement of understanding, any
+      //     unknowns it's still tracking, research summary, and which agent
+      //     is planning.
+      //
+      // (b) `needs_user_input` task status: any agent — planner mid-flow or
+      //     worker post-dispatch — can park a task when it hits a decision
+      //     or contradiction outside the plan. Requires expanding the tasks
+      //     status CHECK constraint AND capturing the prior status so we
+      //     can restore it when the user responds.
+      console.log('[Migration 036] Adding planning phase columns, input-request fields, and needs_user_input status...');
+
+      // ---- tasks: new planning-phase + input-request columns ----
+      const tasksInfo = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      const taskColExists = (n: string) => tasksInfo.some(c => c.name === n);
+
+      if (!taskColExists('planning_phase')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN planning_phase TEXT DEFAULT 'clarify'`);
+      }
+      if (!taskColExists('planning_understanding')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN planning_understanding TEXT`);
+      }
+      if (!taskColExists('planning_unknowns')) {
+        // JSON array of strings
+        db.exec(`ALTER TABLE tasks ADD COLUMN planning_unknowns TEXT`);
+      }
+      if (!taskColExists('planning_research')) {
+        // JSON: { summary, updated_unknowns, done_at }
+        db.exec(`ALTER TABLE tasks ADD COLUMN planning_research TEXT`);
+      }
+      if (!taskColExists('planner_agent_id')) {
+        // Nullable FK to agents(id); intentionally not DECLARED as a FK here
+        // because ALTER TABLE ADD COLUMN can't declare a FK on an existing
+        // table in SQLite. App-level integrity is enough — the column is
+        // cleared via cancel/completion.
+        db.exec(`ALTER TABLE tasks ADD COLUMN planner_agent_id TEXT`);
+      }
+      if (!taskColExists('status_before_input_request')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN status_before_input_request TEXT`);
+      }
+      if (!taskColExists('input_request')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN input_request TEXT`);
+      }
+      if (!taskColExists('input_request_context')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN input_request_context TEXT`);
+      }
+      if (!taskColExists('input_request_created_at')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN input_request_created_at TEXT`);
+      }
+
+      // ---- agents: ephemeral flag ----
+      const agentsInfo = db.prepare('PRAGMA table_info(agents)').all() as { name: string }[];
+      if (!agentsInfo.some(c => c.name === 'ephemeral')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN ephemeral INTEGER DEFAULT 0`);
+      }
+
+      // ---- tasks.status CHECK: add 'needs_user_input' ----
+      // SQLite can't ALTER a CHECK constraint directly. Two options: rebuild
+      // the table (mechanical, but tasks has 40+ columns and many inbound
+      // FKs — high risk of losing something), or patch sqlite_master via
+      // PRAGMA writable_schema. We take the writable_schema route here — it
+      // is officially documented (https://sqlite.org/pragma.html#pragma_writable_schema)
+      // and only rewrites the CREATE TABLE text for the existing object.
+      // The runMigrations wrapper already has foreign_keys OFF and runs in a
+      // transaction; we add an integrity_check after the rewrite so a
+      // malformed edit aborts the migration before commit.
+      const tasksSchema = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+      ).get() as { sql: string } | undefined;
+
+      if (tasksSchema && !tasksSchema.sql.includes("'needs_user_input'")) {
+        const oldCheck = `status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled')`;
+        const newCheck = `status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled', 'needs_user_input')`;
+
+        if (!tasksSchema.sql.includes(oldCheck)) {
+          // Defensive: log the actual schema so we can diagnose variants.
+          console.warn('[Migration 036] tasks CHECK constraint shape unexpected; current schema:\n' + tasksSchema.sql);
+          throw new Error('[Migration 036] Unable to locate status CHECK clause in tasks CREATE TABLE — refusing to patch');
+        }
+
+        const patched = tasksSchema.sql.replace(oldCheck, newCheck);
+        // better-sqlite3 blocks modifications of sqlite_master even when
+        // writable_schema is enabled — the driver has its own safety rail.
+        // unsafeMode(true) lifts the block for this migration only; we pair
+        // it with PRAGMA writable_schema and restore both afterwards.
+        // SQL-escape single quotes for the literal. better-sqlite3's prepare()
+        // rejects sqlite_master UPDATEs outright (even with unsafeMode), so
+        // we inline via db.exec() which bypasses the wrapper's safety check.
+        const escaped = patched.replace(/'/g, "''");
+        db.unsafeMode(true);
+        try {
+          db.pragma('writable_schema = ON');
+          db.exec(
+            `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='tasks'`
+          );
+          db.pragma('writable_schema = OFF');
+
+          // integrity_check surfaces any damage caused by the rewrite.
+          // Raising here rolls the migration's transaction back.
+          const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+          const ok = integrity.length === 1 && integrity[0].integrity_check === 'ok';
+          if (!ok) {
+            throw new Error('[Migration 036] integrity_check failed after writable_schema patch: ' + JSON.stringify(integrity));
+          }
+        } finally {
+          db.unsafeMode(false);
+        }
+      }
+
+      // Backfill phase for existing in-flight planning rows. Rows without a
+      // planning_session_key haven't started planning and stay at the default
+      // 'clarify'; rows with a session_key but no spec are mid-flow and we
+      // treat them as 'clarify' too (legacy Q&A loop behaviour maps there);
+      // completed-spec rows jump straight to 'complete' so the new UI shows
+      // the completed state instead of re-opening planning.
+      db.exec(`
+        UPDATE tasks
+        SET planning_phase = 'complete'
+        WHERE planning_complete = 1 AND planning_phase IS NULL
+      `);
+      db.exec(`
+        UPDATE tasks
+        SET planning_phase = 'clarify'
+        WHERE planning_phase IS NULL
+      `);
+
+      console.log('[Migration 036] Complete.');
+    }
   }
 ];
 
@@ -1959,6 +2096,13 @@ function createPreMigrationBackup(db: Database.Database): void {
   // Skip backup for in-memory or temp-file databases (used in tests)
   if (!dbPath || dbPath === ':memory:' || dbPath === '') {
     console.log('[DB] Skipping pre-migration backup for non-file database');
+    return;
+  }
+  // Skip for test databases — backups aren't useful in test runs and the
+  // one-second-resolution timestamp below collides when multiple test files
+  // migrate back-to-back in the same second.
+  if (process.env.NODE_ENV === 'test' || dbPath.includes('/.tmp/')) {
+    console.log('[DB] Skipping pre-migration backup for test database');
     return;
   }
 

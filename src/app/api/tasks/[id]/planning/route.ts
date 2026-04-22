@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
-import { extractJSON } from '@/lib/planning-utils';
+import { parsePlanningEnvelope } from '@/lib/planning-envelope';
 import { getAgentRoster, formatRosterForPrompt } from '@/lib/agent-resolver';
+import { buildInitialPlannerPrompt } from '@/lib/planner-prompt';
 // File system imports removed - using OpenClaw API instead
 
 export const dynamic = 'force-dynamic';
@@ -43,23 +44,50 @@ export async function GET(
     // Parse planning messages from JSON
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];
 
-    // Find the latest question (last assistant message with question structure)
+    // Classify the latest assistant message into a phased envelope. Legacy
+    // single-phase flows still work — parsePlanningEnvelope handles the old
+    // { question, options } and { status: 'complete', spec } shapes.
     const lastAssistantMessage = [...messages].reverse().find((m: { role: string }) => m.role === 'assistant');
-    let currentQuestion = null;
+    let currentQuestion: { question: string; options: Array<{ id: string; label: string }>; understanding?: string; unknowns?: string[] } | null = null;
+    let clarifyDone: { understanding: string; unknowns: string[]; needs_research: boolean; research_rationale?: string } | null = null;
 
     if (lastAssistantMessage) {
-      // Use extractJSON to handle code blocks and surrounding text
-      const parsed = extractJSON(lastAssistantMessage.content);
-      if (parsed && 'question' in parsed) {
-        currentQuestion = parsed;
+      const { envelope } = parsePlanningEnvelope(lastAssistantMessage.content);
+      if (envelope?.kind === 'clarify_question') {
+        currentQuestion = {
+          question: envelope.question,
+          options: envelope.options,
+          understanding: envelope.understanding,
+          unknowns: envelope.unknowns,
+        };
+      } else if (envelope?.kind === 'clarify_done') {
+        clarifyDone = {
+          understanding: envelope.understanding,
+          unknowns: envelope.unknowns,
+          needs_research: envelope.needs_research,
+          research_rationale: envelope.research_rationale,
+        };
       }
     }
+
+    type TaskRow = typeof task & {
+      planning_phase?: string;
+      planning_understanding?: string;
+      planning_unknowns?: string;
+      planning_research?: string;
+    };
+    const taskRow = task as TaskRow;
 
     return NextResponse.json({
       taskId,
       sessionKey: task.planning_session_key,
       messages,
       currentQuestion,
+      clarifyDone,
+      phase: taskRow.planning_phase ?? 'clarify',
+      understanding: taskRow.planning_understanding ?? null,
+      unknowns: taskRow.planning_unknowns ? JSON.parse(taskRow.planning_unknowns) : [],
+      research: taskRow.planning_research ? JSON.parse(taskRow.planning_research) : null,
       isComplete: !!task.planning_complete,
       spec: task.planning_spec ? JSON.parse(task.planning_spec) : null,
       agents: task.planning_agents ? JSON.parse(task.planning_agents) : null,
@@ -168,87 +196,22 @@ export async function POST(
     // Without this context the planner invents new agents every run, which is
     // the root of the ghost-agent duplication bug: the real gateway agents
     // sit idle while newly-created rows with no session_key_prefix receive
-    // the dispatch. When the planner emits its final `agents` list at status
-    // "complete", it may now return `agent_id` per agent to reuse one of these
-    // existing rows — see the polling handler for reuse/verify logic.
+    // the dispatch. When the planner emits its final plan with an "agents"
+    // array, it can now reuse one of these existing rows by agent_id — see
+    // the polling handler for reuse/verify logic.
     const roster = getAgentRoster(task.workspace_id);
     const rosterBlock = formatRosterForPrompt(roster);
 
-    // Build the initial planning prompt. Two things matter here: the
-    // question-asking loop (which fires now) and the final completion
-    // shape the planner MUST emit once it's done asking. We spell the
-    // completion schema out up front because agents anchor on structure
-    // when shown it once — asking for a binary-testable spec only at the
-    // "answer" stage was producing narrative summaries that downstream
-    // builders then interpreted in the cheapest way possible.
-    const planningPrompt = `PLANNING REQUEST
-
-Task Title: ${task.title}
-Task Description: ${task.description || 'No description provided'}
-
-AVAILABLE AGENTS (workspace roster):
-${rosterBlock}
-
-When you later emit the final plan (status: "complete") with an "agents" array, prefer assigning roles to the agents listed above by including their "agent_id" in each entry. Only propose a new agent (agent_id: null) when no listed agent is a suitable fit — and include a "rationale" explaining the specific capability gap.
-
-You are starting a planning session for this task. Read PLANNING.md for your protocol.
-
-**Your job has two phases:**
-
-PHASE 1 — ask multiple-choice questions until you understand what the user needs.
-PHASE 2 — emit a final spec with STRUCTURED, TESTABLE deliverables and success criteria (see schema below) so downstream builders and testers can objectively tell whether work is done.
-
-**Completion schema** (for when you're ready to emit status: "complete"):
-\`\`\`json
-{
-  "status": "complete",
-  "spec": {
-    "title": "...",
-    "summary": "...",
-    "deliverables": [
-      {
-        "id": "short-machine-id",              // stable id builders use when registering fulfillment
-        "title": "Human-readable name",
-        "kind": "file" | "behavior" | "artifact",
-        "path_pattern": "src/foo.js",          // required when kind=file; relative to the deliverables dir
-        "acceptance": "Binary, testable assertion — e.g. 'exports logShot(data) which persists to IndexedDB db=espresso-shots'"
-      }
-    ],
-    "success_criteria": [
-      {
-        "id": "sc-1",
-        "assertion": "Binary: passes or fails, no ambiguity",
-        "how_to_test": "Specific command, manual step, or assertion the tester runs"
-      }
-    ],
-    "constraints": {}
-  },
-  "agents": [ /* as described above */ ],
-  "execution_plan": {}
-}
-\`\`\`
-
-**Rules for the spec (these are the difference between a working deliverable and a broken mockup):**
-- EVERY major artifact needed to ship the task must be its own entry in \`deliverables\` — not bundled under a vague "module" entry. If the task needs an HTML page + CSS + JS + service worker, that is four deliverables, not one.
-- For \`kind: "file"\`, \`path_pattern\` MUST name the file. No "some JS file" — name it.
-- For \`kind: "behavior"\`, \`acceptance\` MUST be verifiable (e.g. "page loads from cache with network disabled", not "works offline").
-- \`success_criteria\` are for the Tester: each one should be something pass/fail-able. If you can't describe how to test it, it doesn't belong here.
-
-PHASE 1 starts now. Generate your FIRST question to understand what the user needs. Remember:
-- Questions must be multiple choice
-- Include an "Other" option
-- Be specific to THIS task, not generic
-
-Respond with ONLY valid JSON in this format:
-{
-  "question": "Your question here?",
-  "options": [
-    {"id": "A", "label": "First option"},
-    {"id": "B", "label": "Second option"},
-    {"id": "C", "label": "Third option"},
-    {"id": "other", "label": "Other"}
-  ]
-}`;
+    // Validation-first phased prompt. The planner now walks clarify →
+    // (optional) research → plan → confirm → complete rather than a single
+    // Q&A loop ending in auto-dispatch. See src/lib/planner-prompt.ts for
+    // the full protocol and src/lib/planning-envelope.ts for the envelope
+    // schemas both sides agree on.
+    const planningPrompt = buildInitialPlannerPrompt({
+      taskTitle: task.title,
+      taskDescription: task.description || '',
+      rosterBlock,
+    });
 
     // Connect to OpenClaw and send the planning request
     const client = getOpenClawClient();
@@ -268,7 +231,13 @@ Respond with ONLY valid JSON in this format:
 
     getDb().prepare(`
       UPDATE tasks
-      SET planning_session_key = ?, planning_messages = ?, status = 'planning'
+      SET planning_session_key = ?,
+          planning_messages = ?,
+          status = 'planning',
+          planning_phase = 'clarify',
+          planning_understanding = NULL,
+          planning_unknowns = NULL,
+          planning_research = NULL
       WHERE id = ?
     `).run(sessionKey, JSON.stringify(messages), taskId);
 
@@ -308,7 +277,9 @@ export async function DELETE(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Clear planning-related fields
+    // Clear planning-related fields (including the enhanced phase columns
+    // from migration 036). Status returns to 'inbox' so the task can be
+    // re-planned cleanly.
     run(`
       UPDATE tasks
       SET planning_session_key = NULL,
@@ -316,6 +287,11 @@ export async function DELETE(
           planning_complete = 0,
           planning_spec = NULL,
           planning_agents = NULL,
+          planning_phase = 'clarify',
+          planning_understanding = NULL,
+          planning_unknowns = NULL,
+          planning_research = NULL,
+          planner_agent_id = NULL,
           status = 'inbox',
           updated_at = datetime('now')
       WHERE id = ?

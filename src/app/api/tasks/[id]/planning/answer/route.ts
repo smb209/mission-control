@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { extractJSON } from '@/lib/planning-utils';
+import { buildClarifyAnswerPrompt } from '@/lib/planner-prompt';
 
 export const dynamic = 'force-dynamic';
 // POST /api/tasks/[id]/planning/answer - Submit an answer and get next question
@@ -37,71 +37,14 @@ export async function POST(
     }
 
     // Build the answer message
-    const answerText = answer?.toLowerCase() === 'other' && otherText 
+    const answerText = answer?.toLowerCase() === 'other' && otherText
       ? `Other: ${otherText}`
       : answer;
 
-    const answerPrompt = `User's answer: ${answerText}
-
-Based on this answer and the conversation so far, either:
-1. Ask your next question (if you need more information)
-2. Complete the planning (if you have enough information)
-
-For another question, respond with JSON:
-{
-  "question": "Your next question?",
-  "options": [
-    {"id": "A", "label": "Option A"},
-    {"id": "B", "label": "Option B"},
-    {"id": "other", "label": "Other"}
-  ]
-}
-
-If planning is complete, respond with JSON using the STRUCTURED spec shape (every deliverable must have id/kind/acceptance — no bare strings):
-
-{
-  "status": "complete",
-  "spec": {
-    "title": "Task title",
-    "summary": "Summary of what needs to be done",
-    "deliverables": [
-      {
-        "id": "short-machine-id",
-        "title": "Human-readable name",
-        "kind": "file",
-        "path_pattern": "relative/path.ext",
-        "acceptance": "Binary testable assertion — what the file must contain or do"
-      }
-    ],
-    "success_criteria": [
-      {
-        "id": "sc-1",
-        "assertion": "Binary pass/fail assertion",
-        "how_to_test": "Specific command, step, or check the tester runs"
-      }
-    ],
-    "constraints": {}
-  },
-  "agents": [
-    {
-      "name": "Agent Name",
-      "role": "Agent role",
-      "avatar_emoji": "🎯",
-      "soul_md": "Agent personality...",
-      "instructions": "Specific instructions..."
-    }
-  ],
-  "execution_plan": {
-    "approach": "How to execute",
-    "steps": ["Step 1", "Step 2"]
-  }
-}
-
-RULES:
-- Every major artifact gets its own deliverables entry. An HTML app with a service worker is AT LEAST four entries (index.html, styles.css, app.js, sw.js), not one "PWA module".
-- kind=file REQUIRES path_pattern. Name the file — do not say "some CSS file".
-- kind=behavior REQUIRES a testable acceptance ("page loads from cache with network disabled", not "works offline").
-- success_criteria entries must each be independently pass/fail-able.`;
+    // In the enhanced flow, /answer is ONLY called during the clarify phase.
+    // Other transitions (start research, move to plan, submit a tweak, lock &
+    // dispatch) have dedicated endpoints so the state machine stays explicit.
+    const answerPrompt = buildClarifyAnswerPrompt(answerText);
 
     // Parse existing messages
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];
