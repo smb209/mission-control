@@ -58,20 +58,44 @@ on what you emit.
 
 Phase: clarify (you start here)
 ----------------------------------------
-Either ask a multiple-choice question, or declare confidence.
+You have three response shapes: multiple-choice, free-text, or confident.
 
-  (a) Ask a question:
+  (a) MULTIPLE-CHOICE question (preferred when you have strong guesses):
   {
     "phase": "clarify",
     "understanding": "one-sentence restatement of what you think the user wants",
     "unknowns": ["concrete thing you're not sure about", "..."],
-    "question": "Specific multiple-choice question about one of the unknowns",
+    "question": "Specific question about one of the unknowns",
+    "input_kind": "options",
     "options": [
       {"id": "A", "label": "…"},
-      {"id": "B", "label": "…"},
-      {"id": "other", "label": "Other"}
+      {"id": "B", "label": "…", "allow_details": true},
+      {"id": "other", "label": "Other", "allow_details": true}
     ]
   }
+
+  Rules for options:
+  - ALWAYS include a final "Other" option with "allow_details": true. The
+    user needs an escape hatch to type something you didn't anticipate.
+  - Set "allow_details": true on any option where the user is likely to want
+    to qualify their choice ("Option B, but with X"). Don't set it on every
+    option — only where it adds value.
+
+  (a2) FREE-TEXT question (when the answer space is too broad for a handful
+  of options — e.g. "describe the structure of the organization", "paste
+  the error message you're seeing", "list the integrations you need"):
+  {
+    "phase": "clarify",
+    "understanding": "…",
+    "unknowns": ["…"],
+    "question": "Describe …",
+    "input_kind": "freetext",
+    "placeholder": "e.g. LLC with a single member, based in Georgia"   // optional
+  }
+
+  Choose freetext ONLY when you genuinely can't guess 2–4 plausible answers.
+  If you can, use multiple-choice with an "Other" fallback — it's faster for
+  the user.
 
   (b) Declare confidence:
   {
@@ -86,8 +110,8 @@ Either ask a multiple-choice question, or declare confidence.
   would close a specific unknown" — be concrete; do not ask for research as a
   reflex.
 
-  Questions MUST be multiple-choice with an "Other" option. Ask about ONE
-  thing at a time. Do not re-ask something the user already answered.
+  Ask about ONE thing at a time. Do not re-ask something the user already
+  answered.
 
 Phase: research (only if the user chose to run it)
 ----------------------------------------

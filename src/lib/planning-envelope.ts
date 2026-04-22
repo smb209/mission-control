@@ -25,15 +25,34 @@ export type PlanningPhase = 'clarify' | 'research' | 'plan' | 'confirm' | 'compl
 export interface PlanningQuestionOption {
   id: string;
   label: string;
+  /** When true, selecting this option reveals a free-text clarifier input so
+   *  the user can add detail alongside the choice. Used for "Other / specify"
+   *  and for "Option B + add nuance" patterns. */
+  allow_details?: boolean;
 }
 
-/** Clarify: planner has restated its understanding and is asking the user. */
+/**
+ * Clarify: planner has restated its understanding and is asking the user.
+ *
+ * Two answer shapes:
+ *   - `input_kind: 'options'` (default) — multiple choice. Individual options
+ *     may set `allow_details: true` to reveal a clarifier text input when
+ *     selected. "Other" is a conventional example.
+ *   - `input_kind: 'freetext'` — no options; the user types a free-form
+ *     answer. Used for inherently open questions like "describe the structure
+ *     of the organization".
+ */
 export interface ClarifyQuestionEnvelope {
   kind: 'clarify_question';
   understanding: string;
   unknowns: string[];
   question: string;
+  input_kind: 'options' | 'freetext';
+  /** Non-empty when input_kind='options'; ignored otherwise. */
   options: PlanningQuestionOption[];
+  /** Optional placeholder shown in the free-text input (when input_kind is
+   *  'freetext' or an option with allow_details=true is selected). */
+  placeholder?: string;
 }
 
 /** Clarify: planner is confident it understands; decides whether research is needed. */
@@ -121,6 +140,7 @@ export function parsePlanningEnvelope(text: string): ParseEnvelopeResult {
         understanding: '',
         unknowns: [],
         question: raw.question,
+        input_kind: 'options',
         options: normalizeOptions(raw.options),
       },
       raw,
@@ -138,6 +158,23 @@ export function parsePlanningEnvelope(text: string): ParseEnvelopeResult {
     const unknowns = Array.isArray(raw.unknowns)
       ? raw.unknowns.filter((u): u is string => typeof u === 'string')
       : [];
+    const placeholder = typeof raw.placeholder === 'string' ? raw.placeholder : undefined;
+
+    // New free-text clarify shape: { phase:'clarify', question, input_kind:'freetext' }
+    if (raw.input_kind === 'freetext' && typeof raw.question === 'string') {
+      return {
+        envelope: {
+          kind: 'clarify_question',
+          understanding,
+          unknowns,
+          question: raw.question,
+          input_kind: 'freetext',
+          options: [],
+          placeholder,
+        },
+        raw,
+      };
+    }
 
     if (typeof raw.question === 'string' && Array.isArray(raw.options)) {
       return {
@@ -146,7 +183,9 @@ export function parsePlanningEnvelope(text: string): ParseEnvelopeResult {
           understanding,
           unknowns,
           question: raw.question,
+          input_kind: 'options',
           options: normalizeOptions(raw.options),
+          placeholder,
         },
         raw,
       };
@@ -195,7 +234,16 @@ function normalizeOptions(input: unknown[]): PlanningQuestionOption[] {
   const out: PlanningQuestionOption[] = [];
   for (const item of input) {
     if (isRecord(item) && typeof item.id === 'string' && typeof item.label === 'string') {
-      out.push({ id: item.id, label: item.label });
+      const opt: PlanningQuestionOption = { id: item.id, label: item.label };
+      // Treat a literal "Other" label as allow_details by default so the
+      // legacy prompt shape keeps its free-text escape hatch working even
+      // without the new flag.
+      const isOtherByConvention =
+        item.id === 'other' || item.label.toLowerCase() === 'other';
+      if (item.allow_details === true || (isOtherByConvention && item.allow_details !== false)) {
+        opt.allow_details = true;
+      }
+      out.push(opt);
     }
   }
   return out;
