@@ -48,7 +48,14 @@ export async function GET(
     // single-phase flows still work — parsePlanningEnvelope handles the old
     // { question, options } and { status: 'complete', spec } shapes.
     const lastAssistantMessage = [...messages].reverse().find((m: { role: string }) => m.role === 'assistant');
-    let currentQuestion: { question: string; options: Array<{ id: string; label: string }>; understanding?: string; unknowns?: string[] } | null = null;
+    let currentQuestion: {
+      question: string;
+      input_kind: 'options' | 'freetext';
+      options: Array<{ id: string; label: string; allow_details?: boolean }>;
+      placeholder?: string;
+      understanding?: string;
+      unknowns?: string[];
+    } | null = null;
     let clarifyDone: { understanding: string; unknowns: string[]; needs_research: boolean; research_rationale?: string } | null = null;
 
     if (lastAssistantMessage) {
@@ -56,7 +63,9 @@ export async function GET(
       if (envelope?.kind === 'clarify_question') {
         currentQuestion = {
           question: envelope.question,
+          input_kind: envelope.input_kind,
           options: envelope.options,
+          placeholder: envelope.placeholder,
           understanding: envelope.understanding,
           unknowns: envelope.unknowns,
         };

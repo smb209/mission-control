@@ -6,11 +6,18 @@ import { CheckCircle, Circle, Lock, AlertCircle, Loader2, X } from 'lucide-react
 interface PlanningOption {
   id: string;
   label: string;
+  /** When true, selecting this option reveals a free-text clarifier input so
+   *  the user can add nuance alongside the choice (e.g. "Other: we use
+   *  DocuSign" or "Option B, but with X"). */
+  allow_details?: boolean;
 }
 
 interface PlanningQuestion {
   question: string;
+  /** 'options' → multiple choice. 'freetext' → textarea only (no options). */
+  input_kind?: 'options' | 'freetext';
   options: PlanningOption[];
+  placeholder?: string;
 }
 
 interface PlanningMessage {
@@ -312,17 +319,36 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
 
   // Submit answer
   const submitAnswer = async () => {
-    if (!selectedOption) return;
+    const q = state?.currentQuestion;
+    const isFreetext = q?.input_kind === 'freetext';
+
+    // Guard: freetext requires non-empty text; options require a selection.
+    if (isFreetext ? !otherText.trim() : !selectedOption) return;
+
+    // When the selected option declared allow_details, the clarifier text is
+    // required (same UX as the legacy "Other" field — empty is nonsensical).
+    const selectedOpt = q?.options.find((o) => o.label === selectedOption);
+    const needsClarifier = !!selectedOpt?.allow_details;
+    if (needsClarifier && !otherText.trim()) return;
 
     setSubmitting(true);
     setIsSubmittingAnswer(true); // Show submitting state in UI
     setError(null);
 
-    // Store submission for retry
-    const submission = {
-      answer: selectedOption?.toLowerCase() === 'other' ? 'other' : selectedOption,
-      otherText: selectedOption?.toLowerCase() === 'other' ? otherText : undefined,
-    };
+    // Build submission payload. The /answer route treats answer='other' as
+    // the text-only form and sends "Other: {otherText}" to the planner. For
+    // the new allow_details flow we reuse that branch — "SelectedLabel: text"
+    // reads naturally in the planner's chat history. Freetext sends just the
+    // typed text with a generic 'other' answer so the existing server logic
+    // composes the final message.
+    let submission: { answer: string; otherText?: string };
+    if (isFreetext) {
+      submission = { answer: 'other', otherText: otherText.trim() };
+    } else if (needsClarifier) {
+      submission = { answer: 'other', otherText: `${selectedOption}: ${otherText.trim()}` };
+    } else {
+      submission = { answer: selectedOption! };
+    }
     lastSubmissionRef.current = submission;
 
     try {
@@ -725,55 +751,86 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
               {state.currentQuestion.question}
             </h3>
 
-            <div className="space-y-3">
-              {state.currentQuestion.options.map((option) => {
-                const isSelected = selectedOption === option.label;
-                const isOther = option.id === 'other' || option.label.toLowerCase() === 'other';
-                const isThisOptionSubmitting = isSubmittingAnswer && isSelected;
+            {state.currentQuestion.input_kind === 'freetext' ? (
+              // Freetext shape: no options, just a textarea. Planner used
+              // this when the answer space was too broad for multiple choice.
+              <div>
+                <textarea
+                  value={otherText}
+                  onChange={(e) => setOtherText(e.target.value)}
+                  placeholder={state.currentQuestion.placeholder || 'Type your answer…'}
+                  rows={5}
+                  className="w-full bg-mc-bg border border-mc-border rounded-lg px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
+                  disabled={submitting}
+                  autoFocus
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {state.currentQuestion.options.map((option) => {
+                  const isSelected = selectedOption === option.label;
+                  // The planner can opt any option into a clarifier input by
+                  // setting allow_details:true. We also treat a literal
+                  // "Other" as allow_details so legacy envelopes keep working.
+                  const isOtherByConvention =
+                    option.id === 'other' || option.label.toLowerCase() === 'other';
+                  const showClarifier = !!option.allow_details || isOtherByConvention;
+                  const isThisOptionSubmitting = isSubmittingAnswer && isSelected;
 
-                return (
-                  <div key={option.id}>
-                    <button
-                      onClick={() => setSelectedOption(option.label)}
-                      disabled={submitting}
-                      className={`w-full flex items-center gap-3 p-4 rounded-lg border transition-all text-left ${
-                        isThisOptionSubmitting
-                          ? 'border-mc-accent bg-mc-accent/20'
-                          : isSelected
-                          ? 'border-mc-accent bg-mc-accent/10'
-                          : 'border-mc-border hover:border-mc-accent/50'
-                      } disabled:opacity-50`}
-                    >
-                      <span className={`w-8 h-8 rounded flex items-center justify-center text-sm font-bold ${
-                        isSelected ? 'bg-mc-accent text-mc-bg' : 'bg-mc-bg-tertiary'
-                      }`}>
-                        {option.id.toUpperCase()}
-                      </span>
-                      <span className="flex-1">{option.label}</span>
-                      {isThisOptionSubmitting ? (
-                        <Loader2 className="w-5 h-5 text-mc-accent animate-spin" />
-                      ) : isSelected && !submitting ? (
-                        <CheckCircle className="w-5 h-5 text-mc-accent" />
-                      ) : null}
-                    </button>
+                  return (
+                    <div key={option.id}>
+                      <button
+                        onClick={() => {
+                          setSelectedOption(option.label);
+                          // Clear stale clarifier when switching between
+                          // allow_details options so we don't send old text.
+                          setOtherText('');
+                        }}
+                        disabled={submitting}
+                        className={`w-full flex items-center gap-3 p-4 rounded-lg border transition-all text-left ${
+                          isThisOptionSubmitting
+                            ? 'border-mc-accent bg-mc-accent/20'
+                            : isSelected
+                            ? 'border-mc-accent bg-mc-accent/10'
+                            : 'border-mc-border hover:border-mc-accent/50'
+                        } disabled:opacity-50`}
+                      >
+                        <span className={`w-8 h-8 rounded flex items-center justify-center text-sm font-bold ${
+                          isSelected ? 'bg-mc-accent text-mc-bg' : 'bg-mc-bg-tertiary'
+                        }`}>
+                          {option.id.toUpperCase()}
+                        </span>
+                        <span className="flex-1">{option.label}</span>
+                        {isThisOptionSubmitting ? (
+                          <Loader2 className="w-5 h-5 text-mc-accent animate-spin" />
+                        ) : isSelected && !submitting ? (
+                          <CheckCircle className="w-5 h-5 text-mc-accent" />
+                        ) : null}
+                      </button>
 
-                    {/* Other text input */}
-                    {isOther && isSelected && (
-                      <div className="mt-2 ml-11">
-                        <input
-                          type="text"
-                          value={otherText}
-                          onChange={(e) => setOtherText(e.target.value)}
-                          placeholder="Please specify..."
-                          className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
-                          disabled={submitting}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      {/* Clarifier text input — shown when the selected
+                          option opted in via allow_details (or it's "Other"). */}
+                      {showClarifier && isSelected && (
+                        <div className="mt-2 ml-11">
+                          <input
+                            type="text"
+                            value={otherText}
+                            onChange={(e) => setOtherText(e.target.value)}
+                            placeholder={
+                              state.currentQuestion?.placeholder ||
+                              (isOtherByConvention ? 'Please specify…' : 'Add details…')
+                            }
+                            className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
+                            disabled={submitting}
+                            autoFocus
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {error && (
               <div
@@ -813,9 +870,20 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
 
             {/* Submit button */}
             <div className="mt-6">
+              {(() => {
+                const q = state.currentQuestion;
+                const isFreetext = q?.input_kind === 'freetext';
+                const selectedOpt = q?.options.find((o) => o.label === selectedOption);
+                const isOtherByConvention =
+                  !!selectedOpt && (selectedOpt.id === 'other' || selectedOpt.label.toLowerCase() === 'other');
+                const needsClarifier = !!selectedOpt?.allow_details || isOtherByConvention;
+                const canSubmit = isFreetext
+                  ? otherText.trim().length > 0
+                  : !!selectedOption && (!needsClarifier || otherText.trim().length > 0);
+                return (
               <button
                 onClick={submitAnswer}
-                disabled={!selectedOption || submitting || (selectedOption === 'Other' && !otherText.trim())}
+                disabled={!canSubmit || submitting}
                 className="w-full px-6 py-3 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {submitting ? (
@@ -827,6 +895,8 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                   'Continue →'
                 )}
               </button>
+                );
+              })()}
 
               {/* Waiting indicator after submit */}
               {isSubmittingAnswer && !submitting && (

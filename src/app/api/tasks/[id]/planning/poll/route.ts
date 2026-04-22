@@ -121,7 +121,14 @@ export async function GET(
 
     if (openclawMessages.length > initialAssistantCount) {
       let currentQuestion:
-        | { question: string; options: Array<{ id: string; label: string }>; understanding?: string; unknowns?: string[] }
+        | {
+            question: string;
+            input_kind: 'options' | 'freetext';
+            options: Array<{ id: string; label: string; allow_details?: boolean }>;
+            placeholder?: string;
+            understanding?: string;
+            unknowns?: string[];
+          }
         | null = null;
       let clarifyDone:
         | { understanding: string; unknowns: string[]; needs_research: boolean; research_rationale?: string }
@@ -149,9 +156,16 @@ export async function GET(
           case 'clarify_question':
             currentQuestion = {
               question: envelope.question,
-              options: envelope.options.length
+              input_kind: envelope.input_kind,
+              // Freetext questions carry no options — pass through as-is.
+              // For options shape, backfill an Other fallback if the planner
+              // forgot (keeps the user from getting stuck with no escape).
+              options: envelope.input_kind === 'freetext'
+                ? []
+                : envelope.options.length
                 ? envelope.options
-                : [{ id: 'continue', label: 'Continue' }, { id: 'other', label: 'Other' }],
+                : [{ id: 'continue', label: 'Continue' }, { id: 'other', label: 'Other', allow_details: true }],
+              placeholder: envelope.placeholder,
               understanding: envelope.understanding,
               unknowns: envelope.unknowns,
             };
