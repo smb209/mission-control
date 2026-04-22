@@ -6,9 +6,15 @@ export const dynamic = 'force-dynamic';
 
 /**
  * DELETE /api/agents/local — wipe every agent that was NOT synced from the
- * OpenClaw Gateway (i.e. gateway_agent_id IS NULL). Used as a reset step
- * when the local catalog drifts or accumulates manual test agents. Only
- * affects rows in the Mission Control DB — the Gateway itself is untouched.
+ * OpenClaw Gateway. Used as a reset step when the local catalog drifts or
+ * accumulates manual/test agents. Only affects rows in the Mission Control
+ * DB — the Gateway itself is untouched.
+ *
+ * We classify by `source` (the authoritative column set at creation), not
+ * `gateway_agent_id`. Test fixtures and older code sometimes set a fake
+ * `gateway_agent_id` string on a locally-created agent — those rows still
+ * show `source='local'` and should be wiped here, which is what the UI's
+ * GW badge does (hides it unless source='gateway').
  *
  * Cleans up FK-referencing rows in the same transaction so the FK pragma
  * doesn't block the delete.
@@ -16,7 +22,7 @@ export const dynamic = 'force-dynamic';
 export async function DELETE() {
   try {
     const targets = queryAll<{ id: string; name: string }>(
-      `SELECT id, name FROM agents WHERE gateway_agent_id IS NULL`
+      `SELECT id, name FROM agents WHERE source != 'gateway' OR source IS NULL`
     );
 
     if (targets.length === 0) {
