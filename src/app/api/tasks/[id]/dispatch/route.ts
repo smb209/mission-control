@@ -411,11 +411,17 @@ their persona, memory, and channel bindings.
         ? `  -H "Authorization: Bearer ${mcAuthToken}" \\\n`
         : '';
 
-    // MCP pilot switch (PR 4). When enabled globally AND this agent's
-    // gateway id is in the per-host pilot allowlist, emit a short
-    // MCP-oriented completion block instead of the curl scaffolding.
-    // MC_MCP_PILOT_AGENTS is a comma-separated list of gateway ids (e.g.
-    // "mc-writer"); "*" or "all" pilots every gateway agent (used by PR 5).
+    // MCP switch. MC_MCP_ENABLED=1 routes every gateway agent through the
+    // MCP completion path. MC_MCP_PILOT_AGENTS stays as an optional
+    // narrowing override for staged rollouts: when set to a non-empty
+    // comma-separated list of gateway ids, only those agents get MCP.
+    // When unset or set to "*"/"all", all gateway agents match.
+    //
+    // Semantics changed in PR 5: previously an empty MC_MCP_PILOT_AGENTS
+    // meant "no agents piloted" (conservative PR-4 behaviour). After PR 5
+    // the default is "all agents" — the operator flips MC_MCP_ENABLED and
+    // every gateway agent is on MCP. PR 6 removes the curl path entirely.
+    //
     // Non-gateway agents always fall through to the curl path — they have
     // no MC-CONTEXT.json and their openclaw wiring doesn't include the
     // sc-mission-control launcher.
@@ -426,7 +432,9 @@ their persona, memory, and channel bindings.
       .map((s) => s.trim())
       .filter(Boolean);
     const pilotAllowsAll =
-      pilotAllowlist.includes('*') || pilotAllowlist.includes('all');
+      pilotAllowlist.length === 0 ||
+      pilotAllowlist.includes('*') ||
+      pilotAllowlist.includes('all');
     const isMcpPilot =
       mcpEnabled &&
       Boolean(gatewayIdForContext) &&
