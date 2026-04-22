@@ -411,23 +411,195 @@ their persona, memory, and channel bindings.
         ? `  -H "Authorization: Bearer ${mcAuthToken}" \\\n`
         : '';
 
+    // MCP pilot switch (PR 4). When enabled globally AND this agent's
+    // gateway id is in the per-host pilot allowlist, emit a short
+    // MCP-oriented completion block instead of the curl scaffolding.
+    // MC_MCP_PILOT_AGENTS is a comma-separated list of gateway ids (e.g.
+    // "mc-writer"); "*" or "all" pilots every gateway agent (used by PR 5).
+    // Non-gateway agents always fall through to the curl path — they have
+    // no MC-CONTEXT.json and their openclaw wiring doesn't include the
+    // sc-mission-control launcher.
+    const mcpEnabled =
+      process.env.MC_MCP_ENABLED === '1' || process.env.MC_MCP_ENABLED === 'true';
+    const pilotAllowlist = (process.env.MC_MCP_PILOT_AGENTS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const pilotAllowsAll =
+      pilotAllowlist.includes('*') || pilotAllowlist.includes('all');
+    const isMcpPilot =
+      mcpEnabled &&
+      Boolean(gatewayIdForContext) &&
+      (pilotAllowsAll || pilotAllowlist.includes(gatewayIdForContext));
+
     // Banner appended near the top of the dispatch message so agents always
     // see (a) where their call-home credentials live and (b) the hard rule
     // that MC's database is off-limits. Only shown for gateway agents (the
     // only ones with workspaces on disk to read from).
-    const callHomeSection = mcContextPath
-      ? `\n---
+    const callHomeSection = !mcContextPath
+      ? ''
+      : isMcpPilot
+        ? `\n---
+**🔒 CALL-HOME: use the \`sc-mission-control\` MCP tools**
+
+Your openclaw allowlist has the \`sc-mission-control\` tool server. Prefer these tools over curl for every MC interaction:
+
+| When you want to... | Call tool |
+|---|---|
+| Learn your own \`agent_id\` + peers | \`whoami({ agent_id: … })\` — but see below |
+| Register a deliverable | \`register_deliverable(...)\` |
+| Log a progress / completion note | \`log_activity(...)\` |
+| Move the task to the next stage | \`update_task_status(...)\` |
+| Fail a stage (tester/reviewer) | \`fail_task(...)\` |
+| Save a checkpoint | \`save_checkpoint(...)\` |
+| Mail a peer | \`send_mail(...)\` (use \`list_peers\` to find ids) |
+| Delegate a slice (coordinator) | \`delegate(...)\` — auto-logs the audit activity |
+
+Every state-changing tool takes \`agent_id\` as the first argument. **Your \`agent_id\` is:** \`${agent.id}\`  \\
+Your \`gateway_id\` is: \`${gatewayIdForContext}\`  \\
+Task id: \`${task.id}\`
+
+Read \`${mcContextPath}\` if you need other identity fields. **Never read \`~/docker/mission-control/data/*.db\`** — MC state is reachable only via these tools.
+
+If a tool returns a 503-shaped error ("MCP endpoint is disabled"), the operator has turned off MC_MCP_ENABLED. Fall back to the curl scaffolding at the bottom of this message.
+`
+        : `\n---
 **🔒 CALL-HOME CONTEXT** — your MC identity + bearer token live on disk at:
   \`${mcContextPath}\`
 
 Every \`curl\` below pulls the token via \`jq\` substitution. The file also holds \`mc_url\`, \`my_agent_id\`, and a \`peer_agent_ids\` map. Read it with \`cat\` if you need any of those values — do not embed them from the dispatch message (they rotate).
 
 **⚠️ Never read \`~/docker/mission-control/data/mission-control.db\` or any other MC-internal file.** Mission Control's state is ONLY reachable via the HTTP endpoints below. Agents that query the DB directly get stale data and bypass every evidence gate. If you need a value you can't find, mail the Coordinator via the mailbox endpoint.
-`
-      : '';
+`;
+
+    // Capture non-null ids once — TS's flow analysis narrows `agent` and
+    // `task` above but doesn't carry that narrowing into the closure below.
+    const agentId = agent.id;
+    const taskIdForMcp = task.id;
+    // Build MCP-oriented completion instructions for pilot agents. These
+    // preserve the role-specific *domain* guidance (checklists, pass/fail
+    // criteria) but swap curl for tool calls. When MCP tools fail, the
+    // agent can fall through to the existing curl scaffolding below —
+    // that's the "defence in depth" during pilot.
+    function buildMcpCompletionInstructions(): string {
+      const deliverableExampleIds =
+        normalizedSpec && normalizedSpec.deliverables.length > 0
+          ? normalizedSpec.deliverables.map((d) => `\`${d.id}\``).join(', ')
+          : '(no structured spec — one deliverable call is enough)';
+
+      if (isCoordinator) {
+        return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`delegate\` MCP tool.
+
+**Per peer, call once:**
+\`\`\`
+delegate({
+  agent_id: "${agentId}",
+  task_id: "${taskIdForMcp}",
+  peer_gateway_id: "<mc-researcher | mc-writer | …>",
+  slice: "<one-line summary of what this peer owns>",
+  message: "You are the <role> for this task.\\n\\n<context + success criteria>",
+  timeout_seconds: 0   // fire-and-forget for parallel fan-out
+})
+\`\`\`
+
+\`delegate\` atomically invokes openclaw's \`sessions.send\` AND logs the \`[DELEGATION]\` audit activity for you — no separate sessions_send / activity calls needed. The coordinator-audit scanner reads the activity it writes.
+
+**When all peers have reported back:**
+\`\`\`
+register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
+update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+\`\`\`
+
+Reply with \`TASK_COMPLETE: [one line per delegated peer]\`.`;
+      }
+
+      if (isBuilder) {
+        const hasStructuredSpec = Boolean(
+          normalizedSpec && normalizedSpec.deliverables.length > 0,
+        );
+        const deliverablesStep = hasStructuredSpec
+          ? `**Step 1 — produce every deliverable in the checklist.** For each spec id (${deliverableExampleIds}), call \`register_deliverable\` with its \`spec_deliverable_id\`:
+
+\`\`\`
+register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "<path>", spec_deliverable_id: "<id>" })
+\`\`\``
+          : `**Step 1 — produce and register the deliverable(s).**
+
+\`\`\`
+register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
+\`\`\``;
+
+        return `**✅ DEFINITION OF DONE** — every deliverable registered, completion logged, status moved.
+
+${deliverablesStep}
+
+**Step 2 — log completion:**
+\`\`\`
+log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "<what you built, one line>" })
+\`\`\`
+
+**Step 3 — transition the task:**
+\`\`\`
+update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+\`\`\`
+
+If \`update_task_status\` returns \`evidence_gate\` with \`missing_deliverable_ids\`, you didn't register enough — produce the missing ones and retry. Do NOT try to force the transition.
+
+Reply with \`TASK_COMPLETE: [deliverables registered]\`.`;
+      }
+
+      if (isTester) {
+        const hasCriteria = Boolean(
+          normalizedSpec && normalizedSpec.success_criteria.length > 0,
+        );
+        return `**YOUR ROLE: TESTER** — Verify each success criterion.${
+          hasCriteria
+            ? `\n\n${normalizedSpec!.success_criteria.length} criteria to check. For each, run its \`how_to_test\` and record pass/fail.`
+            : `\n\nNo structured criteria — review against the spec using your judgment.`
+        }
+
+**On PASS (all criteria):**
+\`\`\`
+log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "All criteria passed: [<sc-1> ok; <sc-2> ok; …]" })
+update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+\`\`\`
+
+**On FAIL (any criterion):**
+\`\`\`
+fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
+\`\`\`
+
+Reply with \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed by criterion id]\`.`;
+      }
+
+      if (isVerifier) {
+        return `**YOUR ROLE: VERIFIER** — Verify the work meets quality standards.
+
+**On PASS:**
+\`\`\`
+log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "Verification passed: <summary; criteria verified: [<ids>]>" })
+update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+\`\`\`
+
+**On FAIL:**
+\`\`\`
+fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
+\`\`\`
+
+Reply with \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed by criterion id]\`.`;
+      }
+
+      // Fallback for unknown roles
+      return `**When your work is done:**
+\`\`\`
+update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+\`\`\``;
+    }
 
     let completionInstructions: string;
-    if (isCoordinator) {
+    if (isMcpPilot) {
+      completionInstructions = buildMcpCompletionInstructions();
+    } else if (isCoordinator) {
       // This prompt is the response to a specific failure mode observed on
       // task cc3d40e1 (2026-04-20): the Coordinator posted one umbrella
       // "Delegated parallel research+write+review to 3 agents" activity
