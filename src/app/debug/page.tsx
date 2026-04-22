@@ -479,6 +479,34 @@ function DebugEventRow({
 
   const hasError = Boolean(event.error);
 
+  // Per-type subject surfaced in the row header. Picks the single most
+  // useful identifier for that event type so operators can scan the list
+  // without expanding:
+  //   mcp.tool_call      → tool name (from metadata.tool_name)
+  //   gateway.rpc        → RPC method name (from request_body.method)
+  //   chat.send          → nothing extra (event_type is enough)
+  //   chat.response      → runId tail (from response_body.runId)
+  //   autopilot.*        → llm model or cycle_id
+  //   stall.flagged      → minutes_idle (from metadata.minutes_idle)
+  //   diagnostic.step    → step name (from metadata.step)
+  const subject = useMemo(() => pickSubject(event), [event]);
+
+  // Session key tail — the full key is often a 60+ char session uuid and
+  // not scannable. We show the last 14 chars + ellipsis prefix.
+  const sessionTail = useMemo(() => {
+    if (!event.session_key) return null;
+    const k = event.session_key;
+    return k.length > 16 ? `…${k.slice(-14)}` : k;
+  }, [event.session_key]);
+
+  // Error snippet — first 40 chars so a glance can distinguish 401 vs
+  // evidence_gate vs timeout without opening the row.
+  const errorSnippet = useMemo(() => {
+    if (!event.error) return null;
+    const one = event.error.replace(/\s+/g, ' ').trim();
+    return one.length > 48 ? one.slice(0, 45) + '…' : one;
+  }, [event.error]);
+
   return (
     <div className={`rounded-lg border ${hasError ? 'border-red-500/40 bg-red-500/5' : 'border-mc-border bg-mc-bg-secondary'}`}>
       <button
@@ -490,11 +518,24 @@ function DebugEventRow({
           {directionBadge.label}
         </span>
         <span className="font-mono text-sm shrink-0">{event.event_type}</span>
+        {subject && (
+          <span
+            className="font-mono text-xs px-1.5 py-0.5 rounded-sm border border-mc-accent/40 bg-mc-accent/10 text-mc-accent shrink-0 max-w-[36ch] truncate"
+            title={subject.full}
+          >
+            {subject.kind}:{subject.display}
+          </span>
+        )}
         <span className="text-xs text-mc-text-secondary truncate flex-1">
           {event.task_id && <span className="mr-3">task={event.task_id.slice(0, 8)}</span>}
           {event.agent_id && <span className="mr-3">agent={event.agent_id.slice(0, 8)}</span>}
+          {sessionTail && (
+            <span className="mr-3" title={event.session_key || ''}>
+              sess={sessionTail}
+            </span>
+          )}
           {event.duration_ms != null && <span className="mr-3">{event.duration_ms}ms</span>}
-          {hasError && <span className="text-red-300">error</span>}
+          {errorSnippet && <span className="text-red-300">✗ {errorSnippet}</span>}
         </span>
         <span className="text-[11px] text-mc-text-secondary/70 shrink-0">
           {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
@@ -553,4 +594,63 @@ function prettyJson(value: string | null): string {
   } catch {
     return value;
   }
+}
+
+/**
+ * Extract a per-event-type "subject" to surface in the row header — the
+ * single field that disambiguates similar rows without requiring an
+ * expand. Returns null when nothing useful stands out (e.g. plain
+ * chat.send where event_type already says everything).
+ *
+ * `display` is shown; `full` goes into the title attribute for hover.
+ */
+function pickSubject(event: DebugEvent): { kind: string; display: string; full: string } | null {
+  const parseJson = (s: string | null): unknown => {
+    if (!s) return null;
+    try { return JSON.parse(s); } catch { return null; }
+  };
+
+  // metadata-driven subjects
+  const meta = parseJson(event.metadata) as Record<string, unknown> | null;
+
+  if (event.event_type === 'mcp.tool_call' && meta && typeof meta.tool_name === 'string') {
+    return { kind: 'tool', display: meta.tool_name, full: meta.tool_name };
+  }
+
+  if (event.event_type === 'gateway.rpc') {
+    // gateway.rpc stores the method in request_body as JSON-RPC.
+    const body = parseJson(event.request_body) as Record<string, unknown> | null;
+    const method = typeof body?.method === 'string' ? body.method : null;
+    if (method) return { kind: 'rpc', display: method, full: method };
+  }
+
+  if (event.event_type === 'chat.response') {
+    const body = parseJson(event.response_body) as Record<string, unknown> | null;
+    const runId = typeof body?.runId === 'string' ? body.runId : null;
+    if (runId) {
+      const tail = runId.length > 12 ? `…${runId.slice(-10)}` : runId;
+      return { kind: 'run', display: tail, full: runId };
+    }
+  }
+
+  if (event.event_type === 'stall.flagged' && meta && typeof meta.minutes_idle === 'number') {
+    const m = meta.minutes_idle;
+    return { kind: 'idle', display: `${m}m`, full: `idle ${m} minutes` };
+  }
+
+  if (event.event_type === 'diagnostic.step' && meta && typeof meta.step === 'string') {
+    return { kind: 'step', display: meta.step, full: meta.step };
+  }
+
+  if (event.event_type.startsWith('autopilot.') && meta) {
+    const model = typeof meta.model === 'string' ? meta.model : null;
+    if (model) return { kind: 'model', display: model, full: model };
+    const cycleId = typeof meta.cycle_id === 'string' ? meta.cycle_id : null;
+    if (cycleId) {
+      const tail = cycleId.length > 12 ? `…${cycleId.slice(-10)}` : cycleId;
+      return { kind: 'cycle', display: tail, full: cycleId };
+    }
+  }
+
+  return null;
 }
