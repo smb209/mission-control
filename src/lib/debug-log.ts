@@ -49,7 +49,13 @@ export type DebugEventType =
   | 'autopilot.research_llm'
   | 'autopilot.ideation_llm'
   | 'autopilot.cycle_stalled'
-  | 'autopilot.cycle_aborted';
+  | 'autopilot.cycle_aborted'
+  // MCP tool invocations from the sc-mission-control MCP adapter.
+  // Captures: agent_id claimed by caller, tool name, task id (when
+  // relevant), success/error, duration. Pairs with the dispatch
+  // debug-events export so operators can see tool calls inline with
+  // chat traffic.
+  | 'mcp.tool_call';
 
 export type DebugEventDirection = 'outbound' | 'inbound' | 'internal';
 
