@@ -31,6 +31,8 @@ const EVENT_TYPE_OPTIONS: Array<{ value: '' | DebugEventType; label: string }> =
   { value: 'stall.flagged', label: '• stall.flagged' },
   { value: 'stall.cleared', label: '• stall.cleared' },
   { value: 'diagnostic.step', label: '• diagnostic.step' },
+  // MCP adapter
+  { value: 'mcp.tool_call', label: '↓ mcp.tool_call (agent → MC)' },
   // Product Autopilot
   { value: 'autopilot.research_llm', label: '↕ autopilot.research_llm' },
   { value: 'autopilot.ideation_llm', label: '↕ autopilot.ideation_llm' },
@@ -250,6 +252,14 @@ export default function DebugConsolePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              href="/debug/mcp"
+              className="min-h-11 px-3 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-1.5 text-sm"
+              title="sc-mission-control MCP adapter dashboard"
+            >
+              <Activity className="w-4 h-4" />
+              MCP
+            </Link>
             <button
               onClick={toggleCollection}
               disabled={enabled === null}
