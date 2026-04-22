@@ -28,10 +28,12 @@ export async function DELETE() {
 
     transaction(() => {
       // Required (NOT NULL) FK refs — delete dependent rows outright.
+      // Migration 032 renamed the inter-agent message table from
+      // convoy_messages to agent_mailbox (now scoped to convoy OR task).
       run(`DELETE FROM task_roles WHERE agent_id IN (${placeholders})`, ids);
       run(`DELETE FROM work_checkpoints WHERE agent_id IN (${placeholders})`, ids);
       run(
-        `DELETE FROM convoy_messages WHERE from_agent_id IN (${placeholders}) OR to_agent_id IN (${placeholders})`,
+        `DELETE FROM agent_mailbox WHERE from_agent_id IN (${placeholders}) OR to_agent_id IN (${placeholders})`,
         [...ids, ...ids]
       );
 
@@ -44,7 +46,8 @@ export async function DELETE() {
       run(`UPDATE task_activities SET agent_id = NULL WHERE agent_id IN (${placeholders})`, ids);
       run(`UPDATE knowledge_entries SET created_by_agent_id = NULL WHERE created_by_agent_id IN (${placeholders})`, ids);
       run(`UPDATE cost_events SET agent_id = NULL WHERE agent_id IN (${placeholders})`, ids);
-      run(`UPDATE conversation_messages SET sender_agent_id = NULL WHERE sender_agent_id IN (${placeholders})`, ids);
+      // The direct chat table is `messages` (schema.ts) — no conversation_messages table exists.
+      run(`UPDATE messages SET sender_agent_id = NULL WHERE sender_agent_id IN (${placeholders})`, ids);
 
       // Some columns are declared in the schema but may not exist in every
       // running DB (migrations are additive). Guard with try/catch so a
