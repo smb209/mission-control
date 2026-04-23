@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
 import { updateConvoyProgress, checkConvoyCompletion, dispatchReadyConvoySubtasks } from '@/lib/convoy';
@@ -364,29 +364,11 @@ export async function PATCH(
       });
 
       if (!workflowResult.handedOff) {
-        // No workflow template or no role for this stage — fall back to legacy dispatch
-        const missionControlUrl = getMissionControlUrl();
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (process.env.MC_API_TOKEN) {
-          headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-        }
-
-        try {
-          const dispatchRes = await fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
-            method: 'POST',
-            headers,
-            signal: AbortSignal.timeout(30_000),
-          });
-
-          if (!dispatchRes.ok) {
-            const errorText = await dispatchRes.text();
-            const dispatchError = `Auto-dispatch failed (${dispatchRes.status}): ${errorText}`;
-            console.error(dispatchError);
-            run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [dispatchError, now, id]);
-          }
-        } catch (err) {
-          const dispatchError = `Auto-dispatch error: ${(err as Error).message}`;
-          console.error(dispatchError);
+        // No workflow template or no role for this stage — legacy loopback
+        // dispatch via the shared helper (127.0.0.1:${PORT}, 120s, rich cause).
+        const result = await internalDispatch(id, { caller: 'task-patch-auto' });
+        if (!result.success) {
+          const dispatchError = `Auto-dispatch error: ${result.error || 'unknown'}`;
           run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [dispatchError, now, id]);
         }
       }
@@ -429,25 +411,9 @@ export async function PATCH(
       // Clear any previous dispatch error
       run('UPDATE tasks SET planning_dispatch_error = NULL, updated_at = ? WHERE id = ?', [now, id]);
 
-      const missionControlUrl = getMissionControlUrl();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (process.env.MC_API_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-      }
-      try {
-        const dispatchRes = await fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
-          method: 'POST',
-          headers,
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (!dispatchRes.ok) {
-          const errorText = await dispatchRes.text();
-          console.error(`[PATCH] Workflow stage dispatch failed: ${errorText}`);
-          run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [`Dispatch failed (${dispatchRes.status}): ${errorText}`, now, id]);
-        }
-      } catch (err) {
-        console.error('[PATCH] Workflow stage dispatch error:', err);
-        run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [`Dispatch error: ${(err as Error).message}`, now, id]);
+      const result = await internalDispatch(id, { caller: 'task-patch-workflow' });
+      if (!result.success) {
+        run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [`Dispatch error: ${result.error || 'unknown'}`, now, id]);
       }
       // Re-broadcast with latest state
       const refreshed = queryOne<Task>(
