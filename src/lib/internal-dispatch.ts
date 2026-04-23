@@ -20,7 +20,21 @@
  *   unwrap it so the surfaced error is actionable.
  */
 
-import { getMissionControlUrl } from './config';
+/**
+ * Resolve the URL to loopback-fetch the dispatch endpoint.
+ *
+ * `MISSION_CONTROL_URL` is the PUBLIC URL (what browsers use) — in Docker
+ * that's the host-mapped port, which is unreachable from inside the
+ * container ("localhost:4001" when the container itself only listens on
+ * 4000). For server-side loopback we need the CONTAINER/process's own bind
+ * address, which is always `127.0.0.1:${PORT}`. Env var
+ * `INTERNAL_DISPATCH_URL` can override if the deployment is weird.
+ */
+function resolveInternalDispatchBaseUrl(): string {
+  if (process.env.INTERNAL_DISPATCH_URL) return process.env.INTERNAL_DISPATCH_URL;
+  const port = process.env.PORT || '4000';
+  return `http://127.0.0.1:${port}`;
+}
 
 /** Structured dispatch result. `error` is a human-readable string with the
  *  underlying cause appended when present (e.g. "fetch failed (AbortError:
@@ -47,13 +61,11 @@ export async function internalDispatch(
   const caller = opts.caller || 'unknown';
   const timeoutMs = opts.timeoutMs ?? 120_000;
 
-  // Coerce localhost → 127.0.0.1 to dodge IPv4/IPv6 binding mismatches.
-  const rawUrl = getMissionControlUrl();
-  const missionControlUrl = rawUrl.replace(
-    /^(https?:\/\/)localhost(?=[:/]|$)/i,
-    '$1127.0.0.1'
-  );
-  const url = `${missionControlUrl}/api/tasks/${taskId}/dispatch`;
+  // Use the server's own bind address (127.0.0.1:${PORT}) rather than the
+  // public MISSION_CONTROL_URL, because in Docker MCU points at the HOST
+  // port which is unreachable from inside the container.
+  const baseUrl = resolveInternalDispatchBaseUrl();
+  const url = `${baseUrl}/api/tasks/${taskId}/dispatch`;
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (process.env.MC_API_TOKEN) {
@@ -61,7 +73,7 @@ export async function internalDispatch(
   }
 
   const startedAt = Date.now();
-  console.log(`[InternalDispatch:${caller}] POST ${url} (rawUrl=${rawUrl}, timeout=${timeoutMs}ms)`);
+  console.log(`[InternalDispatch:${caller}] POST ${url} (PORT=${process.env.PORT || 'unset'}, timeout=${timeoutMs}ms)`);
 
   try {
     const res = await fetch(url, {
