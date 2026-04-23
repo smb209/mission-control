@@ -2069,6 +2069,102 @@ const migrations: Migration[] = [
 
       console.log('[Migration 036] Complete.');
     }
+  },
+  {
+    id: '037',
+    name: 'coordinator_delegation_convoy',
+    up: (db) => {
+      // Substrate for agent-initiated delegation (see specs/coordinator-
+      // delegation-via-convoy-spec.md). Three changes:
+      //   (a) SLO columns on convoy_subtasks — populated by spawn_subtask,
+      //       NULL on legacy operator-created convoys.
+      //   (b) Drop the UNIQUE on convoys.parent_task_id so a parent task
+      //       may hold multiple convoys over its lifetime. Readers switch
+      //       to "latest status='active'" via getActiveConvoyForTask().
+      //   (c) Add 'agent' to the decomposition_strategy CHECK so
+      //       spawn_subtask's lazy convoys can record their origin.
+      console.log('[Migration 037] Coordinator delegation substrate (convoys + subtasks)...');
+
+      // (a) SLO columns — simple ALTERs, idempotent via PRAGMA check.
+      const subInfo = db.prepare('PRAGMA table_info(convoy_subtasks)').all() as { name: string }[];
+      const has = (col: string) => subInfo.some(c => c.name === col);
+      if (!has('slice'))                         db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN slice TEXT`);
+      if (!has('expected_deliverables'))         db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN expected_deliverables TEXT`);
+      if (!has('acceptance_criteria'))           db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN acceptance_criteria TEXT`);
+      if (!has('expected_duration_minutes'))     db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN expected_duration_minutes INTEGER`);
+      if (!has('checkin_interval_minutes'))      db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN checkin_interval_minutes INTEGER DEFAULT 15`);
+      if (!has('dispatched_at'))                 db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN dispatched_at TEXT`);
+      if (!has('due_at'))                        db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN due_at TEXT`);
+      if (!has('deliverables_registered_count')) db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN deliverables_registered_count INTEGER DEFAULT 0`);
+
+      // (b) + (c) Rewrite the convoys CREATE TABLE text via writable_schema
+      //          (same pattern as migration 036 used for tasks). We:
+      //            - drop UNIQUE on parent_task_id
+      //            - add 'agent' to decomposition_strategy CHECK
+      //          One writable_schema rewrite covers both.
+      const convoysSchema = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='convoys'`
+      ).get() as { sql: string } | undefined;
+
+      if (convoysSchema) {
+        const needsUniqueDrop   = convoysSchema.sql.includes('parent_task_id TEXT NOT NULL UNIQUE');
+        const needsStrategyAdd  = !convoysSchema.sql.includes("'agent'");
+
+        if (needsUniqueDrop || needsStrategyAdd) {
+          let patched = convoysSchema.sql;
+          if (needsUniqueDrop) {
+            patched = patched.replace(
+              'parent_task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id)',
+              'parent_task_id TEXT NOT NULL REFERENCES tasks(id)'
+            );
+          }
+          if (needsStrategyAdd) {
+            const oldCheck = `decomposition_strategy TEXT DEFAULT 'manual' CHECK (decomposition_strategy IN ('manual', 'ai', 'planning'))`;
+            const newCheck = `decomposition_strategy TEXT DEFAULT 'manual' CHECK (decomposition_strategy IN ('manual', 'ai', 'planning', 'agent'))`;
+            if (!patched.includes(oldCheck)) {
+              console.warn('[Migration 037] convoys decomposition_strategy CHECK shape unexpected; current schema:\n' + convoysSchema.sql);
+              throw new Error('[Migration 037] Unable to locate decomposition_strategy CHECK clause — refusing to patch');
+            }
+            patched = patched.replace(oldCheck, newCheck);
+          }
+
+          const escaped = patched.replace(/'/g, "''");
+          db.unsafeMode(true);
+          try {
+            db.pragma('writable_schema = ON');
+            db.exec(
+              `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='convoys'`
+            );
+            // The UNIQUE column constraint creates an implicit
+            // sqlite_autoindex_convoys_2. Dropping UNIQUE leaves it
+            // orphaned — delete that row too so the index no longer
+            // exists. Guard on presence; older fresh-DB installs may not
+            // have a _2 autoindex at all.
+            if (needsUniqueDrop) {
+              db.exec(
+                `DELETE FROM sqlite_master WHERE type='index' AND name='sqlite_autoindex_convoys_2'`
+              );
+            }
+            db.pragma('writable_schema = OFF');
+
+            const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+            const ok = integrity.length === 1 && integrity[0].integrity_check === 'ok';
+            if (!ok) {
+              throw new Error('[Migration 037] integrity_check failed after writable_schema patch: ' + JSON.stringify(integrity));
+            }
+          } finally {
+            db.unsafeMode(false);
+          }
+        }
+      }
+
+      // Replace the old per-parent index with a (parent_task_id, status)
+      // composite that makes "latest active convoy" lookups cheap.
+      db.exec(`DROP INDEX IF EXISTS idx_convoys_parent`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_convoys_parent_active ON convoys(parent_task_id, status)`);
+
+      console.log('[Migration 037] Complete.');
+    }
   }
 ];
 
