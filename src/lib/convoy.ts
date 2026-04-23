@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { notifyLearner } from '@/lib/learner';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { pickDynamicAgent } from '@/lib/task-governance';
 import type { Convoy, ConvoySubtask, Task, ConvoyStatus, DecompositionStrategy } from '@/lib/types';
 
@@ -339,12 +339,6 @@ export async function dispatchReadyConvoySubtasks(convoyId: string): Promise<Con
     return { dispatched: 0, total: allDispatchable.length, skipped: `max parallel reached (${MAX_PARALLEL_CONVOY_SUBTASKS})`, results: [] };
   }
 
-  const missionControlUrl = getMissionControlUrl();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (process.env.MC_API_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-  }
-
   const results: ConvoyDispatchResult['results'] = [];
 
   for (const subtask of dispatchable) {
@@ -368,22 +362,8 @@ export async function dispatchReadyConvoySubtasks(convoyId: string): Promise<Con
 
     run('UPDATE tasks SET status = \'assigned\', updated_at = datetime(\'now\') WHERE id = ?', [subtask.task_id]);
 
-    try {
-      const res = await fetch(`${missionControlUrl}/api/tasks/${subtask.task_id}/dispatch`, {
-        method: 'POST',
-        headers,
-        signal: AbortSignal.timeout(30_000),
-      });
-
-      if (res.ok) {
-        results.push({ taskId: subtask.task_id, success: true });
-      } else {
-        const errorText = await res.text();
-        results.push({ taskId: subtask.task_id, success: false, error: errorText });
-      }
-    } catch (err) {
-      results.push({ taskId: subtask.task_id, success: false, error: (err as Error).message });
-    }
+    const result = await internalDispatch(subtask.task_id, { caller: 'convoy-dispatch' });
+    results.push({ taskId: subtask.task_id, success: result.success, error: result.error });
   }
 
   updateConvoyProgress(convoyId);

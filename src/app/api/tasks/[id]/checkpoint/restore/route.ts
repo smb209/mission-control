@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildCheckpointContext, getLatestCheckpoint } from '@/lib/checkpoint';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { queryOne, run } from '@/lib/db';
 import type { Task } from '@/lib/types';
 
@@ -48,22 +48,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       [now, now, id]
     );
 
-    // Re-dispatch
-    const missionControlUrl = getMissionControlUrl();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (process.env.MC_API_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-    }
-
-    const res = await fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
-      method: 'POST',
-      headers,
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      return NextResponse.json({ error: `Re-dispatch failed: ${errorText}` }, { status: 503 });
+    // Re-dispatch via shared helper.
+    const result = await internalDispatch(id, { caller: 'checkpoint-restore' });
+    if (!result.success) {
+      return NextResponse.json({ error: `Re-dispatch failed: ${result.error}` }, { status: 503 });
     }
 
     return NextResponse.json({

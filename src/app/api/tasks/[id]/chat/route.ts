@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createNote, getTaskNotes, getActiveSessionForTask, markNotesDelivered } from '@/lib/task-notes';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { attachChatListener, expectReply } from '@/lib/chat-listener';
 import { queryOne } from '@/lib/db';
 import { broadcast } from '@/lib/events';
@@ -91,32 +91,15 @@ export async function POST(
     // 1. Message wasn't delivered via chat.send
     // 2. Task is in a state where dispatch makes sense (not done, not already in_progress)
     if (!delivered && ['assigned', 'inbox', 'testing', 'review', 'verification'].includes(task.status)) {
-      try {
-        const missionControlUrl = getMissionControlUrl();
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (process.env.MC_API_TOKEN) {
-          headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-        }
-
-        const dispatchRes = await fetch(`${missionControlUrl}/api/tasks/${taskId}/dispatch`, {
-          method: 'POST',
-          headers,
-          signal: AbortSignal.timeout(30_000),
-        });
-
-        if (dispatchRes.ok) {
-          delivered = true;
-          markNotesDelivered([note.id]);
-          // Track the session for reply capture
-          const freshSession = getActiveSessionForTask(taskId);
-          if (freshSession) expectReply(freshSession.sessionKey, taskId);
-          console.log(`[Chat] Message delivered via dispatch for task ${taskId}`);
-        } else {
-          const errText = await dispatchRes.text();
-          console.warn(`[Chat] Dispatch fallback failed (${dispatchRes.status}):`, errText);
-        }
-      } catch (err) {
-        console.error('[Chat] Dispatch fallback error:', err);
+      const result = await internalDispatch(taskId, { caller: 'chat-fallback' });
+      if (result.success) {
+        delivered = true;
+        markNotesDelivered([note.id]);
+        const freshSession = getActiveSessionForTask(taskId);
+        if (freshSession) expectReply(freshSession.sessionKey, taskId);
+        console.log(`[Chat] Message delivered via dispatch for task ${taskId}`);
+      } else {
+        console.warn(`[Chat] Dispatch fallback failed:`, result.error);
       }
     }
 

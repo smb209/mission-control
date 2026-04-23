@@ -30,7 +30,7 @@ import { saveKnowledge } from '@/lib/services/knowledge';
 import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask } from '@/lib/convoy';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import type { Task } from '@/lib/types';
 
 // Common shape: agent_id on every state-changing tool.
@@ -823,16 +823,6 @@ export function registerAllTools(server: McpServer): void {
         message: `[delegation_spawned] peer=${peer.name} gateway_id=${args.peer_gateway_id} child_task=${spawn.childTaskId} due_at=${spawn.dueAt} slice="${args.slice.replace(/"/g, "'")}"`,
       });
 
-      // Fire the dispatch. Same POST the convoy dispatcher uses — the
-      // peer gets the normal briefing; the Delegation Contract block is
-      // appended when the dispatch route detects a SLO-populated
-      // convoy_subtasks row (see src/app/api/tasks/[id]/dispatch/route.ts).
-      const missionControlUrl = getMissionControlUrl();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (process.env.MC_API_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-      }
-
       // Move child to 'assigned' before dispatch so the dispatch route
       // sees a valid state. The convoy dispatcher does the same.
       run(
@@ -840,19 +830,9 @@ export function registerAllTools(server: McpServer): void {
         [spawn.childTaskId],
       );
 
-      let dispatchError: string | null = null;
-      try {
-        const res = await fetch(`${missionControlUrl}/api/tasks/${spawn.childTaskId}/dispatch`, {
-          method: 'POST',
-          headers,
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (!res.ok) {
-          dispatchError = `dispatch returned ${res.status}: ${await res.text()}`;
-        }
-      } catch (err) {
-        dispatchError = (err as Error).message;
-      }
+      // Fire the dispatch via shared helper (IPv4, 120s, cause unwrap).
+      const spawnResult = await internalDispatch(spawn.childTaskId, { caller: 'mcp-spawn-subtask' });
+      const dispatchError = spawnResult.success ? null : (spawnResult.error || 'dispatch failed');
 
       if (dispatchError) {
         // The subtask row exists but dispatch failed — the coordinator

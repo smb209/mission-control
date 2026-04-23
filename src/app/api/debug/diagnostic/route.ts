@@ -8,7 +8,7 @@ import {
   logDebugEvent,
 } from '@/lib/debug-log';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import type { Agent, Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -174,29 +174,13 @@ export async function POST() {
     // (workspace isolation, catalog sync, chat.send logging). The dispatch
     // route emits its own debug events — we just report the HTTP result.
     const dispatchStart = Date.now();
-    const dispatchUrl = `${getMissionControlUrl()}/api/tasks/${taskId}/dispatch`;
-    let dispatchOk = false;
-    let dispatchDetail = '';
-    let dispatchData: Record<string, unknown> = {};
-    try {
-      // Same-origin server-side fetch has no Origin/Referer, so the
-      // middleware rejects it when MC_API_TOKEN is set. Pass the token
-      // explicitly; in dev (no token) this header is ignored.
-      const headers: Record<string, string> = {};
-      if (process.env.MC_API_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-      }
-      const res = await fetch(dispatchUrl, { method: 'POST', headers });
-      const body = await res.json().catch(() => ({}));
-      dispatchOk = res.ok;
-      dispatchDetail = res.ok
-        ? 'Task delivered to coordinator — watch the event stream for chat.send and the agent response'
-        : body?.error || `HTTP ${res.status}`;
-      dispatchData = { http_status: res.status, response: body };
-    } catch (err) {
-      dispatchDetail = (err as Error).message;
-      dispatchData = { fetch_error: dispatchDetail };
-    }
+    const result = await internalDispatch(taskId, { caller: 'debug-diagnostic' });
+    const dispatchOk = result.success;
+    const dispatchDetail = result.success
+      ? 'Task delivered to coordinator — watch the event stream for chat.send and the agent response'
+      : result.error || 'dispatch failed';
+    const dispatchData: Record<string, unknown> = { http_status: result.status, url: result.url };
+    if (result.error) dispatchData.error = result.error;
     record({
       name: 'dispatch',
       ok: dispatchOk,
