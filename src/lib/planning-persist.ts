@@ -163,7 +163,15 @@ export async function lockAndDispatch(taskId: string): Promise<{
       WHERE id = ?
     `).run(firstAgentId, taskId);
 
-    const missionControlUrl = getMissionControlUrl();
+    // Server-to-server loopback fetch: Node's undici resolves `localhost`
+    // to ::1 first, but the Next dev server typically binds IPv4 only on
+    // macOS, producing "fetch failed" with no status. Force IPv4 when the
+    // configured URL points at localhost so Lock & Dispatch doesn't break
+    // on default dev setups.
+    const missionControlUrl = getMissionControlUrl().replace(
+      /^(https?:\/\/)localhost(?=[:/]|$)/i,
+      '$1127.0.0.1'
+    );
     const dispatchUrl = `${missionControlUrl}/api/tasks/${taskId}/dispatch`;
     console.log(`[Planning Lock] Triggering dispatch: ${dispatchUrl}`);
 
@@ -176,7 +184,11 @@ export async function lockAndDispatch(taskId: string): Promise<{
       const dispatchRes = await fetch(dispatchUrl, {
         method: 'POST',
         headers: dispatchHeaders,
-        signal: AbortSignal.timeout(30_000),
+        // Dispatch is a heavyweight route (OpenClaw session creation,
+        // knowledge fetch, workspace setup, mailbox flush). In Docker it can
+        // comfortably exceed 30s — the old timeout was firing and the error
+        // surfaced as a bare "fetch failed". Give it 120s.
+        signal: AbortSignal.timeout(120_000),
       });
 
       if (!dispatchRes.ok) {
@@ -185,8 +197,15 @@ export async function lockAndDispatch(taskId: string): Promise<{
         console.error(`[Planning Lock] ${dispatchError}`);
       }
     } catch (err) {
-      dispatchError = `Dispatch error: ${(err as Error).message}`;
-      console.error(`[Planning Lock] ${dispatchError}`);
+      // "fetch failed" on its own is useless — surface the underlying cause
+      // (AbortError/TimeoutError/ECONNREFUSED/etc.) so the UI banner is
+      // actionable instead of a mystery.
+      const e = err as Error & { cause?: { code?: string; message?: string; name?: string } };
+      const cause = e.cause
+        ? ` (${e.cause.name || e.cause.code || ''}${e.cause.message ? ': ' + e.cause.message : ''})`
+        : '';
+      dispatchError = `Dispatch error: ${e.message}${cause}`;
+      console.error(`[Planning Lock] ${dispatchError}`, err);
     }
 
     if (dispatchError) {

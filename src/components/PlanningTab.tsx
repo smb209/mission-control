@@ -340,9 +340,12 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
         body: JSON.stringify({ to }),
       });
       if (res.ok) {
-        // Clear the clarify-done block so we don't re-render the advance
-        // buttons while the planner is producing its next envelope.
-        setState(prev => (prev ? { ...prev, clarifyDone: undefined, phase: to } : prev));
+        // Clear BOTH clarifyDone and researchDone so neither stale screen
+        // keeps rendering while the planner produces its next envelope.
+        // Without this, clicking "Continue to plan" from the research
+        // summary leaves the user staring at the same screen with no hint
+        // that anything is happening until the plan arrives.
+        setState(prev => (prev ? { ...prev, clarifyDone: undefined, researchDone: undefined, phase: to } : prev));
         startPolling();
       } else {
         const data = await res.json().catch(() => ({}));
@@ -1304,11 +1307,30 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                   </div>
                 </>
               ) : (
+                // Phase-aware loading copy so the user knows what the planner
+                // is doing between phases. Without this, clicking "Continue
+                // to plan" after research left a silent screen for 20+s.
                 <>
                   <Loader2 className="w-8 h-8 animate-spin text-mc-accent mx-auto mb-2" />
-                  <p className="text-mc-text-secondary">
-                    {isWaitingForResponse ? 'Waiting for response...' : 'Waiting for next question...'}
+                  <p className="text-mc-text-secondary text-sm">
+                    {(() => {
+                      switch (state?.phase) {
+                        case 'research': return '🔎 Planner is researching — using its own tools to close unknowns…';
+                        case 'plan': return '📋 Planner is drafting the plan — structured deliverables and agents…';
+                        case 'confirm': return 'Preparing plan for review…';
+                        case 'clarify':
+                        default:
+                          return isWaitingForResponse
+                            ? 'Planner is thinking…'
+                            : 'Waiting for next question…';
+                      }
+                    })()}
                   </p>
+                  {state?.phase === 'research' || state?.phase === 'plan' ? (
+                    <p className="text-mc-text-tertiary text-xs mt-2">
+                      This can take 15–90 seconds. Safe to leave the tab open.
+                    </p>
+                  ) : null}
                 </>
               )}
             </div>

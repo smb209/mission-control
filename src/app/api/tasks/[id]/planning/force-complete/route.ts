@@ -139,7 +139,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     let dispatchError: string | null = null;
 
     if (firstAgentId) {
-      const missionControlUrl = getMissionControlUrl();
+      // Force IPv4 on localhost to avoid Node undici ::1 resolution failing
+      // against Next's IPv4-only dev bind (see planning-persist.ts).
+      const missionControlUrl = getMissionControlUrl().replace(
+        /^(https?:\/\/)localhost(?=[:/]|$)/i,
+        '$1127.0.0.1'
+      );
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (process.env.MC_API_TOKEN) {
         headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
@@ -149,7 +154,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         const res = await fetch(`${missionControlUrl}/api/tasks/${taskId}/dispatch`, {
           method: 'POST',
           headers,
-          signal: AbortSignal.timeout(30_000),
+          // Matches planning-persist.ts — dispatch can exceed 30s in Docker.
+          signal: AbortSignal.timeout(120_000),
         });
 
         if (res.ok) {
