@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CheckCircle, Circle, Lock, AlertCircle, Loader2, X } from 'lucide-react';
+import { CheckCircle, Circle, Lock, AlertCircle, Loader2, X, ClipboardList } from 'lucide-react';
 
 interface PlanningOption {
   id: string;
@@ -31,6 +31,16 @@ interface PlanningState {
   sessionKey?: string;
   messages: PlanningMessage[];
   currentQuestion?: PlanningQuestion;
+  /** Planner declared clarify is done — either ready for research or ready
+   *  to plan directly. UI renders an advance-phase screen here. */
+  clarifyDone?: {
+    understanding: string;
+    unknowns: string[];
+    needs_research: boolean;
+    research_rationale?: string;
+  };
+  /** Server-side phase string, mirrors tasks.planning_phase. */
+  phase?: 'clarify' | 'research' | 'plan' | 'confirm' | 'complete';
   isComplete: boolean;
   dispatchError?: string;
   parseError?: string;
@@ -85,6 +95,10 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
   const [forceCompleting, setForceCompleting] = useState(false);
   const [noNewMessageCount, setNoNewMessageCount] = useState(0);
   const [repromptingPlanner, setRepromptingPlanner] = useState(false);
+  // Mid-flight state for the new user-gated phase transitions. 'research' /
+  // 'plan' tell us which advance button the user just clicked; 'lock' drives
+  // the Lock & Dispatch submit on the confirm screen.
+  const [advancing, setAdvancing] = useState<null | 'research' | 'plan' | 'lock'>(null);
 
   // Refs to track polling state without triggering re-renders
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -283,10 +297,76 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
 
   // Auto-start polling if planning is in progress but no question loaded yet
   useEffect(() => {
-    if (state && state.isStarted && !state.isComplete && !state.currentQuestion && !isWaitingForResponse) {
+    // Only auto-poll when we're genuinely waiting on the planner. If the
+    // planner already produced a clarify-done envelope or a plan, the UI
+    // shows an explicit advance button and should NOT keep polling (that's
+    // what triggered the stale "Planning appears stuck" banner when the
+    // planner was happily sitting at confident: true).
+    if (
+      state &&
+      state.isStarted &&
+      !state.isComplete &&
+      !state.currentQuestion &&
+      !state.clarifyDone &&
+      state.phase !== 'confirm' &&
+      !isWaitingForResponse
+    ) {
       startPolling();
     }
   }, [state, isWaitingForResponse, startPolling]);
+
+  /**
+   * User-gated phase transition. Sends an advance kickoff prompt to the
+   * planner (research or plan) and starts polling for the response.
+   */
+  const advancePhase = async (to: 'research' | 'plan') => {
+    setAdvancing(to);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/planning/advance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to }),
+      });
+      if (res.ok) {
+        // Clear the clarify-done block so we don't re-render the advance
+        // buttons while the planner is producing its next envelope.
+        setState(prev => (prev ? { ...prev, clarifyDone: undefined, phase: to } : prev));
+        startPolling();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || `Failed to advance to ${to}`);
+      }
+    } catch {
+      setError(`Failed to advance to ${to}`);
+    } finally {
+      setAdvancing(null);
+    }
+  };
+
+  /**
+   * Commit the confirm-phase spec: assigns agents, fires dispatch, moves the
+   * task out of planning. This is the one place the spec leaves the confirm
+   * gate — no other endpoint auto-dispatches anymore.
+   */
+  const lockAndDispatch = async () => {
+    setAdvancing('lock');
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/planning/lock`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        await loadState();
+        if (onSpecLocked) onSpecLocked();
+      } else {
+        setError(data.error || 'Failed to lock plan');
+      }
+    } catch {
+      setError('Failed to lock plan');
+    } finally {
+      setAdvancing(null);
+    }
+  };
 
   // Start planning session
   const startPlanning = async () => {
@@ -906,6 +986,144 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                 </div>
               )}
             </div>
+          </div>
+        ) : state?.clarifyDone ? (
+          // Clarify phase done — planner has a confident understanding and
+          // told us whether research would close remaining unknowns. Show an
+          // advance-phase screen with Start research / Continue to plan.
+          <div className="max-w-2xl mx-auto p-6">
+            <div className="mb-6">
+              <div className="flex items-center gap-2 text-mc-accent mb-2">
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-medium text-sm uppercase tracking-wide">Clarify phase complete</span>
+              </div>
+              <h3 className="text-lg font-medium mb-2">Here&apos;s what I understand</h3>
+              <p className="text-sm text-mc-text-secondary leading-relaxed">
+                {state.clarifyDone.understanding}
+              </p>
+            </div>
+
+            {state.clarifyDone.unknowns.length > 0 && (
+              <div className="mb-6 bg-mc-bg border border-mc-border rounded-lg p-4">
+                <p className="text-xs uppercase tracking-wide text-mc-text-secondary mb-2">Open unknowns</p>
+                <ul className="list-disc list-inside text-sm space-y-1">
+                  {state.clarifyDone.unknowns.map((u, i) => (
+                    <li key={i} className="text-mc-text-secondary">{u}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {state.clarifyDone.needs_research && state.clarifyDone.research_rationale && (
+              <div className="mb-6 bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                <p className="text-xs uppercase tracking-wide text-blue-300 mb-2">Why research?</p>
+                <p className="text-sm text-blue-200">{state.clarifyDone.research_rationale}</p>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-3">
+              {state.clarifyDone.needs_research && (
+                <button
+                  onClick={() => advancePhase('research')}
+                  disabled={!!advancing}
+                  className="w-full px-6 py-3 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {advancing === 'research' ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" /> Starting research…</>
+                  ) : (
+                    <>🔎 Start research</>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => advancePhase('plan')}
+                disabled={!!advancing}
+                className={`w-full px-6 py-3 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2 ${
+                  state.clarifyDone.needs_research
+                    ? 'bg-mc-bg border border-mc-border hover:border-mc-accent'
+                    : 'bg-mc-accent text-mc-bg hover:bg-mc-accent/90'
+                }`}
+              >
+                {advancing === 'plan' ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Building plan…</>
+                ) : state.clarifyDone.needs_research ? (
+                  'Skip research → go straight to plan'
+                ) : (
+                  'Continue to plan →'
+                )}
+              </button>
+            </div>
+
+            {error && (
+              <div className="mt-4 p-3 border border-red-500/30 bg-red-500/10 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
+          </div>
+        ) : state?.phase === 'confirm' && state.spec ? (
+          // Plan arrived from the planner — show the spec read-only and gate
+          // dispatch behind Lock & Dispatch. Tweak chat is a follow-up
+          // iteration; for now the user can Cancel if they want to revise.
+          <div className="max-w-2xl mx-auto p-6 space-y-4">
+            <div className="flex items-center gap-2 text-mc-accent">
+              <ClipboardList className="w-5 h-5" />
+              <span className="font-medium text-sm uppercase tracking-wide">Plan ready — review before dispatch</span>
+            </div>
+            <div className="bg-mc-bg border border-mc-border rounded-lg p-4">
+              <h3 className="font-medium mb-2">{state.spec.title}</h3>
+              <p className="text-sm text-mc-text-secondary mb-4">{state.spec.summary}</p>
+              {state.spec.deliverables?.length > 0 && (
+                <>
+                  <p className="text-xs uppercase tracking-wide text-mc-text-secondary mb-2">Deliverables</p>
+                  <ul className="list-disc list-inside text-sm space-y-1 mb-4">
+                    {state.spec.deliverables.map((d, i) => {
+                      if (typeof d === 'string') return <li key={i}>{d}</li>;
+                      return (
+                        <li key={d.id || i}>
+                          <span className="font-medium">{d.title}</span>
+                          {d.path_pattern ? <code className="ml-1 text-xs text-mc-accent">{d.path_pattern}</code> : null}
+                          {d.acceptance ? <div className="text-xs ml-5 text-mc-text-tertiary">{d.acceptance}</div> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+              {state.spec.success_criteria?.length > 0 && (
+                <>
+                  <p className="text-xs uppercase tracking-wide text-mc-text-secondary mb-2">Success criteria</p>
+                  <ul className="list-disc list-inside text-sm space-y-1">
+                    {state.spec.success_criteria.map((c, i) => {
+                      if (typeof c === 'string') return <li key={i}>{c}</li>;
+                      return (
+                        <li key={c.id || i}>
+                          <span>{c.assertion}</span>
+                          {c.how_to_test ? <div className="text-xs ml-5 text-mc-text-tertiary">Test: {c.how_to_test}</div> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+            </div>
+            <button
+              onClick={lockAndDispatch}
+              disabled={!!advancing}
+              className="w-full px-6 py-3 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {advancing === 'lock' ? (
+                <><Loader2 className="w-5 h-5 animate-spin" /> Locking &amp; dispatching…</>
+              ) : (
+                <><Lock className="w-5 h-5" /> Lock &amp; Dispatch</>
+              )}
+            </button>
+            {error && (
+              <div className="p-3 border border-red-500/30 bg-red-500/10 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
           </div>
         ) : state?.parseError ? null : (
           <div className="flex items-center justify-center h-full">
