@@ -39,6 +39,12 @@ interface PlanningState {
     needs_research: boolean;
     research_rationale?: string;
   };
+  /** Planner finished its research pass and returned a summary. UI renders
+   *  the summary + a "Continue to plan" button. */
+  researchDone?: {
+    summary: string;
+    updated_unknowns: string[];
+  };
   /** Server-side phase string, mirrors tasks.planning_phase. */
   phase?: 'clarify' | 'research' | 'plan' | 'confirm' | 'complete';
   isComplete: boolean;
@@ -312,6 +318,7 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
       !state.isComplete &&
       !state.currentQuestion &&
       !state.clarifyDone &&
+      !state.researchDone &&
       state.phase !== 'confirm' &&
       !isWaitingForResponse
     ) {
@@ -1141,6 +1148,52 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                 )}
               </button>
             </div>
+
+            {error && (
+              <div className="mt-4 p-3 border border-red-500/30 bg-red-500/10 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
+          </div>
+        ) : state?.researchDone ? (
+          // Planner finished its research pass. Show the summary and a single
+          // "Continue to plan" advance button. No skip option — if the user
+          // doesn't like the summary, Cancel is the escape hatch.
+          <div className="max-w-2xl mx-auto p-6">
+            <div className="mb-6">
+              <div className="flex items-center gap-2 text-blue-300 mb-2">
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-medium text-sm uppercase tracking-wide">Research complete</span>
+              </div>
+              <h3 className="text-lg font-medium mb-2">Here&apos;s what I found</h3>
+              <div className="text-sm text-mc-text-secondary leading-relaxed whitespace-pre-wrap">
+                {state.researchDone.summary}
+              </div>
+            </div>
+
+            {state.researchDone.updated_unknowns.length > 0 && (
+              <div className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
+                <p className="text-xs uppercase tracking-wide text-amber-300 mb-2">Still unknown</p>
+                <ul className="list-disc list-inside text-sm space-y-1">
+                  {state.researchDone.updated_unknowns.map((u, i) => (
+                    <li key={i} className="text-amber-200">{u}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <button
+              onClick={() => advancePhase('plan')}
+              disabled={!!advancing}
+              className="w-full px-6 py-3 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {advancing === 'plan' ? (
+                <><Loader2 className="w-5 h-5 animate-spin" /> Building plan…</>
+              ) : (
+                'Continue to plan →'
+              )}
+            </button>
 
             {error && (
               <div className="mt-4 p-3 border border-red-500/30 bg-red-500/10 rounded-lg flex items-start gap-2">

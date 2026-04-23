@@ -57,6 +57,7 @@ export async function GET(
       unknowns?: string[];
     } | null = null;
     let clarifyDone: { understanding: string; unknowns: string[]; needs_research: boolean; research_rationale?: string } | null = null;
+    let researchDone: { summary: string; updated_unknowns: string[] } | null = null;
 
     if (lastAssistantMessage) {
       const { envelope } = parsePlanningEnvelope(lastAssistantMessage.content);
@@ -76,6 +77,11 @@ export async function GET(
           needs_research: envelope.needs_research,
           research_rationale: envelope.research_rationale,
         };
+      } else if (envelope?.kind === 'research_done') {
+        researchDone = {
+          summary: envelope.summary,
+          updated_unknowns: envelope.updated_unknowns,
+        };
       }
     }
 
@@ -93,6 +99,7 @@ export async function GET(
       messages,
       currentQuestion,
       clarifyDone,
+      researchDone,
       phase: taskRow.planning_phase ?? 'clarify',
       understanding: taskRow.planning_understanding ?? null,
       unknowns: taskRow.planning_unknowns ? JSON.parse(taskRow.planning_unknowns) : [],
