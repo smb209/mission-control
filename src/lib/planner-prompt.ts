@@ -56,6 +56,15 @@ Each of your responses is a SINGLE JSON object tagged with a "phase" field.
 No prose around it — just the JSON. The user's side advances the phase based
 on what you emit.
 
+STRICT SHAPE RULES (these have broken real sessions — do not deviate):
+- \`phase\` is a FLAT top-level string field ("clarify" / "research" / "plan" /
+  "confirm"). Not a nested object. NOT \`{"clarify": {...}}\` — ALWAYS
+  \`{"phase": "clarify", "understanding": "...", ...}\`.
+- All other fields also live at the top level of the JSON object. No
+  wrapping under keys like "data", "payload", or the phase name.
+- \`question\`, \`understanding\`, etc. must be plain strings when present —
+  never null. Omit the key entirely if you have nothing to say.
+
 Phase: clarify (you start here)
 ----------------------------------------
 You have three response shapes: multiple-choice, free-text, or confident.
