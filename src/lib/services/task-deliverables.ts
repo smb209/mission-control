@@ -88,22 +88,60 @@ export function registerDeliverable(
   }
 
   const db = getDb();
-  const id = crypto.randomUUID();
 
-  db.prepare(`
-    INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    taskId,
-    deliverableType,
-    title,
-    path || null,
-    description || null,
-    storageScheme,
-    sizeBytes ?? null,
-    specDeliverableId || null,
-  );
+  // Dedup: the same agent often re-registers the same file (e.g. after an
+  // iteration) and we used to accumulate a row per call. The natural
+  // uniqueness key is (task_id, deliverable_type, path) when path is set,
+  // or (task_id, deliverable_type, title) for path-less artifacts/URLs.
+  // If a row already matches, update its mutable fields in place and keep
+  // the stable id + created_at so any downstream refs remain valid.
+  const existing = (path
+    ? db
+        .prepare(
+          `SELECT id FROM task_deliverables
+           WHERE task_id = ? AND deliverable_type = ? AND path = ?
+           LIMIT 1`,
+        )
+        .get(taskId, deliverableType, path)
+    : db
+        .prepare(
+          `SELECT id FROM task_deliverables
+           WHERE task_id = ? AND deliverable_type = ? AND path IS NULL AND title = ?
+           LIMIT 1`,
+        )
+        .get(taskId, deliverableType, title)) as { id: string } | undefined;
+
+  const id = existing?.id ?? crypto.randomUUID();
+
+  if (existing) {
+    db.prepare(`
+      UPDATE task_deliverables
+      SET title = ?, description = ?, storage_scheme = ?, size_bytes = ?, spec_deliverable_id = ?
+      WHERE id = ?
+    `).run(
+      title,
+      description || null,
+      storageScheme,
+      sizeBytes ?? null,
+      specDeliverableId || null,
+      id,
+    );
+  } else {
+    db.prepare(`
+      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      taskId,
+      deliverableType,
+      title,
+      path || null,
+      description || null,
+      storageScheme,
+      sizeBytes ?? null,
+      specDeliverableId || null,
+    );
+  }
 
   const deliverable = db
     .prepare(`SELECT * FROM task_deliverables WHERE id = ?`)

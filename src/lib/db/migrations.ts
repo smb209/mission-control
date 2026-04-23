@@ -2191,6 +2191,80 @@ const migrations: Migration[] = [
       `);
       console.log('[Migration 038] Complete.');
     }
+  },
+  {
+    id: '039',
+    name: 'dedup_task_deliverables',
+    up: (db) => {
+      // Collapse the duplicate task_deliverables rows that built up before
+      // the service-layer upsert (see src/lib/services/task-deliverables.ts).
+      // Symptom: the Deliverables tab listed the same path six times because
+      // every register_deliverable call for the same (task, type, path) was
+      // an INSERT. After this migration the natural uniqueness key is
+      // enforced with a partial unique index so the same bug can't recur.
+      //
+      // Strategy: for each (task_id, deliverable_type, path) bucket with a
+      // non-NULL path, keep the row with the newest created_at (tiebreak by
+      // id), delete the rest. Repeat for the NULL-path variant keyed on
+      // title. Then create two partial unique indexes.
+      console.log('[Migration 039] Deduplicating task_deliverables...');
+
+      // Path-present dedup.
+      const deletedPathed = db.prepare(`
+        DELETE FROM task_deliverables
+        WHERE path IS NOT NULL
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY task_id, deliverable_type, path
+                       ORDER BY created_at DESC, id DESC
+                     ) AS rn
+              FROM task_deliverables
+              WHERE path IS NOT NULL
+            )
+            WHERE rn = 1
+          )
+      `).run();
+
+      // Path-absent dedup — fall back to title as the distinguisher.
+      const deletedTitle = db.prepare(`
+        DELETE FROM task_deliverables
+        WHERE path IS NULL
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY task_id, deliverable_type, title
+                       ORDER BY created_at DESC, id DESC
+                     ) AS rn
+              FROM task_deliverables
+              WHERE path IS NULL
+            )
+            WHERE rn = 1
+          )
+      `).run();
+
+      console.log(
+        `[Migration 039] Removed ${deletedPathed.changes} pathed + ${deletedTitle.changes} path-less duplicate rows`
+      );
+
+      // Partial unique indexes — enforce the rule going forward. Using
+      // partial indexes lets us key on path when present and title when not,
+      // without tripping on the other branch's nulls.
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_deliverables_unique_pathed
+          ON task_deliverables(task_id, deliverable_type, path)
+          WHERE path IS NOT NULL
+      `);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_deliverables_unique_titled
+          ON task_deliverables(task_id, deliverable_type, title)
+          WHERE path IS NULL
+      `);
+
+      console.log('[Migration 039] Complete.');
+    }
   }
 ];
 

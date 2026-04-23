@@ -82,6 +82,59 @@ test('registerDeliverable skips authz when actingAgentId is null (operator flow)
   assert.equal(result.deliverable.task_id, task);
 });
 
+test('registerDeliverable dedupes by (task, type, path) — second call updates in place', () => {
+  const agent = seedAgent();
+  const task = seedTask({ assigned: agent });
+  const first = registerDeliverable({
+    taskId: task,
+    actingAgentId: agent,
+    deliverableType: 'file',
+    title: 'v1 title',
+    path: 'docs/guide.md',
+    description: 'first',
+  });
+  const second = registerDeliverable({
+    taskId: task,
+    actingAgentId: agent,
+    deliverableType: 'file',
+    title: 'v2 title',
+    path: 'docs/guide.md',
+    description: 'second',
+  });
+  // Same id — not a new row — and metadata reflects the latest call.
+  assert.equal(second.deliverable.id, first.deliverable.id);
+  assert.equal(second.deliverable.title, 'v2 title');
+  assert.equal(second.deliverable.description, 'second');
+  // Confirm the DB really has just one row for that (task, type, path).
+  const { queryOne: qOne } = require('@/lib/db') as typeof import('@/lib/db');
+  const row = qOne<{ cnt: number }>(
+    `SELECT COUNT(*) as cnt FROM task_deliverables WHERE task_id = ? AND deliverable_type = 'file' AND path = ?`,
+    [task, 'docs/guide.md'],
+  );
+  assert.equal(row?.cnt, 1);
+});
+
+test('registerDeliverable dedupes path-less artifacts by title', () => {
+  const agent = seedAgent();
+  const task = seedTask({ assigned: agent });
+  const first = registerDeliverable({
+    taskId: task,
+    actingAgentId: agent,
+    deliverableType: 'artifact',
+    title: 'summary',
+    description: 'v1',
+  });
+  const second = registerDeliverable({
+    taskId: task,
+    actingAgentId: agent,
+    deliverableType: 'artifact',
+    title: 'summary',
+    description: 'v2',
+  });
+  assert.equal(second.deliverable.id, first.deliverable.id);
+  assert.equal(second.deliverable.description, 'v2');
+});
+
 // ─── task-activities ────────────────────────────────────────────────
 
 test('logActivity throws AuthzError when agent is not on task', () => {
