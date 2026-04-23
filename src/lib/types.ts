@@ -815,6 +815,18 @@ export interface TaskNote {
   created_at: string;
 }
 
+export type AgentChatMessageStatus = 'pending' | 'delivered';
+
+export interface AgentChatMessage {
+  id: string;
+  agent_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status: AgentChatMessageStatus;
+  session_key?: string;
+  created_at: string;
+}
+
 export interface Convoy {
   id: string;
   parent_task_id: string;
@@ -928,6 +940,7 @@ export type SSEEventType =
   | 'cost_cap_exceeded'
   | 'note_queued'
   | 'note_delivered'
+  | 'agent_chat_message'
   | 'research_phase'
   | 'ideation_phase'
   | 'autopilot_activity'

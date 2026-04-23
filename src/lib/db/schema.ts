@@ -704,6 +704,18 @@ CREATE TABLE IF NOT EXISTS task_notes (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Agent chat messages: operator ↔ agent chat scoped to a specific agent
+-- (no task). Used by the Agent Details modal's Chat tab.
+CREATE TABLE IF NOT EXISTS agent_chat_messages (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered')),
+  session_key TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Product health scores: cached composite scores + daily snapshots
 CREATE TABLE IF NOT EXISTS product_health_scores (
   id TEXT PRIMARY KEY,
@@ -857,6 +869,7 @@ CREATE INDEX IF NOT EXISTS idx_seo_keywords_product ON seo_keywords(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_feedback_product ON product_feedback(product_id, processed);
 CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_notes_pending ON task_notes(task_id, status) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_agent_created ON agent_chat_messages(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_ppv_product ON product_program_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_ab_tests_product ON product_ab_tests(product_id, status);
 CREATE INDEX IF NOT EXISTS idx_ideas_variant ON ideas(variant_id);

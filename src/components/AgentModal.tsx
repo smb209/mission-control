@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Save, Trash2 } from 'lucide-react';
+import { X, Save, Trash2, Lock } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Agent, AgentStatus } from '@/lib/types';
+import { AgentActivityTab } from '@/components/AgentActivityTab';
+import { AgentChatTab } from '@/components/AgentChatTab';
 
 interface AgentModalProps {
   agent?: Agent;
@@ -14,9 +16,12 @@ interface AgentModalProps {
 
 const EMOJI_OPTIONS = ['🤖', '🦞', '💻', '🔍', '✍️', '🎨', '📊', '🧠', '⚡', '🚀', '🎯', '🔧'];
 
+type TabId = 'info' | 'soul' | 'user' | 'agents' | 'activity' | 'chat';
+
 export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: AgentModalProps) {
   const { addAgent, updateAgent, agents } = useMissionControl();
-  const [activeTab, setActiveTab] = useState<'info' | 'soul' | 'user' | 'agents'>('info');
+  const isGateway = agent?.source === 'gateway';
+  const [activeTab, setActiveTab] = useState<TabId>('info');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
@@ -89,14 +94,26 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
       const trimmedPrefix = form.session_key_prefix?.trim();
       const normalizedPrefix = !trimmedPrefix ? '' : trimmedPrefix.endsWith(':') ? trimmedPrefix : trimmedPrefix + ':';
 
+      // Gateway agents' name/description and SOUL/USER/AGENTS live upstream in
+      // OpenClaw. Strip them from the PATCH body so MC never overwrites synced
+      // values with a stale form snapshot.
+      const payload: Record<string, unknown> = {
+        ...form,
+        session_key_prefix: normalizedPrefix || undefined,
+        workspace_id: workspaceId || agent?.workspace_id || 'default',
+      };
+      if (isGateway) {
+        delete payload.name;
+        delete payload.description;
+        delete payload.soul_md;
+        delete payload.user_md;
+        delete payload.agents_md;
+      }
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          session_key_prefix: normalizedPrefix || undefined,
-          workspace_id: workspaceId || agent?.workspace_id || 'default',
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
@@ -137,12 +154,22 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     }
   };
 
-  const tabs = [
+  const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'info', label: 'Info' },
-    { id: 'soul', label: 'SOUL.md' },
-    { id: 'user', label: 'USER.md' },
-    { id: 'agents', label: 'AGENTS.md' },
-  ] as const;
+    ...(isGateway
+      ? []
+      : [
+          { id: 'soul' as TabId, label: 'SOUL.md' },
+          { id: 'user' as TabId, label: 'USER.md' },
+          { id: 'agents' as TabId, label: 'AGENTS.md' },
+        ]),
+    ...(agent
+      ? [
+          { id: 'activity' as TabId, label: 'Activity' },
+          { id: 'chat' as TabId, label: 'Chat' },
+        ]
+      : []),
+  ];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
@@ -150,7 +177,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-mc-border">
           <h2 className="text-lg font-semibold">
-            {agent ? `Edit ${agent.name}` : 'Create New Agent'}
+            {agent ? `${agent.name} Details` : 'New Agent'}
           </h2>
           <button
             onClick={onClose}
@@ -178,9 +205,30 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
         </div>
 
         {/* Content */}
+        {activeTab === 'activity' && agent ? (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <AgentActivityTab agentId={agent.id} />
+          </div>
+        ) : activeTab === 'chat' && agent ? (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <AgentChatTab agent={agent} />
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4">
           {activeTab === 'info' && (
             <div className="space-y-4">
+              {isGateway && (
+                <div className="flex items-start gap-2 px-3 py-2 bg-mc-bg-tertiary/60 border border-mc-border rounded-sm text-xs text-mc-text-secondary">
+                  <Lock className="w-3.5 h-3.5 mt-[1px] shrink-0" />
+                  <span>
+                    Synced from OpenClaw gateway
+                    {agent?.gateway_agent_id && (
+                      <> — <span className="font-mono">{agent.gateway_agent_id}</span></>
+                    )}
+                    . Name, description, and SOUL/USER/AGENTS are managed upstream.
+                  </span>
+                </div>
+              )}
               {/* Avatar Selection */}
               <div>
                 <label className="block text-sm font-medium mb-2">Avatar</label>
@@ -210,7 +258,11 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
-                  className="w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent"
+                  disabled={isGateway}
+                  title={isGateway ? 'Managed by OpenClaw gateway' : undefined}
+                  className={`w-full min-h-11 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent ${
+                    isGateway ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
                   placeholder="Agent name"
                 />
               </div>
@@ -235,7 +287,11 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   value={form.description}
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}
-                  className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none"
+                  disabled={isGateway}
+                  title={isGateway ? 'Managed by OpenClaw gateway' : undefined}
+                  className={`w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none ${
+                    isGateway ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
                   placeholder="What does this agent do?"
                 />
               </div>
@@ -360,39 +416,42 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
             </div>
           )}
         </form>
+        )}
 
-        {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t border-mc-border">
-          <div>
-            {agent && (
+        {/* Footer — Save/Cancel only for form tabs; Activity/Chat tabs manage their own state */}
+        {activeTab !== 'activity' && activeTab !== 'chat' && (
+          <div className="flex items-center justify-between p-4 border-t border-mc-border">
+            <div>
+              {agent && !isGateway && (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded-sm text-sm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={handleDelete}
-                className="min-h-11 flex items-center gap-2 px-3 py-2 text-mc-accent-red hover:bg-mc-accent-red/10 rounded-sm text-sm"
+                onClick={onClose}
+                className="min-h-11 px-4 py-2 text-sm text-mc-text-secondary hover:text-mc-text"
               >
-                <Trash2 className="w-4 h-4" />
-                Delete
+                Cancel
               </button>
-            )}
+              <button
+                onClick={handleSubmit}
+                disabled={isSubmitting}
+                className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+              >
+                <Save className="w-4 h-4" />
+                {isSubmitting ? 'Saving...' : 'Save'}
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="min-h-11 px-4 py-2 text-sm text-mc-text-secondary hover:text-mc-text"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={isSubmitting}
-              className="min-h-11 flex items-center gap-2 px-4 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              {isSubmitting ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

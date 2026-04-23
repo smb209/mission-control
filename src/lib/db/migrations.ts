@@ -2165,6 +2165,32 @@ const migrations: Migration[] = [
 
       console.log('[Migration 037] Complete.');
     }
+  },
+  {
+    id: '038',
+    name: 'agent_chat_messages',
+    up: (db) => {
+      // Per-agent chat (as opposed to per-task chat in task_notes). Used by
+      // the Agent Details modal's Chat tab to hold a conversation with an
+      // agent outside the context of any specific task.
+      console.log('[Migration 038] Creating agent_chat_messages table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_chat_messages (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+          content TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered')),
+          session_key TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_agent_created
+          ON agent_chat_messages(agent_id, created_at);
+      `);
+      console.log('[Migration 038] Complete.');
+    }
   }
 ];
 
