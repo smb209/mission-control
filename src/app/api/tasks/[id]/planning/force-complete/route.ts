@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
 import { parsePlanningEnvelope, type PlanEnvelope } from '@/lib/planning-envelope';
 import { broadcast } from '@/lib/events';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { v4 as uuidv4 } from 'uuid';
 import type { Task } from '@/lib/types';
 
@@ -139,39 +139,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     let dispatchError: string | null = null;
 
     if (firstAgentId) {
-      // Force IPv4 on localhost to avoid Node undici ::1 resolution failing
-      // against Next's IPv4-only dev bind (see planning-persist.ts).
-      const missionControlUrl = getMissionControlUrl().replace(
-        /^(https?:\/\/)localhost(?=[:/]|$)/i,
-        '$1127.0.0.1'
-      );
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (process.env.MC_API_TOKEN) {
-        headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-      }
-
-      try {
-        const res = await fetch(`${missionControlUrl}/api/tasks/${taskId}/dispatch`, {
-          method: 'POST',
-          headers,
-          // Matches planning-persist.ts — dispatch can exceed 30s in Docker.
-          signal: AbortSignal.timeout(120_000),
-        });
-
-        if (res.ok) {
-          dispatched = true;
-          console.log(`[Force Complete] Dispatch successful for task ${taskId}`);
-        } else {
-          dispatchError = await res.text();
-          console.error(`[Force Complete] Dispatch failed: ${dispatchError}`);
-          run(
-            `UPDATE tasks SET planning_dispatch_error = ?, updated_at = datetime('now') WHERE id = ?`,
-            [`Force-complete dispatch failed: ${dispatchError.substring(0, 200)}`, taskId]
-          );
-        }
-      } catch (err) {
-        dispatchError = (err as Error).message;
-        console.error(`[Force Complete] Dispatch error: ${dispatchError}`);
+      const result = await internalDispatch(taskId, { caller: 'force-complete' });
+      if (result.success) {
+        dispatched = true;
+      } else {
+        dispatchError = result.error || 'Dispatch failed';
+        run(
+          `UPDATE tasks SET planning_dispatch_error = ?, updated_at = datetime('now') WHERE id = ?`,
+          [`Force-complete dispatch failed: ${dispatchError.substring(0, 200)}`, taskId]
+        );
       }
     }
 

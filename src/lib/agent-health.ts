@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
-import { getMissionControlUrl } from '@/lib/config';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import { buildCheckpointContext } from '@/lib/checkpoint';
 import { logTaskActivityThrottled } from '@/lib/activity-log';
 import { scanStalledTasks } from '@/lib/stall-detection';
@@ -180,38 +180,21 @@ export async function runHealthCheckCycle(): Promise<AgentHealth[]> {
 
   for (const task of orphanedTasks) {
     console.log(`[Health] Orphaned assigned task detected: "${task.title}" (${task.id}) — stale for >${ASSIGNED_STALE_MINUTES}min, auto-dispatching`);
-    
-    const missionControlUrl = getMissionControlUrl();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (process.env.MC_API_TOKEN) {
-      headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-    }
 
-    try {
-      const res = await fetch(`${missionControlUrl}/api/tasks/${task.id}/dispatch`, {
-        method: 'POST',
-        headers,
-        signal: AbortSignal.timeout(30_000),
-      });
-
-      if (res.ok) {
-        console.log(`[Health] Auto-dispatched orphaned task "${task.title}"`);
-        run(
-          `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)
-           VALUES (?, ?, ?, 'status_changed', 'Auto-dispatched by health sweeper (was stuck in assigned)', ?)`,
-          [uuidv4(), task.id, task.assigned_agent_id, now]
-        );
-      } else {
-        const errorText = await res.text();
-        console.error(`[Health] Failed to auto-dispatch orphaned task "${task.title}": ${errorText}`);
-        // Record the failure so it shows in the UI
-        run(
-          `UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?`,
-          [`Health sweeper dispatch failed: ${errorText.substring(0, 200)}`, now, task.id]
-        );
-      }
-    } catch (err) {
-      console.error(`[Health] Auto-dispatch error for orphaned task "${task.title}":`, (err as Error).message);
+    const result = await internalDispatch(task.id, { caller: 'health-orphan-sweep' });
+    if (result.success) {
+      console.log(`[Health] Auto-dispatched orphaned task "${task.title}"`);
+      run(
+        `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)
+         VALUES (?, ?, ?, 'status_changed', 'Auto-dispatched by health sweeper (was stuck in assigned)', ?)`,
+        [uuidv4(), task.id, task.assigned_agent_id, now]
+      );
+    } else {
+      console.error(`[Health] Failed to auto-dispatch orphaned task "${task.title}": ${result.error}`);
+      run(
+        `UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?`,
+        [`Health sweeper dispatch failed: ${(result.error || '').substring(0, 200)}`, now, task.id]
+      );
     }
   }
 
@@ -293,42 +276,22 @@ export async function nudgeAgent(agentId: string): Promise<{ success: boolean; e
     );
   }
 
-  // Re-dispatch via API
-  const missionControlUrl = getMissionControlUrl();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (process.env.MC_API_TOKEN) {
-    headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
+  // Re-dispatch via shared helper (IPv4 coerce + 120s timeout + cause unwrap).
+  const result = await internalDispatch(activeTask.id, { caller: 'health-nudge' });
+  if (!result.success) {
+    return { success: false, error: result.error || 'Dispatch failed' };
   }
 
-  try {
-    const res = await fetch(`${missionControlUrl}/api/tasks/${activeTask.id}/dispatch`, {
-      method: 'POST',
-      headers,
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      return { success: false, error: `Dispatch failed: ${errorText}` };
-    }
-
-    // Log nudge
-    run(
-      `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)
-       VALUES (?, ?, ?, 'status_changed', 'Agent nudged — re-dispatching with checkpoint context', ?)`,
-      [uuidv4(), activeTask.id, agentId, now]
-    );
-
-    // Reset stall counter
-    run(
-      `UPDATE agent_health SET consecutive_stall_checks = 0, health_state = 'working', updated_at = ? WHERE agent_id = ?`,
-      [now, agentId]
-    );
-
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
+  run(
+    `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)
+     VALUES (?, ?, ?, 'status_changed', 'Agent nudged — re-dispatching with checkpoint context', ?)`,
+    [uuidv4(), activeTask.id, agentId, now]
+  );
+  run(
+    `UPDATE agent_health SET consecutive_stall_checks = 0, health_state = 'working', updated_at = ? WHERE agent_id = ?`,
+    [now, agentId]
+  );
+  return { success: true };
 }
 
 /**

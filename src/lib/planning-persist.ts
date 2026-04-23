@@ -9,9 +9,9 @@
  */
 
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
-import { getMissionControlUrl } from '@/lib/config';
 import { broadcast } from '@/lib/events';
 import { findAgentForRole, verifyAgentInWorkspace } from '@/lib/agent-resolver';
+import { internalDispatch } from '@/lib/internal-dispatch';
 import type { PlanEnvelope } from '@/lib/planning-envelope';
 import type { Task } from '@/lib/types';
 
@@ -163,49 +163,9 @@ export async function lockAndDispatch(taskId: string): Promise<{
       WHERE id = ?
     `).run(firstAgentId, taskId);
 
-    // Server-to-server loopback fetch: Node's undici resolves `localhost`
-    // to ::1 first, but the Next dev server typically binds IPv4 only on
-    // macOS, producing "fetch failed" with no status. Force IPv4 when the
-    // configured URL points at localhost so Lock & Dispatch doesn't break
-    // on default dev setups.
-    const missionControlUrl = getMissionControlUrl().replace(
-      /^(https?:\/\/)localhost(?=[:/]|$)/i,
-      '$1127.0.0.1'
-    );
-    const dispatchUrl = `${missionControlUrl}/api/tasks/${taskId}/dispatch`;
-    console.log(`[Planning Lock] Triggering dispatch: ${dispatchUrl}`);
-
-    try {
-      const dispatchHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (process.env.MC_API_TOKEN) {
-        dispatchHeaders['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
-      }
-
-      const dispatchRes = await fetch(dispatchUrl, {
-        method: 'POST',
-        headers: dispatchHeaders,
-        // Dispatch is a heavyweight route (OpenClaw session creation,
-        // knowledge fetch, workspace setup, mailbox flush). In Docker it can
-        // comfortably exceed 30s — the old timeout was firing and the error
-        // surfaced as a bare "fetch failed". Give it 120s.
-        signal: AbortSignal.timeout(120_000),
-      });
-
-      if (!dispatchRes.ok) {
-        const errorText = await dispatchRes.text();
-        dispatchError = `Dispatch failed (${dispatchRes.status}): ${errorText}`;
-        console.error(`[Planning Lock] ${dispatchError}`);
-      }
-    } catch (err) {
-      // "fetch failed" on its own is useless — surface the underlying cause
-      // (AbortError/TimeoutError/ECONNREFUSED/etc.) so the UI banner is
-      // actionable instead of a mystery.
-      const e = err as Error & { cause?: { code?: string; message?: string; name?: string } };
-      const cause = e.cause
-        ? ` (${e.cause.name || e.cause.code || ''}${e.cause.message ? ': ' + e.cause.message : ''})`
-        : '';
-      dispatchError = `Dispatch error: ${e.message}${cause}`;
-      console.error(`[Planning Lock] ${dispatchError}`, err);
+    const result = await internalDispatch(taskId, { caller: 'planning-lock' });
+    if (!result.success) {
+      dispatchError = result.error || 'Dispatch failed (no cause surfaced)';
     }
 
     if (dispatchError) {
