@@ -99,6 +99,10 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
   // 'plan' tell us which advance button the user just clicked; 'lock' drives
   // the Lock & Dispatch submit on the confirm screen.
   const [advancing, setAdvancing] = useState<null | 'research' | 'plan' | 'lock'>(null);
+  // Add-clarification affordance on the clarify-done screen.
+  const [addingClarification, setAddingClarification] = useState(false);
+  const [clarificationText, setClarificationText] = useState('');
+  const [submittingClarification, setSubmittingClarification] = useState(false);
 
   // Refs to track polling state without triggering re-renders
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -341,6 +345,41 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
       setError(`Failed to advance to ${to}`);
     } finally {
       setAdvancing(null);
+    }
+  };
+
+  /**
+   * User adds free-form clarification during clarify phase. Posts to
+   * /clarify-add, then closes the inline form and polls for the planner's
+   * revised envelope (which may be a new question or an updated confident
+   * state).
+   */
+  const submitClarification = async () => {
+    const text = clarificationText.trim();
+    if (!text) return;
+    setSubmittingClarification(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/planning/clarify-add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clarification: text }),
+      });
+      if (res.ok) {
+        // Clear clarifyDone so UI goes back to waiting state while the
+        // planner integrates; the poll loop will render whatever comes back.
+        setState(prev => (prev ? { ...prev, clarifyDone: undefined } : prev));
+        setClarificationText('');
+        setAddingClarification(false);
+        startPolling();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to add clarification');
+      }
+    } catch {
+      setError('Failed to add clarification');
+    } finally {
+      setSubmittingClarification(false);
     }
   };
 
@@ -1020,6 +1059,55 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
                 <p className="text-sm text-blue-200">{state.clarifyDone.research_rationale}</p>
               </div>
             )}
+
+            {/* Add clarification — user can inject additional context the
+                planner didn't ask about (e.g. "sales are through app stores,
+                matters for nexus"). Sends to /clarify-add and waits for the
+                planner's revised envelope. */}
+            <div className="mb-6 bg-mc-bg border border-mc-border rounded-lg">
+              {addingClarification ? (
+                <div className="p-4 space-y-3">
+                  <p className="text-xs uppercase tracking-wide text-mc-text-secondary">Add clarification</p>
+                  <textarea
+                    value={clarificationText}
+                    onChange={(e) => setClarificationText(e.target.value)}
+                    placeholder="Anything the planner missed? e.g. sales model, infra constraints, compliance context…"
+                    rows={3}
+                    autoFocus
+                    disabled={submittingClarification}
+                    className="w-full bg-mc-bg-secondary border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-y"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={submitClarification}
+                      disabled={submittingClarification || !clarificationText.trim()}
+                      className="px-4 py-2 bg-mc-accent text-mc-bg text-sm rounded-lg font-medium hover:bg-mc-accent/90 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {submittingClarification ? (
+                        <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+                      ) : (
+                        'Send clarification'
+                      )}
+                    </button>
+                    <button
+                      onClick={() => { setAddingClarification(false); setClarificationText(''); }}
+                      disabled={submittingClarification}
+                      className="px-4 py-2 text-sm text-mc-text-secondary hover:text-mc-text rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddingClarification(true)}
+                  disabled={!!advancing}
+                  className="w-full p-3 text-sm text-mc-text-secondary hover:text-mc-accent flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  + Add clarification (e.g. extra context the planner missed)
+                </button>
+              )}
+            </div>
 
             <div className="flex flex-col gap-3">
               {state.clarifyDone.needs_research && (

@@ -257,6 +257,27 @@ as "plan" but with "phase": "confirm"). No prose.`;
 }
 
 /**
+ * User proactively injects additional context during the clarify phase —
+ * they're not answering a question, they're adding info the planner didn't
+ * ask about (e.g. "by the way, all our sales are through app stores, which
+ * matters for nexus"). The planner should fold the new fact into its
+ * understanding, then re-emit a clarify envelope: either a new question if
+ * the info opens an unknown, or confident:true with the revised rationale.
+ */
+export function buildClarifyAddonPrompt(clarification: string): string {
+  return `User added clarification: ${clarification}
+
+Integrate this new information into your current understanding. It may
+change your research rationale or surface a new unknown. Then respond
+with a SINGLE JSON object in the "clarify" phase schema from the opening
+message:
+- If the new info raises a question you now need answered, ask it.
+- Otherwise re-declare confident:true with an updated understanding and
+  research_rationale that reflects the new context.
+No prose around the JSON.`;
+}
+
+/**
  * Short prompt used when the planner emitted malformed JSON. Asks it to
  * re-emit the same logical message in the correct envelope shape.
  */
