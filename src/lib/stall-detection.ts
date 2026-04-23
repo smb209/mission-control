@@ -4,6 +4,7 @@ import { sendMail } from '@/lib/mailbox';
 import { logTaskActivity } from '@/lib/activity-log';
 import { saveCheckpointThrottled } from '@/lib/checkpoint';
 import { logDebugEvent } from '@/lib/debug-log';
+import { getActiveConvoyForTask } from '@/lib/convoy';
 import type { Task } from '@/lib/types';
 
 // Active statuses that can go stale. Kept in sync with
@@ -95,16 +96,13 @@ export async function scanStalledTasks(): Promise<StallReport> {
     // 1. Mark the task. status_reason is cleared by Phase 3.5
     //    (recovery-guard) when the coordinator does anything real.
     //
-    // Prior to PR 6 we ran a coordinator-delegation audit here (the
-    // [DELEGATION] marker scan in src/lib/coordinator-audit.ts) to flag
-    // "unverified delegation" — the hallucinated-tool-call failure mode
-    // where a coordinator claimed to have delegated but sessions_send
-    // never fired. That failure mode can no longer occur: the
-    // sc-mission-control MCP `delegate` tool makes the call server-
-    // authoritative (the tool call IS the delegation + the audit
-    // activity it logs), so any "stuck" coordinator is now either a
-    // tool-call-never-invoked case (surfaced as no activity at all —
-    // the check below catches it) or a legitimate aborted-peer case.
+    // Coordinator-initiated delegations are now server-authoritative via
+    // the `spawn_subtask` MCP tool, which writes a convoy_subtasks row
+    // with its own lifecycle. The "unverified delegation" failure mode
+    // (coordinator claimed a delegation that never fired) can no longer
+    // happen — if spawn_subtask didn't run, there's no subtask row, and
+    // the parent is either legitimately stuck or trivially idle, which
+    // this scanner catches.
     if (!alreadyFlagged) {
       run(
         `UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?`,
@@ -196,11 +194,10 @@ interface ConvoyMembership {
  * so we synthesize it here — see src/lib/convoy.ts for the idiom.
  */
 function resolveConvoyMembership(task: Task): ConvoyMembership | null {
-  // Case (b): this task IS the convoy parent
-  const convoyAsParent = queryOne<{ id: string }>(
-    'SELECT id FROM convoys WHERE parent_task_id = ?',
-    [task.id]
-  );
+  // Case (b): this task IS the convoy parent. A task can now carry
+  // multiple convoys over its lifetime (post-migration 037); we reason
+  // about the currently-active one.
+  const convoyAsParent = getActiveConvoyForTask(task.id);
   if (convoyAsParent) {
     return {
       convoyId: convoyAsParent.id,

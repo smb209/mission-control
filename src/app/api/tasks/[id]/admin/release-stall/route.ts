@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { ReleaseStallSchema } from '@/lib/validation';
+import { getActiveConvoyForTask } from '@/lib/convoy';
 import type { Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -52,10 +53,9 @@ export async function POST(
 
     // If this task is a convoy parent, collect sub-task ids so we can end
     // sessions for every convoy member, not just the primary assignee.
-    const convoy = queryOne<{ id: string }>(
-      'SELECT id FROM convoys WHERE parent_task_id = ?',
-      [taskId]
-    );
+    // Release-stall targets the currently-active convoy; historical
+    // completed convoys on the same parent are not re-opened here.
+    const convoy = getActiveConvoyForTask(taskId);
     const convoySubtaskIds = convoy
       ? queryAll<{ task_id: string }>(
           'SELECT task_id FROM convoy_subtasks WHERE convoy_id = ?',

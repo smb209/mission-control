@@ -6,9 +6,10 @@
  * tools, state-changing tools (happy path + authz violation), evidence-gate
  * integration with update_task_status.
  *
- * The `delegate` tool is skipped here — it calls openclaw's WebSocket
- * gateway for sessions.send, which can't be mocked cleanly in this harness.
- * A pilot-environment smoke will exercise it live.
+ * The coordinator-delegation tools (`spawn_subtask`, `reject_subtask`) that
+ * call openclaw's WebSocket gateway are not exercised end-to-end here —
+ * the gateway client can't be mocked cleanly in this harness. A pilot-
+ * environment smoke exercises the live flow.
  */
 
 import test from 'node:test';
@@ -72,11 +73,18 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     'fail_task',
     'save_checkpoint',
     'send_mail',
-    'delegate',
     'save_knowledge',
+    // Coordinator delegation surface (replaces the old `delegate` tool).
+    // See specs/coordinator-delegation-via-convoy-spec.md §3.
+    'spawn_subtask',
+    'list_my_subtasks',
+    'accept_subtask',
+    'reject_subtask',
+    'cancel_subtask',
   ]) {
     assert.ok(names.has(expected), `missing tool: ${expected}`);
   }
+  assert.ok(!names.has('delegate'), 'delegate tool should be removed');
 });
 
 // ─── whoami ─────────────────────────────────────────────────────────

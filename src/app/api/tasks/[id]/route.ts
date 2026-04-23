@@ -574,10 +574,12 @@ export async function DELETE(
       }
     }
 
-    // Delete convoy and its sub-tasks if this is a convoy parent
-    const convoy = queryOne<{ id: string }>('SELECT id FROM convoys WHERE parent_task_id = ?', [id]);
-    if (convoy) {
-      // Delete sub-tasks first (CASCADE handles convoy_subtasks)
+    // Delete every convoy this parent has ever had (not just the active
+    // one) and all of each convoy's sub-tasks. Task delete is a full
+    // teardown — historical completed convoys would otherwise leave
+    // orphaned subtask rows after the parent row cascades away.
+    const convoys = queryAll<{ id: string }>('SELECT id FROM convoys WHERE parent_task_id = ?', [id]);
+    for (const convoy of convoys) {
       const subtaskIds = queryAll<{ task_id: string }>('SELECT task_id FROM convoy_subtasks WHERE convoy_id = ?', [convoy.id]);
       for (const { task_id } of subtaskIds) {
         run('DELETE FROM work_checkpoints WHERE task_id = ?', [task_id]);

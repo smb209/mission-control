@@ -262,13 +262,16 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Convoys: parallel task groups
+-- Convoys: parallel task groups.
+-- parent_task_id is NOT unique: a task may have multiple convoys over time
+-- (e.g. an agent coordinator appends further delegation rounds). Readers
+-- use getActiveConvoyForTask() to pick the latest status='active' row.
 CREATE TABLE IF NOT EXISTS convoys (
   id TEXT PRIMARY KEY,
-  parent_task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+  parent_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completing', 'done', 'failed')),
-  decomposition_strategy TEXT DEFAULT 'manual' CHECK (decomposition_strategy IN ('manual', 'ai', 'planning')),
+  decomposition_strategy TEXT DEFAULT 'manual' CHECK (decomposition_strategy IN ('manual', 'ai', 'planning', 'agent')),
   decomposition_spec TEXT,
   total_subtasks INTEGER DEFAULT 0,
   completed_subtasks INTEGER DEFAULT 0,
@@ -277,7 +280,10 @@ CREATE TABLE IF NOT EXISTS convoys (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
--- Convoy subtasks: individual work items within a convoy
+-- Convoy subtasks: individual work items within a convoy.
+-- SLO columns (expected_* / checkin_*) are populated for agent-spawned
+-- delegations; operator-created subtasks leave them NULL and fall back to
+-- the global stall threshold.
 CREATE TABLE IF NOT EXISTS convoy_subtasks (
   id TEXT PRIMARY KEY,
   convoy_id TEXT NOT NULL REFERENCES convoys(id) ON DELETE CASCADE,
@@ -285,6 +291,14 @@ CREATE TABLE IF NOT EXISTS convoy_subtasks (
   sort_order INTEGER DEFAULT 0,
   depends_on TEXT,
   suggested_role TEXT,
+  slice TEXT,
+  expected_deliverables TEXT,
+  acceptance_criteria TEXT,
+  expected_duration_minutes INTEGER,
+  checkin_interval_minutes INTEGER DEFAULT 15,
+  dispatched_at TEXT,
+  due_at TEXT,
+  deliverables_registered_count INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

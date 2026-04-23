@@ -57,6 +57,26 @@ interface CreateConvoyInput {
 }
 
 /**
+ * Returns the most recently created still-active convoy for a parent task,
+ * or null. The schema (as of migration 037) no longer requires one-convoy-
+ * per-task; readers that need "the" convoy funnel through this helper so the
+ * "latest active" semantic is explicit and consistent.
+ *
+ * `status='active'` excludes completing/done/failed/paused convoys — a new
+ * round of coordinator-driven delegation after completion is free to create
+ * a new active convoy rather than reopening a closed one.
+ */
+export function getActiveConvoyForTask(parentTaskId: string): Convoy | null {
+  return queryOne<Convoy>(
+    `SELECT * FROM convoys
+     WHERE parent_task_id = ? AND status = 'active'
+     ORDER BY datetime(created_at) DESC
+     LIMIT 1`,
+    [parentTaskId]
+  ) ?? null;
+}
+
+/**
  * Create a convoy from a parent task with optional sub-tasks.
  */
 export function createConvoy(input: CreateConvoyInput): Convoy {
@@ -67,9 +87,13 @@ export function createConvoy(input: CreateConvoyInput): Convoy {
     if (!task) throw new Error(`Task ${parentTaskId} not found`);
     if (task.is_subtask) throw new Error('Cannot create a convoy from a sub-task');
 
-    // Check no convoy already exists for this task
-    const existing = queryOne<{ id: string }>('SELECT id FROM convoys WHERE parent_task_id = ?', [parentTaskId]);
-    if (existing) throw new Error(`Convoy already exists for task ${parentTaskId}`);
+    // Multiple convoys per parent are allowed since migration 037, but we
+    // still reject a second *active* convoy — callers that want to append
+    // work should use addSubtasks() on the existing active convoy instead,
+    // and the coordinator delegation path (spawn_subtask) already does so
+    // via getActiveConvoyForTask() before falling back to createConvoy().
+    const activeExisting = getActiveConvoyForTask(parentTaskId);
+    if (activeExisting) throw new Error(`An active convoy already exists for task ${parentTaskId} — append via addSubtasks instead`);
 
     const convoyId = uuidv4();
     const now = new Date().toISOString();
@@ -129,13 +153,12 @@ export function createConvoy(input: CreateConvoyInput): Convoy {
 }
 
 /**
- * Get convoy details for a parent task, with subtasks joined.
+ * Get convoy details for a parent task, with subtasks joined. Returns the
+ * latest active convoy (see getActiveConvoyForTask); prior completed convoys
+ * are not surfaced through this helper.
  */
 export function getConvoy(parentTaskId: string): (Convoy & { subtasks: (ConvoySubtask & { task: Task })[] }) | null {
-  const convoy = queryOne<Convoy>(
-    'SELECT * FROM convoys WHERE parent_task_id = ?',
-    [parentTaskId]
-  );
+  const convoy = getActiveConvoyForTask(parentTaskId);
   if (!convoy) return null;
 
   const subtaskRows = queryAll<ConvoySubtask & { task_title: string; task_status: string; task_assigned_agent_id: string | null }>(
@@ -263,7 +286,19 @@ export function checkConvoyCompletion(convoyId: string): boolean {
   return false;
 }
 
-const MAX_PARALLEL_CONVOY_SUBTASKS = 5;
+/**
+ * Parallel subtask cap. Defaults to 10 (up from 5 pre-PR) to accommodate
+ * agent-driven delegations that legitimately fan out to every peer in the
+ * roster; operator-planned convoys rarely approach this. Override with
+ * `MC_CONVOY_MAX_PARALLEL` env var.
+ */
+function getMaxParallelConvoySubtasks(): number {
+  const raw = process.env.MC_CONVOY_MAX_PARALLEL;
+  if (!raw) return 10;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
+}
+const MAX_PARALLEL_CONVOY_SUBTASKS = getMaxParallelConvoySubtasks();
 
 export interface ConvoyDispatchResult {
   dispatched: number;
@@ -489,5 +524,145 @@ export function deleteConvoy(convoyId: string): void {
 
     const updatedParent = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [convoy.parent_task_id]);
     if (updatedParent) broadcast({ type: 'task_updated', payload: updatedParent });
+  });
+}
+
+// ─── Agent-initiated delegation ────────────────────────────────────
+
+export interface SpawnDelegationInput {
+  parentTaskId: string;
+  parentAgentId: string;
+  peerAgentId: string;
+  peerGatewayId: string;
+  suggestedRole: string;
+  slice: string;
+  message: string;
+  expectedDeliverables: { title: string; kind: 'file' | 'note' | 'report' }[];
+  acceptanceCriteria: string[];
+  expectedDurationMinutes: number;
+  checkinIntervalMinutes: number;
+  dependsOnSubtaskIds?: string[];
+}
+
+export interface SpawnDelegationResult {
+  subtaskId: string;
+  childTaskId: string;
+  convoyId: string;
+  dispatchedAt: string;
+  dueAt: string;
+}
+
+/**
+ * Create (or append to) a convoy for a coordinator-initiated delegation.
+ *
+ * Invoked by the `spawn_subtask` MCP tool. Unlike `createConvoy` +
+ * `addSubtasks`, this carries the SLO contract (slice, expected
+ * deliverables, acceptance criteria, duration, cadence) onto the
+ * `convoy_subtasks` row so stall detection and the coordinator's
+ * `list_my_subtasks` read can reason about the delegation deterministically.
+ *
+ * The actual peer dispatch (HTTP POST to /api/tasks/:child_id/dispatch) is
+ * the caller's job — we can't reach-around from here without a circular
+ * dependency (dispatch needs convoy, convoy can't need dispatch). The
+ * caller invokes the dispatch after this function returns.
+ */
+export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelegationResult {
+  return transaction(() => {
+    const parent = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [input.parentTaskId]);
+    if (!parent) throw new Error(`Parent task ${input.parentTaskId} not found`);
+    if (parent.is_subtask) throw new Error('Peer sub-delegation is not allowed (parent is itself a subtask)');
+
+    // Lazy-create or reuse the active convoy on this parent task.
+    let convoy = getActiveConvoyForTask(input.parentTaskId);
+    const now = new Date().toISOString();
+
+    if (!convoy) {
+      const convoyId = uuidv4();
+      run(
+        `INSERT INTO convoys (id, parent_task_id, name, status, decomposition_strategy, total_subtasks, created_at, updated_at)
+         VALUES (?, ?, ?, 'active', 'agent', 0, ?, ?)`,
+        [convoyId, input.parentTaskId, `${parent.title} — delegations`, now, now]
+      );
+      convoy = queryOne<Convoy>('SELECT * FROM convoys WHERE id = ?', [convoyId])!;
+      // Move parent into convoy_active so the stall scanner and UI see it.
+      run(
+        `UPDATE tasks SET status = 'convoy_active', updated_at = ? WHERE id = ?`,
+        [now, input.parentTaskId]
+      );
+      broadcast({ type: 'convoy_created', payload: convoy });
+    }
+
+    // Sort order = max+1 (append).
+    const maxOrder = queryOne<{ max_order: number | null }>(
+      'SELECT MAX(sort_order) as max_order FROM convoy_subtasks WHERE convoy_id = ?',
+      [convoy.id]
+    )?.max_order ?? 0;
+
+    // Create the child task row. Pre-assigned to the peer; workflow
+    // inheritance mirrors what addSubtasks does for operator flows.
+    const childTaskId = uuidv4();
+    run(
+      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, workspace_id, business_id, workflow_template_id, convoy_id, is_subtask, created_at, updated_at)
+       VALUES (?, ?, ?, 'inbox', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      [
+        childTaskId,
+        input.slice.slice(0, 200),
+        input.message.slice(0, 4000),
+        parent.priority,
+        input.peerAgentId,
+        parent.workspace_id,
+        parent.business_id,
+        parent.workflow_template_id || null,
+        convoy.id,
+        now,
+        now,
+      ]
+    );
+
+    // Dispatched/due timestamps. The caller performs the HTTP dispatch
+    // right after; storing the timestamp here keeps SLO math monotonic
+    // even if the HTTP call retries.
+    const dueAt = new Date(Date.now() + input.expectedDurationMinutes * 60_000).toISOString();
+
+    const subtaskId = uuidv4();
+    run(
+      `INSERT INTO convoy_subtasks (
+         id, convoy_id, task_id, sort_order, depends_on, suggested_role,
+         slice, expected_deliverables, acceptance_criteria,
+         expected_duration_minutes, checkin_interval_minutes,
+         dispatched_at, due_at, deliverables_registered_count, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      [
+        subtaskId,
+        convoy.id,
+        childTaskId,
+        maxOrder + 1,
+        input.dependsOnSubtaskIds && input.dependsOnSubtaskIds.length > 0
+          ? JSON.stringify(input.dependsOnSubtaskIds)
+          : null,
+        input.suggestedRole,
+        input.slice,
+        JSON.stringify(input.expectedDeliverables),
+        JSON.stringify(input.acceptanceCriteria),
+        input.expectedDurationMinutes,
+        input.checkinIntervalMinutes,
+        now,
+        dueAt,
+        now,
+      ]
+    );
+
+    run(
+      `UPDATE convoys SET total_subtasks = total_subtasks + 1, updated_at = ? WHERE id = ?`,
+      [now, convoy.id]
+    );
+
+    return {
+      subtaskId,
+      childTaskId,
+      convoyId: convoy.id,
+      dispatchedAt: now,
+      dueAt,
+    };
   });
 }

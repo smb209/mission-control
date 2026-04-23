@@ -444,29 +444,51 @@ If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the 
           : '(no structured spec — one deliverable call is enough)';
 
       if (isCoordinator) {
-        return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`delegate\` MCP tool.
+        return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`spawn_subtask\` MCP tool. Every delegation must declare deliverables, acceptance criteria, duration, and cadence — no declarations, no spawn.
 
 **Per peer, call once:**
 \`\`\`
-delegate({
+spawn_subtask({
   agent_id: "${agentId}",
   task_id: "${taskIdForMcp}",
   peer_gateway_id: "<mc-researcher | mc-writer | …>",
   slice: "<one-line summary of what this peer owns>",
-  message: "You are the <role> for this task.\\n\\n<context + success criteria>",
-  timeout_seconds: 0   // fire-and-forget for parallel fan-out
+  message: "You are the <role> for this task.\\n\\n<context + why this slice exists>",
+  expected_deliverables: [ { title: "<name>", kind: "file" | "note" | "report" } ],
+  acceptance_criteria: [ "<criterion 1>", "<criterion 2>" ],
+  expected_duration_minutes: 30,
+  checkin_interval_minutes: 15
 })
 \`\`\`
 
-\`delegate\` atomically invokes openclaw's \`sessions.send\` AND logs the \`[DELEGATION]\` audit activity for you — no separate sessions_send / activity calls needed. The coordinator-audit scanner reads the activity it writes.
+\`spawn_subtask\` creates a tracked convoy subtask with the SLO you declare, dispatches the peer through the normal pipeline, and returns a \`subtask_id\`. The peer sees your contract inline in its briefing.
 
-**When all peers have reported back:**
+**While peers are working, check on them:**
+\`\`\`
+list_my_subtasks({ agent_id: "${agentId}", task_id: "${taskIdForMcp}" })
+\`\`\`
+Each row has a \`state_derived\` (dispatched / in_progress / drifting / overdue / delivered / blocked / timed_out / accepted / rejected / cancelled).
+
+**When a peer delivers** (state_derived = "delivered"):
+\`\`\`
+accept_subtask({ agent_id: "${agentId}", subtask_id: "<id>" })
+# or if the work doesn't meet acceptance criteria:
+reject_subtask({ agent_id: "${agentId}", subtask_id: "<id>", reason: "<specific>", new_acceptance_criteria: [ ... ] })
+\`\`\`
+
+**If a peer is stuck and the slice was wrong,** cancel and re-spawn with a better brief:
+\`\`\`
+cancel_subtask({ agent_id: "${agentId}", subtask_id: "<id>", reason: "<why>" })
+spawn_subtask({ ... })   # fresh slice
+\`\`\`
+
+**When all subtasks are accepted:**
 \`\`\`
 register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
 update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\`
 
-Reply with \`TASK_COMPLETE: [one line per delegated peer]\`.`;
+Reply with \`TASK_COMPLETE: [one line per delegated subtask]\`.`;
       }
 
       if (isBuilder) {
@@ -633,6 +655,56 @@ update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status:
     const deliverablesLead = isBuilder ? deliverablesChecklistSection : '';
     const criteriaLead = (isTester || isVerifier) ? successCriteriaChecklistSection : '';
 
+    // Delegation Contract — shown to agent-spawned subtask peers so they
+    // see their obligation inline (SLO, acceptance criteria, deliverables,
+    // escape hatch). Operator-created convoy subtasks have NULL SLO
+    // fields and skip this section.
+    let delegationContractSection = '';
+    if ((task as Task & { is_subtask?: number }).is_subtask) {
+      const contract = queryOne<{
+        id: string;
+        slice: string | null;
+        expected_deliverables: string | null;
+        acceptance_criteria: string | null;
+        expected_duration_minutes: number | null;
+        checkin_interval_minutes: number | null;
+        due_at: string | null;
+        coordinator_name: string | null;
+      }>(
+        `SELECT cs.id, cs.slice, cs.expected_deliverables, cs.acceptance_criteria,
+                cs.expected_duration_minutes, cs.checkin_interval_minutes, cs.due_at,
+                ca.name as coordinator_name
+           FROM convoy_subtasks cs
+           JOIN convoys c ON c.id = cs.convoy_id
+           JOIN tasks p ON p.id = c.parent_task_id
+           LEFT JOIN agents ca ON ca.id = p.assigned_agent_id
+          WHERE cs.task_id = ?`,
+        [task.id],
+      );
+      if (contract && contract.expected_duration_minutes != null) {
+        const parseJson = <T,>(s: string | null): T[] => { if (!s) return []; try { return JSON.parse(s) as T[]; } catch { return []; } };
+        const delivs = parseJson<{ title: string; kind: string }>(contract.expected_deliverables);
+        const criteria = parseJson<string>(contract.acceptance_criteria);
+        delegationContractSection = `
+---
+**\u{1F91D} DELEGATION CONTRACT**
+
+You were delegated this work by coordinator ${contract.coordinator_name ?? '(unknown)'}. The contract is:
+
+- **Slice:** ${contract.slice ?? '(unset)'}
+- **Expected deliverables** (register every one via \`register_deliverable\`):
+${delivs.length > 0 ? delivs.map(d => `  - ${d.title} (${d.kind})`).join('\n') : '  - (none declared)'}
+- **Acceptance criteria** (all must hold for accept_subtask):
+${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none declared)'}
+- **Expected duration:** ${contract.expected_duration_minutes} minutes (due at ${contract.due_at ?? 'unset'})
+- **Check-in cadence:** call \`log_activity\` at least every ${contract.checkin_interval_minutes ?? 15} minutes with a substantive note. Silence past 2\u00D7 cadence = drift alert to coordinator.
+- **Your \`subtask_id\`:** \`${contract.id}\` — referenced automatically by register_deliverable and fail_task.
+
+**If the slice is wrong:** do not sub-delegate, do not improvise. Call \`fail_task\` with \`reason: "redecompose: <specific ask>"\`, optionally mail the coordinator with suggestions, and stop. The coordinator will re-plan.
+`;
+      }
+    }
+
     const taskMessage = `${priorityEmoji} **${headline}**
 
 **Title:** ${task.title}
@@ -640,7 +712,7 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-${callHomeSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
+${callHomeSection}${delegationContractSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
 ${isBuilder ? (workspaceIsolated
   ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
   : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)

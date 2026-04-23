@@ -451,7 +451,12 @@ export interface AgentWithOpenClaw extends Agent {
 
 // Convoy types
 export type ConvoyStatus = 'active' | 'paused' | 'completing' | 'done' | 'failed';
-export type DecompositionStrategy = 'manual' | 'ai' | 'planning';
+export type DecompositionStrategy = 'manual' | 'ai' | 'planning' | 'agent';
+
+export interface ExpectedDeliverable {
+  title: string;
+  kind: 'file' | 'note' | 'report';
+}
 export type AgentHealthState = 'idle' | 'working' | 'stalled' | 'stuck' | 'zombie' | 'offline';
 export type CheckpointType = 'auto' | 'manual' | 'crash_recovery';
 
@@ -837,6 +842,18 @@ export interface ConvoySubtask {
    *  Read by convoy dispatch to route each sub-task to an agent whose
    *  `agents.role` matches. NULL means "no hint — pick a builder". */
   suggested_role?: string | null;
+  /** Coordinator's one-line summary of this delegation (agent-spawned only). */
+  slice?: string | null;
+  /** JSON-encoded ExpectedDeliverable[]; populated by spawn_subtask. */
+  expected_deliverables?: string | null;
+  /** JSON-encoded string[] of acceptance criteria. */
+  acceptance_criteria?: string | null;
+  /** Declared SLO (agent-spawned only). NULL on operator-created subtasks. */
+  expected_duration_minutes?: number | null;
+  checkin_interval_minutes?: number | null;
+  dispatched_at?: string | null;
+  due_at?: string | null;
+  deliverables_registered_count?: number | null;
   created_at: string;
   // Joined
   task?: Task;
