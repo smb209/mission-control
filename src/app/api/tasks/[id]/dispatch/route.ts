@@ -308,13 +308,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Inject relevant knowledge from the learner knowledge base
+    // Inject relevant knowledge from the learner knowledge base — opt-in
+    // per task (see tasks.include_knowledge, migration 041). The legacy
+    // auto-injection had no relevance filter and pulled unrelated lessons
+    // into every dispatch; agents that need a lesson can pull a targeted
+    // one via the `request_knowledge` MCP tool instead.
     let knowledgeSection = '';
-    try {
-      const knowledge = getRelevantKnowledge(task.workspace_id, task.title);
-      knowledgeSection = formatKnowledgeForDispatch(knowledge);
-    } catch {
-      // Knowledge injection is best-effort
+    if ((task as Task & { include_knowledge?: number }).include_knowledge) {
+      try {
+        const knowledge = getRelevantKnowledge(task.workspace_id, task.title);
+        knowledgeSection = formatKnowledgeForDispatch(knowledge);
+      } catch {
+        // Knowledge injection is best-effort
+      }
     }
 
     // Inject matched product skills (proven procedures from previous tasks)

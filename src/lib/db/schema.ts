@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   merge_pr_url TEXT,
   is_archived INTEGER DEFAULT 0,
   archived_at TEXT,
+  include_knowledge INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

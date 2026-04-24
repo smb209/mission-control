@@ -2313,6 +2313,26 @@ const migrations: Migration[] = [
 
       console.log('[Migration 040] Complete.');
     }
+  },
+  {
+    id: '041',
+    name: 'task_include_knowledge_flag',
+    up: (db) => {
+      // Opt-in flag for injecting PREVIOUS LESSONS LEARNED into the
+      // dispatch message. Previous behavior unconditionally pulled the top
+      // 5 high-confidence knowledge entries for the workspace with no
+      // relevance filter, so unrelated lessons (e.g. a Foreign Entity
+      // Registration postmortem) leaked into trivial tasks. Knowledge is
+      // now off by default; operators can opt in per task, and agents can
+      // pull targeted lessons on demand via the `request_knowledge` MCP
+      // tool.
+      console.log('[Migration 041] Adding tasks.include_knowledge...');
+      const info = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      if (!info.some(c => c.name === 'include_knowledge')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN include_knowledge INTEGER DEFAULT 0`);
+      }
+      console.log('[Migration 041] Complete.');
+    }
   }
 ];
 
