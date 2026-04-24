@@ -34,7 +34,7 @@ export async function extractSkillsFromTask(taskId: string): Promise<void> {
     [taskId]
   );
   const deliverables = queryAll<{ deliverable_type: string; title: string; path: string | null; description: string | null }>(
-    'SELECT deliverable_type, title, path, description FROM task_deliverables WHERE task_id = ? LIMIT 20',
+    `SELECT deliverable_type, title, path, description FROM task_deliverables WHERE task_id = ? AND role = 'output' LIMIT 20`,
     [taskId]
   );
 

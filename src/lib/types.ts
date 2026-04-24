@@ -286,6 +286,11 @@ export type DeliverableType = 'file' | 'url' | 'artifact';
 
 export type DeliverableStorageScheme = 'mc' | 'host' | 'ssh';
 
+/** 'input' = operator-attached context on task creation (upload or reference
+ *  to a prior deliverable). 'output' = agent-produced, fulfills the task.
+ *  Evidence gates and planning-spec reconciliation only consider outputs. */
+export type DeliverableRole = 'input' | 'output';
+
 export interface TaskDeliverable {
   id: string;
   task_id: string;
@@ -299,6 +304,10 @@ export interface TaskDeliverable {
    *  which one (matches SpecDeliverable.id). Null for ad-hoc deliverables
    *  from tasks that never went through planning. */
   spec_deliverable_id?: string | null;
+  role: DeliverableRole;
+  /** For input-role rows created by referencing a prior deliverable: the id
+   *  of the source row. Null for fresh uploads and for output rows. */
+  source_deliverable_id?: string | null;
   created_at: string;
 }
 

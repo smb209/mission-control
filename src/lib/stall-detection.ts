@@ -63,7 +63,7 @@ export async function scanStalledTasks(): Promise<StallReport> {
     `SELECT
        t.*,
        (SELECT MAX(created_at) FROM task_activities WHERE task_id = t.id) as last_activity_at,
-       (SELECT COUNT(*) FROM task_deliverables WHERE task_id = t.id) as deliverable_count
+       (SELECT COUNT(*) FROM task_deliverables WHERE task_id = t.id AND role = 'output') as deliverable_count
      FROM tasks t
      WHERE t.status IN (${placeholders})`,
     [...ACTIVE_STATUSES]

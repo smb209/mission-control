@@ -2265,6 +2265,54 @@ const migrations: Migration[] = [
 
       console.log('[Migration 039] Complete.');
     }
+  },
+  {
+    id: '040',
+    name: 'deliverable_role_and_source',
+    up: (db) => {
+      // Operator-attached inputs on the create-task flow. Adds:
+      //   - role ('input' | 'output', default 'output'): distinguishes
+      //     operator uploads / references from agent-produced outputs. The
+      //     evidence gate and planning-spec reconciler only count outputs.
+      //   - source_deliverable_id (nullable): traceability for rows that
+      //     reference a prior deliverable from another task. No FK so deleting
+      //     the source doesn't cascade surprisingly.
+      // The partial unique indexes from migration 039 are rebuilt to include
+      // role so an operator can attach an input with the same path as an
+      // existing output (or vice-versa) without a collision.
+      console.log('[Migration 040] Adding task_deliverables.role + source_deliverable_id...');
+
+      const info = db.prepare('PRAGMA table_info(task_deliverables)').all() as { name: string }[];
+      const has = (n: string) => info.some(c => c.name === n);
+
+      if (!has('role')) {
+        // Two-step ALTER: SQLite rejects a NOT NULL column with a non-constant
+        // default, but 'output' is a constant literal so this works.
+        db.exec(`ALTER TABLE task_deliverables ADD COLUMN role TEXT NOT NULL DEFAULT 'output' CHECK (role IN ('input','output'))`);
+      }
+      if (!has('source_deliverable_id')) {
+        db.exec('ALTER TABLE task_deliverables ADD COLUMN source_deliverable_id TEXT');
+      }
+
+      // Rebuild the partial unique indexes to include role in the key.
+      db.exec('DROP INDEX IF EXISTS idx_task_deliverables_unique_pathed');
+      db.exec('DROP INDEX IF EXISTS idx_task_deliverables_unique_titled');
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_deliverables_unique_pathed
+          ON task_deliverables(task_id, deliverable_type, path, role)
+          WHERE path IS NOT NULL
+      `);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_deliverables_unique_titled
+          ON task_deliverables(task_id, deliverable_type, title, role)
+          WHERE path IS NULL
+      `);
+
+      // Convenience index for "list inputs on a task" / "list outputs" reads.
+      db.exec('CREATE INDEX IF NOT EXISTS idx_task_deliverables_task_role ON task_deliverables(task_id, role)');
+
+      console.log('[Migration 040] Complete.');
+    }
   }
 ];
 

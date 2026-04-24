@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore } from 'lucide-react';
+import { useRef, useState, useCallback } from 'react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -15,7 +15,17 @@ import { ConvoyTab } from './ConvoyTab';
 import { AgentLiveTab } from './AgentLiveTab';
 import { TaskChatTab } from './TaskChatTab';
 import { WorkspaceTab } from './WorkspaceTab';
+import { DeliverablePicker, type PickerDeliverable } from './DeliverablePicker';
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types';
+
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB — server enforces the same cap
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
 
 type TabType = 'overview' | 'planning' | 'convoy' | 'team' | 'activity' | 'deliverables' | 'images' | 'sessions' | 'workspace' | 'agent-live' | 'chat';
 
@@ -67,6 +77,104 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
+
+  // Attachments staged on the overview tab for a new task. For edit mode we
+  // commit them to the existing task immediately via the "Add" buttons
+  // instead of staging, so retries after a partial save work transparently.
+  const [pendingUploads, setPendingUploads] = useState<File[]>([]);
+  const [pendingRefs, setPendingRefs] = useState<PickerDeliverable[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Bumping this forces DeliverablesList to refetch after edit-mode uploads.
+  const [deliverablesRefresh, setDeliverablesRefresh] = useState(0);
+  const effectiveWorkspaceId = workspaceId || task?.workspace_id || 'default';
+
+  const stageFiles = (files: FileList | File[]) => {
+    const list = Array.from(files);
+    const tooLarge = list.filter((f) => f.size > MAX_UPLOAD_BYTES);
+    const ok = list.filter((f) => f.size <= MAX_UPLOAD_BYTES);
+    if (tooLarge.length > 0) {
+      setAttachmentError(
+        `${tooLarge.length} file(s) exceed the 100 MB limit: ${tooLarge.map((f) => f.name).join(', ')}`,
+      );
+    } else {
+      setAttachmentError(null);
+    }
+    if (ok.length > 0) {
+      setPendingUploads((prev) => [...prev, ...ok]);
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) stageFiles(e.target.files);
+    // Reset so selecting the same file again re-fires onChange.
+    e.target.value = '';
+  };
+
+  const uploadFilesToTask = async (tid: string, files: File[]): Promise<string[]> => {
+    if (files.length === 0) return [];
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f, f.name);
+    const res = await fetch(`/api/tasks/${tid}/attachments`, { method: 'POST', body: fd });
+    const data = await res.json().catch(() => ({ failed: [{ filename: '(batch)', error: 'Upload failed' }] }));
+    const failures = (data.failed || []) as Array<{ filename: string; error: string }>;
+    return failures.map((f) => `${f.filename}: ${f.error}`);
+  };
+
+  const linkReferencesToTask = async (tid: string, refs: PickerDeliverable[]): Promise<string[]> => {
+    if (refs.length === 0) return [];
+    const results = await Promise.allSettled(
+      refs.map((r) =>
+        fetch(`/api/tasks/${tid}/deliverables`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'reference', source_deliverable_id: r.id }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `Failed to link "${r.title}"`);
+          }
+        }),
+      ),
+    );
+    return results
+      .map((r, i) => (r.status === 'rejected' ? `${refs[i].title}: ${r.reason?.message ?? 'link failed'}` : null))
+      .filter((v): v is string => v !== null);
+  };
+
+  // Edit-mode: commit attachment changes immediately so "retry after a
+  // failed create" is just reopening the task and clicking Add.
+  const handleEditModeAddFiles = async (files: FileList | File[]) => {
+    if (!task) return;
+    const list = Array.from(files);
+    const tooLarge = list.filter((f) => f.size > MAX_UPLOAD_BYTES);
+    const ok = list.filter((f) => f.size <= MAX_UPLOAD_BYTES);
+    if (tooLarge.length > 0) {
+      setAttachmentError(
+        `${tooLarge.length} file(s) exceed the 100 MB limit: ${tooLarge.map((f) => f.name).join(', ')}`,
+      );
+    } else {
+      setAttachmentError(null);
+    }
+    if (ok.length === 0) return;
+    const failures = await uploadFilesToTask(task.id, ok);
+    if (failures.length > 0) {
+      setAttachmentError(failures.join('; '));
+    }
+    setDeliverablesRefresh((n) => n + 1);
+  };
+
+  const handleEditModeAddReference = async (ref: PickerDeliverable) => {
+    if (!task) return;
+    const failures = await linkReferencesToTask(task.id, [ref]);
+    if (failures.length > 0) {
+      setAttachmentError(failures.join('; '));
+    } else {
+      setAttachmentError(null);
+    }
+    setDeliverablesRefresh((n) => n + 1);
+  };
 
   const handleSubmit = async (e: React.FormEvent, keepOpen = false) => {
     e.preventDefault();
@@ -130,6 +238,24 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
         created_at: new Date().toISOString(),
       });
 
+      // Fan out staged attachments. Run sequentially-but-parallel-internally:
+      // upload batch + refs batch fire concurrently, and we wait for both to
+      // finish before dispatching so the agent's first prompt sees them.
+      const attachFailures: string[] = [];
+      if (pendingUploads.length > 0 || pendingRefs.length > 0) {
+        const [uploadErrs, refErrs] = await Promise.all([
+          uploadFilesToTask(savedTask.id, pendingUploads),
+          linkReferencesToTask(savedTask.id, pendingRefs),
+        ]);
+        attachFailures.push(...uploadErrs, ...refErrs);
+      }
+      if (attachFailures.length > 0) {
+        // Task is saved; surface the partial-failure list without closing so
+        // the user can retry via the edit view. Keep dispatch on ice.
+        setSaveError(`Task created, but some attachments failed: ${attachFailures.join('; ')}`);
+        return;
+      }
+
       if (usePlanningMode) {
         // Start planning session (fire-and-forget), then close modal.
         // User reopens the task from the board to see the planning tab.
@@ -161,6 +287,9 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
           due_date: '',
         });
         setUsePlanningMode(false);
+        setPendingUploads([]);
+        setPendingRefs([]);
+        setAttachmentError(null);
       } else {
         onClose();
       }
@@ -389,6 +518,100 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
             </div>
           </div>
 
+          {/* Attachments */}
+          <div>
+            <label className="block text-sm font-medium mb-1 flex items-center gap-1.5">
+              <Paperclip className="w-4 h-4" />
+              Attachments
+            </label>
+            <p className="text-xs text-mc-text-secondary mb-2">
+              {task
+                ? 'Add files or reference prior deliverables. Changes save immediately.'
+                : 'Add files or reference prior deliverables to give the agent context. These save after you create the task.'}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-sm border border-mc-border hover:border-mc-accent hover:bg-mc-bg-tertiary"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Upload files
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPicker(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-sm border border-mc-border hover:border-mc-accent hover:bg-mc-bg-tertiary"
+              >
+                <LinkIcon className="w-3.5 h-3.5" />
+                Reference prior deliverable
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (task) {
+                    if (e.target.files) handleEditModeAddFiles(e.target.files);
+                    e.target.value = '';
+                  } else {
+                    handleFileInputChange(e);
+                  }
+                }}
+              />
+            </div>
+
+            {/* Staged list — create mode only */}
+            {!task && (pendingUploads.length > 0 || pendingRefs.length > 0) && (
+              <ul className="mt-3 space-y-1.5">
+                {pendingUploads.map((f, i) => (
+                  <li
+                    key={`u-${i}-${f.name}`}
+                    className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm border border-mc-border text-xs"
+                  >
+                    <Upload className="w-3.5 h-3.5 text-mc-accent shrink-0" />
+                    <span className="flex-1 truncate">{f.name}</span>
+                    <span className="text-mc-text-secondary shrink-0">{formatBytes(f.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingUploads((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="p-0.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary hover:text-mc-text"
+                      title="Remove"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                ))}
+                {pendingRefs.map((r, i) => (
+                  <li
+                    key={`r-${r.id}`}
+                    className="flex items-center gap-2 p-2 bg-mc-bg rounded-sm border border-mc-border text-xs"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-mc-accent shrink-0" />
+                    <span className="flex-1 truncate">
+                      {r.title} <span className="text-mc-text-secondary">from {r.task_title}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPendingRefs((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="p-0.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary hover:text-mc-text"
+                      title="Remove"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {attachmentError && (
+              <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded-sm">
+                <span className="text-xs text-red-400">{attachmentError}</span>
+              </div>
+            )}
+          </div>
+
           {/* Pull Request section */}
           {task?.pr_url && (
             <div className="p-3 bg-mc-bg rounded-lg border border-mc-border">
@@ -452,7 +675,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
 
           {/* Deliverables Tab */}
           {activeTab === 'deliverables' && task && (
-            <DeliverablesList taskId={task.id} />
+            <DeliverablesList taskId={task.id} refreshKey={deliverablesRefresh} />
           )}
 
           {/* Images Tab */}
@@ -555,6 +778,22 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
             // Auto-select the newly created agent
             setForm({ ...form, assigned_agent_id: agentId });
             setShowAgentModal(false);
+          }}
+        />
+      )}
+
+      {showPicker && (
+        <DeliverablePicker
+          workspaceId={effectiveWorkspaceId}
+          excludeTaskId={task?.id}
+          onClose={() => setShowPicker(false)}
+          onPick={(d) => {
+            setShowPicker(false);
+            if (task) {
+              handleEditModeAddReference(d);
+            } else if (!pendingRefs.some((r) => r.id === d.id)) {
+              setPendingRefs((prev) => [...prev, d]);
+            }
           }}
         />
       )}

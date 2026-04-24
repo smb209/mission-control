@@ -107,9 +107,14 @@ export async function handleStageTransition(
     skipDispatch?: boolean;
   }
 ): Promise<StageTransitionResult> {
+  console.log(
+    `[Workflow] handleStageTransition start: task=${taskId} prev=${options?.previousStatus ?? '?'} → new=${newStatus}${options?.failReason ? ` (fail: ${options.failReason})` : ''}`,
+  );
+
   const workflow = getTaskWorkflow(taskId);
   if (!workflow) {
     // No workflow template — fall back to legacy single-agent behavior
+    console.log(`[Workflow] task=${taskId} no workflow template — skipping orchestration`);
     return { success: true, handedOff: false };
   }
 
@@ -117,6 +122,9 @@ export async function handleStageTransition(
   const targetStage = workflow.stages.find(s => s.status === newStatus);
   if (!targetStage) {
     // Status not in workflow
+    console.log(
+      `[Workflow] task=${taskId} status="${newStatus}" is not a stage in workflow "${workflow.name}" (${workflow.id}) — skipping`,
+    );
     return { success: true, handedOff: false };
   }
 
@@ -137,6 +145,7 @@ export async function handleStageTransition(
 
   // Find the agent assigned to this role (task_roles first, then fall back to assigned_agent_id)
   let roleAgent = getAgentForRole(taskId, targetStage.role);
+  let resolution: 'task_role' | 'assigned_fallback' | 'dynamic' = 'task_role';
   if (!roleAgent) {
     // Fall back to the task's directly assigned agent
     const task = queryOne<{ assigned_agent_id: string | null }>(
@@ -149,14 +158,19 @@ export async function handleStageTransition(
         [task.assigned_agent_id]
       );
       if (agent) {
-        console.log(`[Workflow] No task_role for "${targetStage.role}", using assigned agent "${agent.name}"`);
+        console.log(`[Workflow] task=${taskId} no task_role for "${targetStage.role}" — using assigned agent "${agent.name}" (${agent.id})`);
         roleAgent = agent;
+        resolution = 'assigned_fallback';
       }
     }
   }
   if (!roleAgent) {
     // Dynamic routing fallback (planner+rules) when explicit role assignment is missing
     roleAgent = pickDynamicAgent(taskId, targetStage.role);
+    if (roleAgent) {
+      console.log(`[Workflow] task=${taskId} picked dynamic agent "${roleAgent.name}" (${roleAgent.id}) for role "${targetStage.role}"`);
+      resolution = 'dynamic';
+    }
   }
 
   if (!roleAgent) {
@@ -165,9 +179,12 @@ export async function handleStageTransition(
       'UPDATE tasks SET planning_dispatch_error = ?, updated_at = datetime(\'now\') WHERE id = ?',
       [errorMsg, taskId]
     );
-    console.warn(`[Workflow] ${errorMsg} (task ${taskId})`);
+    console.warn(`[Workflow] task=${taskId} ${errorMsg}`);
     return { success: false, handedOff: false, error: errorMsg };
   }
+  console.log(
+    `[Workflow] task=${taskId} stage="${targetStage.label}" role="${targetStage.role}" → agent="${roleAgent.name}" (${roleAgent.id}) via ${resolution}`,
+  );
 
   // Reset previous agent to standby (if different from new agent and not working on other tasks)
   const previousTask = queryOne<{ assigned_agent_id: string | null }>(
@@ -213,7 +230,7 @@ export async function handleStageTransition(
     const counts = queryOne<{ act: number; del: number }>(
       `SELECT
          (SELECT COUNT(*) FROM task_activities WHERE task_id = ?) as act,
-         (SELECT COUNT(*) FROM task_deliverables WHERE task_id = ?) as del`,
+         (SELECT COUNT(*) FROM task_deliverables WHERE task_id = ? AND role = 'output') as del`,
       [taskId, taskId]
     );
     saveCheckpointThrottled(
@@ -251,9 +268,10 @@ export async function handleStageTransition(
   if (!result.success) {
     const error = `Dispatch to ${roleAgent.name} failed: ${result.error || 'unknown'}`;
     run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [error, now, taskId]);
+    console.error(`[Workflow] task=${taskId} dispatch failed for agent="${roleAgent.name}" (${roleAgent.id}): ${result.error || 'unknown'}`);
     return { success: false, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
   }
-  console.log(`[Workflow] Dispatched task ${taskId} to ${roleAgent.name} (role: ${targetStage.role})`);
+  console.log(`[Workflow] task=${taskId} dispatched to agent="${roleAgent.name}" (${roleAgent.id}) for role="${targetStage.role}" stage="${targetStage.label}"`);
   return { success: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
 }
 

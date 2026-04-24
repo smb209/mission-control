@@ -12,9 +12,12 @@ import type { TaskDeliverable } from '@/lib/types';
 
 interface DeliverablesListProps {
   taskId: string;
+  /** Bump to force a refetch — used by TaskModal after adding an attachment
+   *  in edit mode without reopening the modal. */
+  refreshKey?: number;
 }
 
-export function DeliverablesList({ taskId }: DeliverablesListProps) {
+export function DeliverablesList({ taskId, refreshKey = 0 }: DeliverablesListProps) {
   const [deliverables, setDeliverables] = useState<TaskDeliverable[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -34,7 +37,7 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
 
   useEffect(() => {
     loadDeliverables();
-  }, [loadDeliverables]);
+  }, [loadDeliverables, refreshKey]);
 
   const getDeliverableIcon = (type: string) => {
     switch (type) {
@@ -139,21 +142,10 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
     d => d.deliverable_type === 'file' && d.storage_scheme === 'mc'
   ).length;
 
-  return (
-    <div className="space-y-3">
-      {mcFileCount > 0 && (
-        <div className="flex items-center justify-end">
-          <a
-            href={`/api/tasks/${taskId}/deliverables/download`}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm bg-mc-accent text-white hover:bg-mc-accent/90"
-            title={`Download ${mcFileCount} file${mcFileCount === 1 ? '' : 's'} as a zip`}
-          >
-            <Archive className="w-4 h-4" />
-            Download all ({mcFileCount})
-          </a>
-        </div>
-      )}
-      {deliverables.map((deliverable) => (
+  const inputs = deliverables.filter((d) => d.role === 'input');
+  const outputs = deliverables.filter((d) => d.role !== 'input');
+
+  const renderRow = (deliverable: TaskDeliverable) => (
         <div
           key={deliverable.id}
           className="flex gap-3 p-3 bg-mc-bg rounded-lg border border-mc-border hover:border-mc-accent transition-colors"
@@ -178,7 +170,17 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               ) : (
-                <h4 className="font-medium text-mc-text">{deliverable.title}</h4>
+                <h4 className="font-medium text-mc-text flex items-center gap-2">
+                  {deliverable.title}
+                  {deliverable.role === 'input' && (
+                    <span
+                      className="px-1.5 py-0.5 rounded-sm bg-mc-accent/15 text-mc-accent text-[10px] font-semibold uppercase tracking-wide"
+                      title="Operator-attached input (not counted as evidence)"
+                    >
+                      Input
+                    </span>
+                  )}
+                </h4>
               )}
               <div className="flex items-center gap-1">
                 {/* Download button (MC-managed file deliverables only) */}
@@ -261,7 +263,40 @@ export function DeliverablesList({ taskId }: DeliverablesListProps) {
             </div>
           </div>
         </div>
-      ))}
+  );
+
+  return (
+    <div className="space-y-3">
+      {mcFileCount > 0 && (
+        <div className="flex items-center justify-end">
+          <a
+            href={`/api/tasks/${taskId}/deliverables/download`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm bg-mc-accent text-white hover:bg-mc-accent/90"
+            title={`Download ${mcFileCount} file${mcFileCount === 1 ? '' : 's'} as a zip`}
+          >
+            <Archive className="w-4 h-4" />
+            Download all ({mcFileCount})
+          </a>
+        </div>
+      )}
+      {inputs.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-mc-text-secondary">
+            Inputs ({inputs.length})
+          </h3>
+          <div className="space-y-2">{inputs.map(renderRow)}</div>
+        </section>
+      )}
+      {outputs.length > 0 && (
+        <section className="space-y-2">
+          {inputs.length > 0 && (
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-mc-text-secondary">
+              Outputs ({outputs.length})
+            </h3>
+          )}
+          <div className="space-y-2">{outputs.map(renderRow)}</div>
+        </section>
+      )}
     </div>
   );
 }

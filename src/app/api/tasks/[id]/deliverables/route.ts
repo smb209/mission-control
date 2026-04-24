@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { CreateDeliverableSchema } from '@/lib/validation';
+import { CreateDeliverableSchema, ReferenceDeliverableSchema } from '@/lib/validation';
 import { logDebugEvent } from '@/lib/debug-log';
 import { AuthzError } from '@/lib/authz/agent-task';
 import { authzErrorResponse } from '@/lib/authz/http';
@@ -58,7 +58,54 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
   try {
     const taskId = params.id;
     const body = await request.json();
-    
+
+    // Reference variant: operator linking a prior deliverable as an input on
+    // this task. Disambiguated by `kind: 'reference'`; the service-layer call
+    // always sets role='input' and records source_deliverable_id.
+    if (body && body.kind === 'reference') {
+      const refValidation = ReferenceDeliverableSchema.safeParse(body);
+      if (!refValidation.success) {
+        return NextResponse.json(
+          { error: 'Validation failed', details: refValidation.error.issues },
+          { status: 400 }
+        );
+      }
+      const sourceId = refValidation.data.source_deliverable_id;
+      const source = getDb()
+        .prepare(`SELECT * FROM task_deliverables WHERE id = ?`)
+        .get(sourceId) as TaskDeliverable | undefined;
+      if (!source) {
+        return NextResponse.json({ error: 'Source deliverable not found' }, { status: 404 });
+      }
+
+      let refResult;
+      try {
+        refResult = registerDeliverable({
+          taskId,
+          actingAgentId: null,
+          deliverableType: source.deliverable_type,
+          title: source.title,
+          path: source.path,
+          description: source.description,
+          role: 'input',
+          sourceDeliverableId: source.id,
+        });
+      } catch (err) {
+        if (err instanceof AuthzError) return authzErrorResponse(err);
+        throw err;
+      }
+
+      logDebugEvent({
+        type: 'agent.deliverable_post',
+        direction: 'inbound',
+        taskId,
+        requestBody: body,
+        metadata: { kind: 'reference', source_deliverable_id: sourceId },
+      });
+
+      return NextResponse.json(refResult.deliverable, { status: 201 });
+    }
+
     // Validate input with Zod
     const validation = CreateDeliverableSchema.safeParse(body);
     if (!validation.success) {
@@ -68,7 +115,7 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
       );
     }
 
-    const { deliverable_type, title, path, description, spec_deliverable_id, agent_id } = validation.data;
+    const { deliverable_type, title, path, description, spec_deliverable_id, agent_id, role } = validation.data;
 
     // Reject the reserved ssh:// prefix — the column is widened for future
     // remote storage, but nothing reads it yet. HTTP-only pre-validation;
@@ -91,6 +138,7 @@ export async function POST(request: NextRequest, props: { params: Promise<{ id: 
         path,
         description,
         specDeliverableId: spec_deliverable_id,
+        role,
       });
     } catch (err) {
       if (err instanceof AuthzError) return authzErrorResponse(err);

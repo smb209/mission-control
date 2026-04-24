@@ -28,8 +28,13 @@ export interface StageEvidenceResult {
  * the gate rejects and lists the missing ones.
  */
 export function checkStageEvidence(taskId: string): StageEvidenceResult {
+  // role='output' filter: operator-attached inputs on task creation don't
+  // count as evidence that the agent did any work.
   const deliverableCount = Number(
-    queryOne<{ count: number }>('SELECT COUNT(*) as count FROM task_deliverables WHERE task_id = ?', [taskId])?.count || 0
+    queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM task_deliverables WHERE task_id = ? AND role = 'output'`,
+      [taskId]
+    )?.count || 0
   );
   const activityCount = Number(
     queryOne<{ count: number }>(
@@ -69,7 +74,7 @@ export function checkStageEvidence(taskId: string): StageEvidenceResult {
   const fulfilled = new Set(
     queryAll<{ spec_deliverable_id: string }>(
       `SELECT spec_deliverable_id FROM task_deliverables
-       WHERE task_id = ? AND spec_deliverable_id IS NOT NULL AND spec_deliverable_id != ''`,
+       WHERE task_id = ? AND role = 'output' AND spec_deliverable_id IS NOT NULL AND spec_deliverable_id != ''`,
       [taskId]
     ).map(r => r.spec_deliverable_id)
   );

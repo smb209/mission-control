@@ -101,7 +101,11 @@ export const CreateActivitySchema = z.object({
   metadata: z.string().optional(),
 });
 
-// Deliverable validation schema
+const DeliverableRole = z.enum(['input', 'output']);
+
+// Deliverable validation schema — pre-existing shape used by agents to
+// register an output they produced (or, with role='input', an operator-
+// attached input from the create-task flow).
 export const CreateDeliverableSchema = z.object({
   deliverable_type: DeliverableType,
   title: z.string().min(1, 'Title is required'),
@@ -116,6 +120,18 @@ export const CreateDeliverableSchema = z.object({
    *  evidence gate reconciles this against planning_spec.deliverables[].id
    *  before allowing a transition into testing/review/verification/done. */
   spec_deliverable_id: z.string().max(200).optional(),
+  /** Operator uploads / references use 'input'. Defaults to 'output' so
+   *  agent-side POSTs don't need to change. */
+  role: DeliverableRole.optional(),
+});
+
+/** Alternate body shape for POST /api/tasks/:id/deliverables — links a prior
+ *  deliverable from another task as an input on this task. The server looks up
+ *  the source row, copies its type/title/path/description, and inserts a new
+ *  row with role='input' and source_deliverable_id pointing at the source. */
+export const ReferenceDeliverableSchema = z.object({
+  kind: z.literal('reference'),
+  source_deliverable_id: z.string().min(1, 'source_deliverable_id is required').max(100),
 });
 
 // Planning spec deliverables + success criteria (structured shape). Readers

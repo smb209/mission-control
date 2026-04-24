@@ -6,6 +6,7 @@ import { buildCheckpointContext } from '@/lib/checkpoint';
 import { logTaskActivityThrottled } from '@/lib/activity-log';
 import { scanStalledTasks } from '@/lib/stall-detection';
 import { scanStalledCycles } from '@/lib/autopilot/stall-detection';
+import { getTaskWorkflow, handleStageTransition } from '@/lib/workflow-engine';
 import type { Agent, AgentHealth, AgentHealthState, Task } from '@/lib/types';
 
 // Heartbeat rows are throttled so the activity feed stays readable. 5 min
@@ -253,6 +254,58 @@ export async function nudgeAgent(agentId: string): Promise<{ success: boolean; e
 
   const now = new Date().toISOString();
 
+  // Sanity check: does the task's current status want a different role's
+  // agent? If yes, orchestration was skipped somewhere (e.g. MCP-driven
+  // status flip that didn't call handleStageTransition). Blindly
+  // re-dispatching the wrong agent would just extend the stall loop — log
+  // loudly and correct via handleStageTransition instead.
+  const workflow = getTaskWorkflow(activeTask.id);
+  const currentStage = workflow?.stages.find((s) => s.status === activeTask.status);
+  if (currentStage?.role) {
+    const expected = queryOne<{ agent_id: string; agent_name: string }>(
+      `SELECT tr.agent_id, a.name as agent_name
+         FROM task_roles tr JOIN agents a ON a.id = tr.agent_id
+        WHERE tr.task_id = ? AND tr.role = ?`,
+      [activeTask.id, currentStage.role],
+    );
+    if (expected && expected.agent_id !== agentId) {
+      console.warn(
+        `[Health] nudge role mismatch: task=${activeTask.id} status=${activeTask.status} role=${currentStage.role} assigned=${agentId} expected=${expected.agent_id} (${expected.agent_name}) — correcting via handleStageTransition`,
+      );
+      // Kill stale session for the wrong agent
+      run(
+        `UPDATE openclaw_sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'active'`,
+        [now, now, agentId],
+      );
+      run(
+        `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)
+         VALUES (?, ?, ?, 'status_changed', ?, ?)`,
+        [
+          uuidv4(),
+          activeTask.id,
+          agentId,
+          `Nudge detected role mismatch — redirecting to ${expected.agent_name} (role=${currentStage.role})`,
+          now,
+        ],
+      );
+      const handoff = await handleStageTransition(activeTask.id, activeTask.status, {
+        previousStatus: activeTask.status,
+      });
+      run(
+        `UPDATE agent_health SET consecutive_stall_checks = 0, health_state = 'idle', updated_at = ? WHERE agent_id = ?`,
+        [now, agentId],
+      );
+      if (!handoff.success) {
+        return { success: false, error: handoff.error || 'Handoff failed' };
+      }
+      return { success: true };
+    }
+  }
+
+  console.log(
+    `[Health] nudging agent=${agentId} on task=${activeTask.id} (status=${activeTask.status}, stage role=${currentStage?.role ?? 'n/a'})`,
+  );
+
   // Kill current session
   run(
     `UPDATE openclaw_sessions SET status = 'ended', ended_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'active'`,
@@ -279,8 +332,10 @@ export async function nudgeAgent(agentId: string): Promise<{ success: boolean; e
   // Re-dispatch via shared helper (IPv4 coerce + 120s timeout + cause unwrap).
   const result = await internalDispatch(activeTask.id, { caller: 'health-nudge' });
   if (!result.success) {
+    console.error(`[Health] nudge dispatch failed: task=${activeTask.id} agent=${agentId} error=${result.error || 'unknown'}`);
     return { success: false, error: result.error || 'Dispatch failed' };
   }
+  console.log(`[Health] nudge dispatched: task=${activeTask.id} agent=${agentId}`);
 
   run(
     `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, created_at)

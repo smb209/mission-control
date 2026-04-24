@@ -250,6 +250,9 @@ CREATE TABLE IF NOT EXISTS task_activities (
 );
 
 -- Task deliverables table (files, URLs, artifacts)
+-- role='input' rows are operator-attached at create time (uploads or
+-- references to prior deliverables). role='output' rows are agent-produced.
+-- Evidence gates and spec reconciliation only consider outputs.
 CREATE TABLE IF NOT EXISTS task_deliverables (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -259,6 +262,8 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   description TEXT,
   storage_scheme TEXT DEFAULT 'host',
   size_bytes INTEGER,
+  role TEXT NOT NULL DEFAULT 'output' CHECK (role IN ('input','output')),
+  source_deliverable_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

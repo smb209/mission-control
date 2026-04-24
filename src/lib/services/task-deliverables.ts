@@ -19,7 +19,7 @@ import {
   hostPathToContainerPath,
   fileSizeBytes,
 } from '@/lib/deliverables/storage';
-import type { TaskDeliverable, DeliverableStorageScheme } from '@/lib/types';
+import type { TaskDeliverable, DeliverableStorageScheme, DeliverableRole } from '@/lib/types';
 
 export type DeliverableKind = 'file' | 'url' | 'artifact';
 
@@ -36,6 +36,12 @@ export interface RegisterDeliverableInput {
   path?: string;
   description?: string;
   specDeliverableId?: string;
+  /** Defaults to 'output' (the pre-existing agent-posting behavior). 'input'
+   *  is used by the operator-facing attachments flow on task creation. */
+  role?: DeliverableRole;
+  /** Set when this row was created by referencing a prior deliverable
+   *  (role='input' ref flow). */
+  sourceDeliverableId?: string;
 }
 
 export interface RegisterDeliverableResult {
@@ -57,7 +63,9 @@ export function registerDeliverable(
     path,
     description,
     specDeliverableId,
+    sourceDeliverableId,
   } = input;
+  const role: DeliverableRole = input.role ?? 'output';
 
   if (actingAgentId) {
     assertAgentCanActOnTask(actingAgentId, taskId, 'deliverable');
@@ -91,32 +99,34 @@ export function registerDeliverable(
 
   // Dedup: the same agent often re-registers the same file (e.g. after an
   // iteration) and we used to accumulate a row per call. The natural
-  // uniqueness key is (task_id, deliverable_type, path) when path is set,
-  // or (task_id, deliverable_type, title) for path-less artifacts/URLs.
+  // uniqueness key is (task_id, deliverable_type, path, role) when path is
+  // set, or (task_id, deliverable_type, title, role) for path-less rows.
+  // `role` is in the key so an operator can attach an input with the same
+  // path as an agent's output without collapsing into one row.
   // If a row already matches, update its mutable fields in place and keep
   // the stable id + created_at so any downstream refs remain valid.
   const existing = (path
     ? db
         .prepare(
           `SELECT id FROM task_deliverables
-           WHERE task_id = ? AND deliverable_type = ? AND path = ?
+           WHERE task_id = ? AND deliverable_type = ? AND path = ? AND role = ?
            LIMIT 1`,
         )
-        .get(taskId, deliverableType, path)
+        .get(taskId, deliverableType, path, role)
     : db
         .prepare(
           `SELECT id FROM task_deliverables
-           WHERE task_id = ? AND deliverable_type = ? AND path IS NULL AND title = ?
+           WHERE task_id = ? AND deliverable_type = ? AND path IS NULL AND title = ? AND role = ?
            LIMIT 1`,
         )
-        .get(taskId, deliverableType, title)) as { id: string } | undefined;
+        .get(taskId, deliverableType, title, role)) as { id: string } | undefined;
 
   const id = existing?.id ?? crypto.randomUUID();
 
   if (existing) {
     db.prepare(`
       UPDATE task_deliverables
-      SET title = ?, description = ?, storage_scheme = ?, size_bytes = ?, spec_deliverable_id = ?
+      SET title = ?, description = ?, storage_scheme = ?, size_bytes = ?, spec_deliverable_id = ?, source_deliverable_id = ?
       WHERE id = ?
     `).run(
       title,
@@ -124,12 +134,13 @@ export function registerDeliverable(
       storageScheme,
       sizeBytes ?? null,
       specDeliverableId || null,
+      sourceDeliverableId || null,
       id,
     );
   } else {
     db.prepare(`
-      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, storage_scheme, size_bytes, spec_deliverable_id, role, source_deliverable_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       taskId,
@@ -140,6 +151,8 @@ export function registerDeliverable(
       storageScheme,
       sizeBytes ?? null,
       specDeliverableId || null,
+      role,
+      sourceDeliverableId || null,
     );
   }
 

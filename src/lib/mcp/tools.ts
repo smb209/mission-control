@@ -24,6 +24,7 @@ import { registerDeliverable } from '@/lib/services/task-deliverables';
 import { logActivity } from '@/lib/services/task-activities';
 import { transitionTaskStatus } from '@/lib/services/task-status';
 import { failTask } from '@/lib/services/task-failure';
+import { handleStageTransition, drainQueue } from '@/lib/workflow-engine';
 import { saveTaskCheckpoint } from '@/lib/services/task-checkpoint';
 import { sendAgentMail } from '@/lib/services/agent-mailbox';
 import { saveKnowledge } from '@/lib/services/knowledge';
@@ -423,6 +424,62 @@ export function registerAllTools(server: McpServer): void {
         statusReason: args.status_reason,
       });
       if (result.ok) {
+        console.log(
+          `[update_task_status] task=${args.task_id} ${result.previousStatus}→${args.status} by agent=${args.agent_id}`,
+        );
+
+        // Drive workflow orchestration for forward moves into role-owned
+        // stages. Without this, an agent can flip status to e.g. "testing"
+        // but the Tester is never dispatched, leaving the task stuck with
+        // the previous agent still assigned — which agent-health then
+        // nudges every 16 min (see task 79e311a2 postmortem).
+        const ORCHESTRATED_STAGES = new Set([
+          'assigned',
+          'in_progress',
+          'testing',
+          'review',
+          'verification',
+        ]);
+        if (
+          ORCHESTRATED_STAGES.has(args.status) &&
+          args.status !== result.previousStatus
+        ) {
+          try {
+            const stageResult = await handleStageTransition(args.task_id, args.status, {
+              previousStatus: result.previousStatus,
+            });
+            if (stageResult.handedOff) {
+              console.log(
+                `[update_task_status] task=${args.task_id} handoff: ${args.status} → ${stageResult.newAgentName} (${stageResult.newAgentId})`,
+              );
+            } else if (!stageResult.success) {
+              console.warn(
+                `[update_task_status] task=${args.task_id} stage transition blocked for status=${args.status}: ${stageResult.error || 'unknown'}`,
+              );
+            } else {
+              console.log(
+                `[update_task_status] task=${args.task_id} status=${args.status} entered with no handoff (queue stage or no workflow template)`,
+              );
+              // Queue stage — attempt to drain in case the next stage is free.
+              const t = queryOne<{ workspace_id: string }>(
+                'SELECT workspace_id FROM tasks WHERE id = ?',
+                [args.task_id],
+              );
+              if (t) {
+                drainQueue(args.task_id, t.workspace_id).catch((err) => {
+                  console.warn(
+                    `[update_task_status] task=${args.task_id} drainQueue failed: ${(err as Error).message}`,
+                  );
+                });
+              }
+            }
+          } catch (err) {
+            console.error(
+              `[update_task_status] task=${args.task_id} handleStageTransition threw: ${(err as Error).message}`,
+            );
+          }
+        }
+
         // If the task just moved to a delivery state (review/testing/
         // verification) AND it's a delegation subtask, mail the
         // coordinator so they can call accept_subtask / reject_subtask
