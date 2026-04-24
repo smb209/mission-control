@@ -363,13 +363,13 @@ const migrations: Migration[] = [
         `).run(
           'tpl-simple',
           'Simple',
-          'Builder only — for quick, straightforward tasks',
+          'Builder only — coordinator decides whether to spawn test/review subtasks',
           JSON.stringify([
             { id: 'build', label: 'Build', role: 'builder', status: 'in_progress' },
             { id: 'done', label: 'Done', role: null, status: 'done' }
           ]),
           JSON.stringify({}),
-          0, now, now
+          1, now, now
         );
 
         db.prepare(`
@@ -378,7 +378,7 @@ const migrations: Migration[] = [
         `).run(
           'tpl-standard',
           'Standard',
-          'Builder → Tester → Reviewer — for most projects',
+          'Builder → Tester → Reviewer — pre-baked pipeline for tasks that always need review',
           JSON.stringify([
             { id: 'build', label: 'Build', role: 'builder', status: 'in_progress' },
             { id: 'test', label: 'Test', role: 'tester', status: 'testing' },
@@ -386,7 +386,7 @@ const migrations: Migration[] = [
             { id: 'done', label: 'Done', role: null, status: 'done' }
           ]),
           JSON.stringify({ testing: 'in_progress', review: 'in_progress' }),
-          1, now, now
+          0, now, now
         );
 
         db.prepare(`
@@ -2332,6 +2332,37 @@ const migrations: Migration[] = [
         db.exec(`ALTER TABLE tasks ADD COLUMN include_knowledge INTEGER DEFAULT 0`);
       }
       console.log('[Migration 041] Complete.');
+    }
+  },
+  {
+    id: '042',
+    name: 'default_to_simple_workflow',
+    up: (db) => {
+      // Flip the default workflow template from Standard (build → test →
+      // review → done) to Simple (build → done). With the new convoy
+      // dispatch model, the coordinator decides per-task whether to spawn
+      // explicit tester/reviewer subtasks rather than having every task pay
+      // the cost of a pre-baked three-stage pipeline. Existing tasks keep
+      // whatever template they were already assigned; this only changes
+      // which template new tasks pick up by default.
+      console.log('[Migration 042] Flipping default workflow to tpl-simple...');
+      const tplExists = db.prepare(
+        `SELECT id FROM workflow_templates WHERE id IN ('tpl-simple', 'tpl-standard')`
+      ).all() as { id: string }[];
+      if (tplExists.length < 2) {
+        console.log('[Migration 042] tpl-simple/tpl-standard not present — skipping');
+        return;
+      }
+      db.prepare(`UPDATE workflow_templates SET is_default = 0 WHERE workspace_id = 'default'`).run();
+      db.prepare(`UPDATE workflow_templates SET is_default = 1 WHERE id = 'tpl-simple'`).run();
+      // Refresh the descriptions to reflect the new mental model.
+      db.prepare(`UPDATE workflow_templates SET description = ? WHERE id = 'tpl-simple'`).run(
+        'Builder only — coordinator decides whether to spawn test/review subtasks'
+      );
+      db.prepare(`UPDATE workflow_templates SET description = ? WHERE id = 'tpl-standard'`).run(
+        'Builder → Tester → Reviewer — pre-baked pipeline for tasks that always need review'
+      );
+      console.log('[Migration 042] Complete.');
     }
   }
 ];

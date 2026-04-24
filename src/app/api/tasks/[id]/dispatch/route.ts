@@ -452,6 +452,13 @@ If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the 
       if (isCoordinator) {
         return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`spawn_subtask\` MCP tool. Every delegation must declare deliverables, acceptance criteria, duration, and cadence — no declarations, no spawn.
 
+**First decide the shape of the flow.** The task workflow defaults to a single builder step — you are responsible for shaping anything richer. For each task, ask:
+- Does a single builder slice cover this end-to-end, or does it split cleanly across roles (research → write, build → test, draft → review)?
+- Does the output need an independent quality gate before it can be trusted (testing, review, fact-check, sign-off)?
+- Is any slice high-risk or hard to undo, such that a second pair of eyes is worth the latency?
+
+If the answer to all three is "no", spawn one builder subtask and accept it when delivered. If any is "yes", spawn the additional slices explicitly — typically a tester or reviewer subtask gated on the builder's deliverable. Skip ceremony when it isn't earned; add gates when the work needs them.
+
 **Per peer, call once:**
 \`\`\`
 spawn_subtask({
