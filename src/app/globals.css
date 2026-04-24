@@ -195,3 +195,87 @@ body {
 .online-glow {
   box-shadow: 0 0 10px var(--mc-accent-green), 0 0 20px var(--mc-accent-green);
 }
+
+/* Markdown viewer typography (deliverables/[id]/view). Scoped so it doesn't
+   bleed into other markdown surfaces; styled with mc-* tokens. */
+.mc-md {
+  color: var(--mc-text);
+  font-size: 15px;
+  line-height: 1.65;
+}
+.mc-md > :first-child { margin-top: 0; }
+.mc-md > :last-child { margin-bottom: 0; }
+.mc-md h1, .mc-md h2, .mc-md h3, .mc-md h4, .mc-md h5, .mc-md h6 {
+  color: var(--mc-text);
+  font-weight: 600;
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+}
+.mc-md h1 { font-size: 1.85em; border-bottom: 1px solid var(--mc-border); padding-bottom: 0.3em; }
+.mc-md h2 { font-size: 1.45em; border-bottom: 1px solid var(--mc-border); padding-bottom: 0.25em; }
+.mc-md h3 { font-size: 1.2em; }
+.mc-md h4 { font-size: 1.05em; }
+.mc-md h5, .mc-md h6 { font-size: 0.95em; color: var(--mc-text-secondary); }
+.mc-md p { margin: 0.8em 0; }
+.mc-md a { color: var(--mc-accent); text-decoration: underline; text-underline-offset: 2px; }
+.mc-md a:hover { opacity: 0.85; }
+.mc-md ul, .mc-md ol { margin: 0.8em 0; padding-left: 1.6em; }
+.mc-md ul { list-style: disc; }
+.mc-md ol { list-style: decimal; }
+.mc-md li { margin: 0.25em 0; }
+.mc-md li > p { margin: 0.25em 0; }
+.mc-md blockquote {
+  margin: 1em 0; padding: 0.4em 1em;
+  border-left: 3px solid var(--mc-accent);
+  color: var(--mc-text-secondary);
+  background: var(--mc-bg-secondary);
+  border-radius: 0 4px 4px 0;
+}
+.mc-md hr { border: 0; border-top: 1px solid var(--mc-border); margin: 2em 0; }
+.mc-md code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--mc-bg-tertiary);
+  padding: 0.12em 0.4em;
+  border-radius: 3px;
+  color: var(--mc-accent-pink);
+}
+.mc-md pre {
+  background: var(--mc-bg-secondary);
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  padding: 1em;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+.mc-md pre code {
+  background: transparent;
+  padding: 0;
+  color: var(--mc-text);
+  font-size: 0.85em;
+}
+.mc-md table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+  font-size: 0.95em;
+}
+.mc-md th, .mc-md td {
+  border: 1px solid var(--mc-border);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.mc-md th {
+  background: var(--mc-bg-tertiary);
+  font-weight: 600;
+}
+.mc-md img { max-width: 100%; height: auto; border-radius: 4px; }
+.mc-md input[type="checkbox"] { margin-right: 0.4em; vertical-align: middle; }
+.mc-md kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--mc-bg-tertiary);
+  border: 1px solid var(--mc-border);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+}
