@@ -74,6 +74,7 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     'save_checkpoint',
     'send_mail',
     'save_knowledge',
+    'request_knowledge',
     // Coordinator delegation surface (replaces the old `delegate` tool).
     // See specs/coordinator-delegation-via-convoy-spec.md §3.
     'spawn_subtask',
@@ -345,4 +346,51 @@ test('save_knowledge workspace-only (no task_id) requires only active agent', as
   const payload = parseStructured<{ entry: { task_id?: string; confidence: number } }>(res);
   assert.equal(payload.entry.task_id, undefined);
   assert.equal(payload.entry.confidence, 0.5);
+});
+
+// ─── request_knowledge ──────────────────────────────────────────────
+
+test('request_knowledge returns none=true when no entries match', async () => {
+  const { client } = await makePair();
+  const agent = seedAgent({ role: 'builder' });
+
+  const res = await client.callTool({
+    name: 'request_knowledge',
+    arguments: { agent_id: agent, workspace_id: 'default', query: 'nothing like this exists' },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{ matches: unknown[]; none: boolean }>(res);
+  assert.equal(payload.none, true);
+  assert.equal(payload.matches.length, 0);
+});
+
+test('request_knowledge scores title/tag/content hits and filters unrelated entries', async () => {
+  const { client } = await makePair();
+  const learner = seedAgent({ role: 'learner' });
+  const builder = seedAgent({ role: 'builder' });
+
+  // Seed two unrelated + one relevant entry.
+  for (const payload of [
+    { category: 'pattern', title: 'Foreign entity registration tripwire', content: 'NY requires filing.', tags: ['legal'] },
+    { category: 'fix', title: 'PEO beats EOR for small teams', content: 'Justworks is cheaper.', tags: ['hr'] },
+    { category: 'checklist', title: 'Docker compose caching tips', content: 'Use BuildKit layer cache for docker images.', tags: ['docker', 'build'] },
+  ]) {
+    const r = await client.callTool({
+      name: 'save_knowledge',
+      arguments: { agent_id: learner, workspace_id: 'default', ...payload },
+    });
+    assert.equal(r.isError, undefined);
+  }
+
+  const res = await client.callTool({
+    name: 'request_knowledge',
+    arguments: { agent_id: builder, workspace_id: 'default', query: 'docker caching for builds' },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{ matches: { title: string }[]; none: boolean }>(res);
+  assert.equal(payload.none, false);
+  assert.equal(payload.matches[0].title, 'Docker compose caching tips');
+  // Unrelated "Foreign entity" / "PEO" entries should not leak in — the
+  // exact regression the old auto-injector produced.
+  assert.ok(!payload.matches.some(m => /foreign entity|PEO/i.test(m.title)));
 });

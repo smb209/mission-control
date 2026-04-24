@@ -167,6 +167,10 @@ export async function PATCH(
       updates.push('pr_status = ?');
       values.push((validatedData as Record<string, unknown>).pr_status);
     }
+    if (validatedData.include_knowledge !== undefined) {
+      updates.push('include_knowledge = ?');
+      values.push(validatedData.include_knowledge ? 1 : 0);
+    }
 
     // Track if we need to dispatch task
     let shouldDispatch = false;

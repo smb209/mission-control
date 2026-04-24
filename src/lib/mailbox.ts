@@ -172,24 +172,70 @@ export function getConvoyMail(convoyId: string): AgentMailMessage[] {
   );
 }
 
+/** Match roll_call / roll_call_reply subjects. Single-use by design. */
+const ROLL_CALL_SUBJECT_RE = /^roll_call(?:_reply)?:/i;
+/** Cap on non-roll_call messages rendered per dispatch. */
+const MAX_MAIL_RENDERED = 5;
+
 /**
  * Format unread mail for injection into agent dispatch context.
+ *
+ * Rules (see issue where a "favorite color" test task got 10 queued
+ * roll_call blocks in a single dispatch):
+ *  - Roll-call mail is single-use: only the newest roll_call is rendered,
+ *    older ones are collapsed into a one-line summary, and ALL roll_call
+ *    rows are deleted (not just marked read) so they can never re-appear.
+ *    The durable record lives in `rollcall_entries`.
+ *  - Other mail is capped at MAX_MAIL_RENDERED most-recent entries with
+ *    an overflow line for the remainder. Rendered entries are marked
+ *    read; unrendered overflow stays unread so the next dispatch sees it.
  */
 export function formatMailForDispatch(agentId: string): string | null {
-  const messages = getUnreadMail(agentId);
+  const messages = getUnreadMail(agentId); // ORDER BY created_at ASC
   if (messages.length === 0) return null;
 
-  let section = '\n📬 **Messages from your convoy teammates:**\n';
+  const rollCalls: AgentMailMessage[] = [];
+  const others: AgentMailMessage[] = [];
   for (const msg of messages) {
+    if (msg.subject && ROLL_CALL_SUBJECT_RE.test(msg.subject)) {
+      rollCalls.push(msg);
+    } else {
+      others.push(msg);
+    }
+  }
+
+  const lines: string[] = [];
+
+  if (rollCalls.length > 0) {
+    // Newest roll_call (getUnreadMail is ASC, so the last element is newest)
+    const newest = rollCalls[rollCalls.length - 1];
+    const from = (newest as AgentMailMessage & { from_agent_name?: string }).from_agent_name || newest.from_agent_id;
+    const subjectLine = newest.subject ? ` (${newest.subject})` : '';
+    lines.push(`- From **${from}**${subjectLine}: ${newest.body}`);
+    if (rollCalls.length > 1) {
+      lines.push(`- _(${rollCalls.length - 1} older roll_call request(s) collapsed — only the newest is shown; stale ones were discarded.)_`);
+    }
+    // Delete every roll_call row — they are one-shot and the durable
+    // state lives in rollcall_entries. Keeping them around is what caused
+    // the original "10 roll_calls concatenated into one prompt" bug.
+    for (const msg of rollCalls) {
+      run('DELETE FROM agent_mailbox WHERE id = ?', [msg.id]);
+    }
+  }
+
+  // Render the most-recent N non-roll_call messages; summarise overflow.
+  const rendered = others.slice(-MAX_MAIL_RENDERED);
+  const overflow = others.length - rendered.length;
+  for (const msg of rendered) {
     const from = (msg as AgentMailMessage & { from_agent_name?: string }).from_agent_name || msg.from_agent_id;
     const subjectLine = msg.subject ? ` (${msg.subject})` : '';
-    section += `- From **${from}**${subjectLine}: ${msg.body}\n`;
-  }
-
-  // Mark all as read
-  for (const msg of messages) {
+    lines.push(`- From **${from}**${subjectLine}: ${msg.body}`);
     markAsRead(msg.id);
   }
+  if (overflow > 0) {
+    lines.push(`- _(${overflow} older message(s) omitted — still unread and will surface on the next dispatch.)_`);
+  }
 
-  return section;
+  if (lines.length === 0) return null;
+  return '\n📬 **Messages from your convoy teammates:**\n' + lines.join('\n') + '\n';
 }

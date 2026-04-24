@@ -27,7 +27,7 @@ import { failTask } from '@/lib/services/task-failure';
 import { handleStageTransition, drainQueue } from '@/lib/workflow-engine';
 import { saveTaskCheckpoint } from '@/lib/services/task-checkpoint';
 import { sendAgentMail } from '@/lib/services/agent-mailbox';
-import { saveKnowledge } from '@/lib/services/knowledge';
+import { saveKnowledge, searchKnowledge } from '@/lib/services/knowledge';
 import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask } from '@/lib/convoy';
@@ -740,6 +740,86 @@ export function registerAllTools(server: McpServer): void {
         confidence: args.confidence,
       });
       return textResult(JSON.stringify(entry, null, 2), { entry });
+    }),
+  );
+
+  // request_knowledge ─────────────────────────────────────────────
+  // On-demand replacement for the old auto-injected PREVIOUS LESSONS
+  // LEARNED block. The dispatcher no longer drops unrelated lessons into
+  // every prompt; instead an agent calls this when it wants relevant
+  // prior experience for the current problem. Matches query tokens
+  // against title/tags/content and returns scored results (or a clear
+  // "no relevant knowledge" response so the agent doesn't retry).
+  server.registerTool(
+    'request_knowledge',
+    {
+      title: 'Search workspace knowledge for relevant lessons',
+      description:
+        "Query the workspace knowledge base for lessons relevant to the current problem. Returns up to `limit` matches scored by title/tag/content hits × confidence, or an empty result with `none: true` when nothing relevant exists (do not retry in that case — lessons are only written by the Learner agent on stage transitions).",
+      inputSchema: {
+        agent_id: agentIdArg,
+        task_id: taskIdArg
+          .optional()
+          .describe(
+            "Optional task id. When provided, the workspace is resolved from the task so the caller doesn't need to pass workspace_id separately.",
+          ),
+        workspace_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Workspace to search. Required if task_id is omitted.'),
+        query: z
+          .string()
+          .min(3)
+          .max(500)
+          .describe('Free-text query — what problem / topic are you trying to recall lessons for?'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe('Max matches to return. Defaults to 5.'),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('request_knowledge', async (args) => {
+      let workspaceId = args.workspace_id;
+      if (!workspaceId && args.task_id) {
+        const row = queryOne<{ workspace_id: string }>(
+          'SELECT workspace_id FROM tasks WHERE id = ?',
+          [args.task_id],
+        );
+        workspaceId = row?.workspace_id;
+      }
+      if (!workspaceId) {
+        const message = 'workspace_id is required when task_id is omitted';
+        return {
+          isError: true,
+          content: [{ type: 'text', text: message }],
+          structuredContent: { error: 'missing_workspace', message },
+        };
+      }
+
+      const result = searchKnowledge({
+        actingAgentId: args.agent_id,
+        workspaceId,
+        query: args.query,
+        limit: args.limit,
+      });
+
+      if (result.none) {
+        const text = 'No relevant knowledge found in this workspace for that query. Proceed without prior-lesson context.';
+        return textResult(text, { matches: [], none: true });
+      }
+
+      const text = result.matches
+        .map(
+          (m, i) =>
+            `${i + 1}. **${m.title}** (${m.category}, confidence: ${(m.confidence * 100).toFixed(0)}%)\n   ${m.content}`,
+        )
+        .join('\n\n');
+      return textResult(text, { matches: result.matches, none: false });
     }),
   );
 

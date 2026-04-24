@@ -120,8 +120,8 @@ export async function POST(request: NextRequest) {
     const workflowTemplateId = defaultTemplate?.id || null;
 
     run(
-      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, include_knowledge, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         validatedData.title,
@@ -134,6 +134,7 @@ export async function POST(request: NextRequest) {
         validatedData.business_id || 'default',
         validatedData.due_date || null,
         workflowTemplateId,
+        validatedData.include_knowledge ? 1 : 0,
         now,
         now,
       ]

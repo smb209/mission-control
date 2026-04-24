@@ -45,6 +45,7 @@ export const CreateTaskSchema = z.object({
   business_id: z.string().optional(),
   workspace_id: z.string().optional(),
   due_date: z.string().optional().nullable(),
+  include_knowledge: z.boolean().optional(),
 });
 
 export const UpdateTaskSchema = z.object({
@@ -61,6 +62,7 @@ export const UpdateTaskSchema = z.object({
   override_reason: z.string().max(2000).optional(),
   pr_url: z.string().url().optional().nullable(),
   pr_status: z.enum(['pending', 'open', 'merged', 'closed']).optional(),
+  include_knowledge: z.boolean().optional(),
 });
 
 // Admin release-stall schema — escape hatch for deadlocked tasks that

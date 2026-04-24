@@ -122,6 +122,14 @@ export interface Task {
   merge_pr_url?: string;
   is_archived?: number;
   archived_at?: string;
+  /**
+   * Opt-in: when truthy, dispatch injects a PREVIOUS LESSONS LEARNED
+   * block from workspace knowledge. Off by default because the legacy
+   * auto-injection had no relevance filter and leaked unrelated lessons
+   * into simple tasks. Agents can still pull targeted knowledge on
+   * demand via the `request_knowledge` MCP tool.
+   */
+  include_knowledge?: number;
   created_at: string;
   updated_at: string;
   // Joined fields

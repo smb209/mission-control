@@ -13,6 +13,33 @@ import { getDb } from '@/lib/db';
 import { assertAgentActive, assertAgentCanActOnTask } from '@/lib/authz/agent-task';
 import type { KnowledgeEntry } from '@/lib/types';
 
+export interface SearchKnowledgeInput {
+  /** `null` for operator flows — skip authorization. */
+  actingAgentId: string | null;
+  workspaceId: string;
+  /** Free-text query; tokens are matched against title/content/tags. */
+  query: string;
+  /** Cap on returned matches. Defaults to 5. */
+  limit?: number;
+}
+
+export interface SearchKnowledgeResult {
+  matches: KnowledgeEntry[];
+  /** Convenience flag so the caller can print a "no relevant knowledge" line without checking length. */
+  none: boolean;
+}
+
+// Common English stopwords that would otherwise produce spurious hits
+// against knowledge titles/content (e.g. "for" matching "PEO beats EOR
+// for small teams" when the real query was about Docker caching).
+const SEARCH_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was',
+  'but', 'not', 'you', 'your', 'our', 'out', 'can', 'how', 'why',
+  'what', 'when', 'where', 'who', 'will', 'would', 'should', 'have',
+  'has', 'had', 'them', 'they', 'their', 'some', 'any', 'all', 'about',
+  'into', 'over', 'than', 'then', 'been', 'also', 'its',
+]);
+
 export type KnowledgeCategory = 'failure' | 'fix' | 'pattern' | 'checklist';
 
 export interface SaveKnowledgeInput {
@@ -94,4 +121,80 @@ export function saveKnowledge(input: SaveKnowledgeInput): KnowledgeEntry {
     created_by_agent_id: row.created_by_agent_id ?? undefined,
     created_at: row.created_at,
   };
+}
+
+/**
+ * Search workspace knowledge by free-text query. Used by the
+ * `request_knowledge` MCP tool so agents can pull targeted lessons on
+ * demand instead of having unfiltered lessons auto-injected into every
+ * dispatch.
+ *
+ * Scoring is deliberately simple: each whitespace-separated query token
+ * contributes to a per-row hit count (title hit = 3, tag hit = 2, content
+ * hit = 1). Results are ordered by `score DESC, confidence DESC,
+ * created_at DESC`. Rows with zero hits are excluded. Stopwords aren't
+ * filtered — agents are expected to ask substantive questions.
+ */
+export function searchKnowledge(input: SearchKnowledgeInput): SearchKnowledgeResult {
+  const { actingAgentId, workspaceId, query, limit = 5 } = input;
+
+  if (actingAgentId) {
+    assertAgentActive(actingAgentId);
+  }
+
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map(t => t.replace(/[^\p{L}\p{N}_-]+/gu, ''))
+    .filter(t => t.length >= 3 && !SEARCH_STOPWORDS.has(t));
+
+  if (tokens.length === 0) {
+    return { matches: [], none: true };
+  }
+
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, workspace_id, task_id, category, title, content, tags, confidence,
+              created_by_agent_id, created_at
+         FROM knowledge_entries
+        WHERE workspace_id = ?`,
+    )
+    .all(workspaceId) as KnowledgeRow[];
+
+  const scored = rows
+    .map(row => {
+      const title = row.title.toLowerCase();
+      const content = row.content.toLowerCase();
+      const tags = row.tags ? (JSON.parse(row.tags) as string[]).join(' ').toLowerCase() : '';
+      let score = 0;
+      for (const t of tokens) {
+        if (title.includes(t)) score += 3;
+        if (tags.includes(t)) score += 2;
+        if (content.includes(t)) score += 1;
+      }
+      return { row, score };
+    })
+    .filter(s => s.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.row.confidence !== a.row.confidence) return b.row.confidence - a.row.confidence;
+      return b.row.created_at.localeCompare(a.row.created_at);
+    })
+    .slice(0, limit);
+
+  const matches: KnowledgeEntry[] = scored.map(({ row }) => ({
+    id: row.id,
+    workspace_id: row.workspace_id,
+    task_id: row.task_id ?? undefined,
+    category: row.category,
+    title: row.title,
+    content: row.content,
+    tags: row.tags ? (JSON.parse(row.tags) as string[]) : [],
+    confidence: row.confidence,
+    created_by_agent_id: row.created_by_agent_id ?? undefined,
+    created_at: row.created_at,
+  }));
+
+  return { matches, none: matches.length === 0 };
 }

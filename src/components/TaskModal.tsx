@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText, BookOpen } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -57,6 +57,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
     status: task?.status || 'inbox' as TaskStatus,
     assigned_agent_id: task?.assigned_agent_id || '',
     due_date: task?.due_date || '',
+    include_knowledge: Boolean(task?.include_knowledge),
   });
 
   const resolveStatus = (): TaskStatus => {
@@ -285,6 +286,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
           status: 'inbox' as TaskStatus,
           assigned_agent_id: '',
           due_date: '',
+          include_knowledge: false,
         });
         setUsePlanningMode(false);
         setPendingUploads([]);
@@ -454,14 +456,38 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                     Enable Planning Mode
                   </span>
                   <p className="text-xs text-mc-text-secondary mt-1">
-                    Best for complex projects that need detailed requirements. 
-                    You&apos;ll answer a few questions to define scope, goals, and constraints 
+                    Best for complex projects that need detailed requirements.
+                    You&apos;ll answer a few questions to define scope, goals, and constraints
                     before work begins. Skip this for quick, straightforward tasks.
                   </p>
                 </div>
               </label>
             </div>
           )}
+
+          {/* Inject prior lessons (workspace knowledge) - opt-in */}
+          <div className="p-3 bg-mc-bg rounded-lg border border-mc-border">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.include_knowledge}
+                onChange={(e) => setForm({ ...form, include_knowledge: e.target.checked })}
+                className="w-4 h-4 mt-0.5 rounded-sm border-mc-border"
+              />
+              <div>
+                <span className="font-medium text-sm flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-mc-accent" />
+                  Include workspace lessons in dispatch
+                </span>
+                <p className="text-xs text-mc-text-secondary mt-1">
+                  Off by default. When enabled, the assigned agent receives the
+                  workspace&apos;s recent learner-captured lessons as context.
+                  Leave off for unrelated work — agents can still pull a
+                  targeted lesson on demand via <code>request_knowledge</code>.
+                </p>
+              </div>
+            </label>
+          </div>
 
           {/* Assigned Agent */}
           <div>
