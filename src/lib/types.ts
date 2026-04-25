@@ -28,7 +28,12 @@ export type EventType =
   | 'message_sent'
   | 'agent_status_changed'
   | 'agent_joined'
-  | 'system';
+  | 'system'
+  // Roadmap & PM-agent events (Phases 4 + 6).
+  | 'roadmap_drift_scan'
+  | 'pm_proposal_accepted'
+  | 'pm_standup_generated'
+  | 'pm_standup_skipped';
 
 export type AgentSource = 'local' | 'gateway';
 

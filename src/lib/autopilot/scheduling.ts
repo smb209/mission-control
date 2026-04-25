@@ -167,7 +167,33 @@ export async function checkAndRunDueSchedules(): Promise<void> {
             console.warn(`[Schedule] roadmap_drift_scan ${schedule.id} has no resolvable workspace`);
             break;
           }
+          // Phase 4: derive first (writes derived_*).
           applyDerivation(workspaceId);
+          // Phase 6: synthesize the morning standup proposal AFTER
+          // derivation, so the standup reads the fresh schedule. The
+          // standup generator is idempotent within a UTC day — re-runs
+          // of this handler produce no extra cards.
+          try {
+            const { generateStandup } = await import('@/lib/agents/pm-standup');
+            const result = generateStandup({ workspace_id: workspaceId });
+            if (result.proposal) {
+              console.log(
+                `[Schedule] PM standup posted (${result.drift_count} drift signals) for workspace=${workspaceId}`,
+              );
+            } else {
+              console.log(
+                `[Schedule] PM standup skipped (${result.skipped_reason}) for workspace=${workspaceId}`,
+              );
+            }
+          } catch (err) {
+            // Standup generation must NEVER break Phase 4's idempotency
+            // contract — if the standup throws, the derivation has
+            // already committed and the operator sees the drift event.
+            console.error(
+              `[Schedule] PM standup generation failed for ${workspaceId}:`,
+              (err as Error).message,
+            );
+          }
           break;
         }
         default:

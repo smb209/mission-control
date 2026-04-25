@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { ChevronUp, ChevronDown, Clock, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Event } from '@/lib/types';
@@ -143,6 +144,15 @@ function EventItem({ event }: { event: Event }) {
         return '📦';
       case 'task_unarchived':
         return '📤';
+      // Phase 4 / 6: roadmap + PM-agent events.
+      case 'roadmap_drift_scan':
+        return '📐';
+      case 'pm_standup_generated':
+        return '🌅';
+      case 'pm_standup_skipped':
+        return '🤐';
+      case 'pm_proposal_accepted':
+        return '📋';
       default:
         return '📌';
     }
@@ -151,22 +161,96 @@ function EventItem({ event }: { event: Event }) {
   const isTaskEvent = ['task_created', 'task_assigned', 'task_completed'].includes(event.type);
   const isHighlight = event.type === 'task_created' || event.type === 'task_completed';
 
-  return (
-    <div
-      className={`p-2 rounded border-l-2 animate-slide-in ${
-        isHighlight ? 'bg-mc-bg-tertiary border-mc-accent-pink' : 'bg-transparent border-transparent hover:bg-mc-bg-tertiary'
-      }`}
-    >
-      <div className="flex items-start gap-2">
-        <span className="text-sm">{getEventIcon(event.type)}</span>
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm ${isTaskEvent ? 'text-mc-accent-pink' : 'text-mc-text'}`}>{event.message}</p>
-          <div className="flex items-center gap-1 mt-1 text-xs text-mc-text-secondary">
-            <Clock className="w-3 h-3" />
-            {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
-          </div>
+  // Phase 6: deep-link the planning-layer events. Drift scans link to the
+  // roadmap; standup events link to the proposal in /pm. Skipped runs are
+  // informational only — no link.
+  const planningLink = computePlanningLink(event);
+  const inner = (
+    <div className="flex items-start gap-2">
+      <span className="text-sm">{getEventIcon(event.type)}</span>
+      <div className="flex-1 min-w-0">
+        <p className={`text-sm ${isTaskEvent ? 'text-mc-accent-pink' : 'text-mc-text'}`}>
+          {summarizePlanningEvent(event) ?? event.message}
+        </p>
+        <div className="flex items-center gap-1 mt-1 text-xs text-mc-text-secondary">
+          <Clock className="w-3 h-3" />
+          {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
         </div>
       </div>
     </div>
   );
+
+  const wrapperClass = `p-2 rounded border-l-2 animate-slide-in ${
+    isHighlight ? 'bg-mc-bg-tertiary border-mc-accent-pink' : 'bg-transparent border-transparent hover:bg-mc-bg-tertiary'
+  }`;
+
+  if (planningLink) {
+    return (
+      <Link href={planningLink} className={`block ${wrapperClass} hover:underline`}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={wrapperClass}>{inner}</div>;
+}
+
+interface PlanningEventMetadata {
+  workspace_id?: string;
+  initiatives_updated?: number;
+  status_flips?: number;
+  drifts?: unknown[];
+  drift_count?: number;
+  proposal_id?: string;
+  date?: string;
+  change_kinds?: string[];
+}
+
+function parseMeta(event: Event): PlanningEventMetadata {
+  if (!event.metadata) return {};
+  try {
+    return JSON.parse(event.metadata) as PlanningEventMetadata;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Where clicking a planning-layer event should take the operator. Roadmap
+ * for drift scans, /pm with a proposal deep-link for standups.
+ */
+function computePlanningLink(event: Event): string | null {
+  const meta = parseMeta(event);
+  if (event.type === 'roadmap_drift_scan') {
+    const ws = meta.workspace_id ? `?workspace=${encodeURIComponent(meta.workspace_id)}` : '';
+    return `/roadmap${ws}`;
+  }
+  if (event.type === 'pm_standup_generated' && meta.proposal_id) {
+    return `/pm?proposal=${encodeURIComponent(meta.proposal_id)}`;
+  }
+  if (event.type === 'pm_proposal_accepted' && meta.proposal_id) {
+    return `/pm?proposal=${encodeURIComponent(meta.proposal_id)}`;
+  }
+  return null;
+}
+
+/**
+ * Override the bare DB message with a more useful summary string when the
+ * metadata gives us extra signal. Returns null to fall back to event.message.
+ */
+function summarizePlanningEvent(event: Event): string | null {
+  if (event.type === 'roadmap_drift_scan') {
+    const meta = parseMeta(event);
+    const updated = meta.initiatives_updated ?? 0;
+    const drifts = Array.isArray(meta.drifts) ? meta.drifts.length : meta.drift_count ?? 0;
+    return `Roadmap recomputed — ${updated} initiative${updated === 1 ? '' : 's'} updated, ${drifts} drift${drifts === 1 ? '' : 's'} detected`;
+  }
+  if (event.type === 'pm_standup_generated') {
+    const meta = parseMeta(event);
+    const kinds = meta.change_kinds?.length ?? 0;
+    return `PM standup posted: ${kinds} change${kinds === 1 ? '' : 's'} proposed`;
+  }
+  if (event.type === 'pm_standup_skipped') {
+    return 'PM standup ran — nothing drifting today';
+  }
+  return null;
 }
