@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Activity, ArrowRight } from 'lucide-react';
+import { Activity, ArrowRight } from 'lucide-react';
 import type { Workspace } from '@/lib/types';
 
 export default function ActivityPickerPage() {
@@ -61,9 +61,6 @@ export default function ActivityPickerPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Link href="/" className="text-mc-text-secondary hover:text-mc-text transition-colors">
-                <ArrowLeft className="w-5 h-5" />
-              </Link>
               <Activity className="w-6 h-6 text-mc-accent" />
               <h1 className="text-xl font-bold text-mc-text">Activity Dashboards</h1>
             </div>

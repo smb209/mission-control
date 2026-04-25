@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle, Activity, Rocket, Bug } from 'lucide-react';
+import { Plus, ArrowRight, Folder, Users, CheckSquare, Trash2, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import type { WorkspaceStats } from '@/lib/types';
 
@@ -40,8 +40,9 @@ export function WorkspaceDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-mc-bg">
-      {/* Header */}
+    <div className="min-h-full bg-mc-bg">
+      {/* Page header. Cross-page nav now lives in the unified left shell;
+          this header keeps only page-scoped actions ("New Workspace"). */}
       <header className="border-b border-mc-border bg-mc-bg-secondary">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -50,28 +51,6 @@ export function WorkspaceDashboard() {
               <h1 className="text-xl font-bold">Mission Control</h1>
             </div>
             <div className="flex items-center gap-2">
-              <Link
-                href="/autopilot"
-                className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm"
-              >
-                <Rocket className="w-4 h-4" />
-                Autopilot
-              </Link>
-              <Link
-                href="/activity"
-                className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm"
-              >
-                <Activity className="w-4 h-4" />
-                Activity Dashboard
-              </Link>
-              <Link
-                href="/debug"
-                className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm"
-                title="Verbose debugging — capture MC↔agent traffic"
-              >
-                <Bug className="w-4 h-4" />
-                Debug
-              </Link>
               <button
                 onClick={() => setShowCreateModal(true)}
                 className="min-h-11 flex items-center gap-2 px-4 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90"

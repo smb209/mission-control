@@ -82,9 +82,6 @@ export default function AutopilotPage() {
               <h1 className="text-xl font-bold text-mc-text">Product Autopilot</h1>
             </div>
             <div className="flex items-center gap-2">
-              <Link href="/" className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm">
-                Workspaces
-              </Link>
               <Link
                 href="/autopilot/new"
                 className="min-h-11 px-4 rounded-lg bg-mc-accent text-white hover:bg-mc-accent/90 flex items-center gap-2 text-sm font-medium"
