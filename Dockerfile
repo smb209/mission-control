@@ -19,6 +19,9 @@ RUN yarn install --frozen-lockfile --production && yarn cache clean
 FROM base AS builder
 COPY --from=build-deps /app/node_modules ./node_modules
 COPY . .
+# Next 16 + Turbopack can exceed Node's default ~4GB heap on larger builds.
+# Belt-and-suspenders alongside the Docker Desktop memory allocation.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN yarn build
 
 FROM node:22-bookworm-slim AS runner

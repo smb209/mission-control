@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT,
-  status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled')),
+  status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'draft', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled', 'needs_user_input')),
   priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
   assigned_agent_id TEXT REFERENCES agents(id),
   created_by_agent_id TEXT REFERENCES agents(id),
@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   is_archived INTEGER DEFAULT 0,
   archived_at TEXT,
   include_knowledge INTEGER DEFAULT 0,
+  initiative_id TEXT REFERENCES initiatives(id),
+  status_check_md TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -488,6 +490,7 @@ CREATE TABLE IF NOT EXISTS ideas (
   auto_suppressed INTEGER DEFAULT 0,
   suppress_reason TEXT,
   variant_id TEXT REFERENCES product_program_variants(id),
+  initiative_id TEXT REFERENCES initiatives(id),
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -829,6 +832,95 @@ CREATE TABLE IF NOT EXISTS debug_config (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Roadmap planning layer (see specs/roadmap-and-pm-spec.md §5).
+-- Initiatives form a tree (parent_initiative_id). Almost every column is
+-- nullable so a backlog item can be a one-line title with no other detail.
+CREATE TABLE IF NOT EXISTS initiatives (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  product_id TEXT REFERENCES products(id),
+  parent_initiative_id TEXT REFERENCES initiatives(id),
+  kind TEXT NOT NULL CHECK (kind IN ('theme','milestone','epic','story')),
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'planned'
+    CHECK (status IN ('planned','in_progress','at_risk','blocked','done','cancelled')),
+  owner_agent_id TEXT REFERENCES agents(id),
+  estimated_effort_hours REAL,
+  complexity TEXT CHECK (complexity IN ('S','M','L','XL')),
+  target_start TEXT,
+  target_end TEXT,
+  derived_start TEXT,
+  derived_end TEXT,
+  committed_end TEXT,
+  status_check_md TEXT,
+  sort_order INTEGER DEFAULT 0,
+  source_idea_id TEXT REFERENCES ideas(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Cross-initiative dependency edges (DAG, many-to-many).
+CREATE TABLE IF NOT EXISTS initiative_dependencies (
+  id TEXT PRIMARY KEY,
+  initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+  depends_on_initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'finish_to_start'
+    CHECK (kind IN ('finish_to_start','start_to_start','blocking','informational')),
+  note TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(initiative_id, depends_on_initiative_id)
+);
+
+-- Audit log of every initiative-tree move.
+CREATE TABLE IF NOT EXISTS initiative_parent_history (
+  id TEXT PRIMARY KEY,
+  initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+  from_parent_id TEXT REFERENCES initiatives(id),
+  to_parent_id TEXT REFERENCES initiatives(id),
+  moved_by_agent_id TEXT REFERENCES agents(id),
+  reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Audit log of every task re-parent. First row per task has from = NULL.
+CREATE TABLE IF NOT EXISTS task_initiative_history (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  from_initiative_id TEXT REFERENCES initiatives(id),
+  to_initiative_id TEXT REFERENCES initiatives(id),
+  moved_by_agent_id TEXT REFERENCES agents(id),
+  reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Owner availability windows (PM impact-analysis input).
+CREATE TABLE IF NOT EXISTS owner_availability (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  unavailable_start TEXT NOT NULL,
+  unavailable_end TEXT NOT NULL,
+  reason TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- PM proposal artifacts (Phase 5 will populate these).
+CREATE TABLE IF NOT EXISTS pm_proposals (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  trigger_text TEXT NOT NULL,
+  trigger_kind TEXT NOT NULL DEFAULT 'manual'
+    CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation')),
+  impact_md TEXT NOT NULL,
+  proposed_changes TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft','accepted','rejected','superseded')),
+  applied_at TEXT,
+  applied_by_agent_id TEXT REFERENCES agents(id),
+  parent_proposal_id TEXT REFERENCES pm_proposals(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
@@ -896,4 +988,17 @@ CREATE INDEX IF NOT EXISTS idx_skill_reports_skill ON skill_reports(skill_id);
 CREATE INDEX IF NOT EXISTS idx_debug_events_created ON debug_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_debug_events_task ON debug_events(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_debug_events_agent ON debug_events(agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_initiatives_workspace ON initiatives(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_initiatives_parent ON initiatives(parent_initiative_id);
+CREATE INDEX IF NOT EXISTS idx_initiatives_product ON initiatives(product_id);
+CREATE INDEX IF NOT EXISTS idx_initiatives_status ON initiatives(status);
+CREATE INDEX IF NOT EXISTS idx_initiatives_target_window ON initiatives(target_start, target_end);
+CREATE INDEX IF NOT EXISTS idx_initiative_deps_from ON initiative_dependencies(initiative_id);
+CREATE INDEX IF NOT EXISTS idx_initiative_deps_to ON initiative_dependencies(depends_on_initiative_id);
+CREATE INDEX IF NOT EXISTS idx_task_initiative_history_task ON task_initiative_history(task_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_initiative_parent_history ON initiative_parent_history(initiative_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_owner_availability_agent ON owner_availability(agent_id, unavailable_start);
+CREATE INDEX IF NOT EXISTS idx_tasks_initiative ON tasks(initiative_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_draft ON tasks(status, initiative_id) WHERE status='draft';
+CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC);
 `;
