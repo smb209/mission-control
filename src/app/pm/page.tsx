@@ -13,7 +13,8 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import Link from 'next/link';
-import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin } from 'lucide-react';
 
 interface Workspace {
   id: string;
@@ -77,6 +78,25 @@ const STATUS_BADGE: Record<PmProposal['status'], string> = {
   superseded: 'bg-zinc-500/20 text-zinc-300',
 };
 
+// Trigger-kind badge palette. Distinct colors so the operator can tell at a
+// glance whether a card was operator-initiated (manual), scheduled (drift),
+// or a disruption response.
+const TRIGGER_BADGE: Record<string, { label: string; cls: string }> = {
+  manual: { label: 'manual', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
+  scheduled_drift_scan: {
+    label: 'scheduled',
+    cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  },
+  disruption_event: {
+    label: 'disruption',
+    cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  },
+  status_check_investigation: {
+    label: 'status check',
+    cls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+  },
+};
+
 export default function PmChatPage() {
   // useSearchParams() requires a Suspense boundary during static prerender
   // (Next 16). The actual page contents live in PmChatPageInner below.
@@ -99,7 +119,17 @@ function PmChatPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [refining, setRefining] = useState<string | null>(null);
   const [refineText, setRefineText] = useState('');
+  const [runningStandup, setRunningStandup] = useState(false);
+  const [standupBanner, setStandupBanner] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+
+  // Phase 6: support `?proposal=<id>` deep-links — scroll to and highlight
+  // the matching proposal card on load. Cleared after first successful
+  // scroll so subsequent re-renders don't keep re-scrolling.
+  const searchParams = useSearchParams();
+  const focusProposalId = searchParams?.get('proposal') ?? null;
+  const [highlightedProposalId, setHighlightedProposalId] = useState<string | null>(null);
 
   // Load workspace list once.
   useEffect(() => {
@@ -267,10 +297,71 @@ function PmChatPageInner() {
     }
   };
 
+  const handleRunStandup = useCallback(async () => {
+    if (runningStandup) return;
+    setRunningStandup(true);
+    setStandupBanner(null);
+    setError(null);
+    try {
+      const res = await fetch('/api/pm/standup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: workspaceId, force: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Standup failed');
+      if (data.proposal) {
+        setStandupBanner(
+          `Standup posted — ${data.drift_count ?? 0} drift signal${data.drift_count === 1 ? '' : 's'}.`,
+        );
+      } else {
+        setStandupBanner(
+          `Standup ran — nothing to surface (${data.reason ?? 'no_drift'}).`,
+        );
+      }
+      await loadMessages();
+      await loadRecent();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRunningStandup(false);
+    }
+  }, [runningStandup, workspaceId, loadMessages, loadRecent]);
+
+  // Deep-link scroll: once the proposal card is rendered, scroll it into
+  // view and apply a transient highlight class. We watch `proposals` so the
+  // effect waits for the underlying fetches in `loadMessages` to populate.
+  useEffect(() => {
+    if (!focusProposalId) return;
+    if (!proposals[focusProposalId]) return;
+    const el = cardRefs.current.get(focusProposalId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedProposalId(focusProposalId);
+      // Auto-dim the highlight after 4s.
+      const timer = setTimeout(() => setHighlightedProposalId(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [focusProposalId, proposals]);
+
   const proposalCount = useMemo(() => {
     const draft = recentProposals.filter(p => p.status === 'draft').length;
     return { draft, total: recentProposals.length };
   }, [recentProposals]);
+
+  // Latest still-draft standup proposal for the current workspace, if any.
+  // Used to render the pinned banner at the top of the chat thread.
+  const pinnedStandup = useMemo<PmProposal | null>(() => {
+    const standups = recentProposals.filter(
+      p =>
+        p.workspace_id === workspaceId &&
+        p.status === 'draft' &&
+        p.trigger_kind === 'scheduled_drift_scan',
+    );
+    if (standups.length === 0) return null;
+    // Newest first.
+    return standups.sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  }, [recentProposals, workspaceId]);
 
   return (
     <div className="flex flex-col h-screen bg-mc-bg text-mc-text">
@@ -292,6 +383,16 @@ function PmChatPageInner() {
         <div className="ml-auto text-xs text-mc-text-secondary">
           {proposalCount.draft} draft · {proposalCount.total} total
         </div>
+        <button
+          type="button"
+          onClick={handleRunStandup}
+          disabled={!pmAgent || runningStandup}
+          title="Run today's PM standup now (proactive drift scan)"
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 disabled:opacity-50"
+        >
+          {runningStandup ? <Loader className="w-3 h-3 animate-spin" /> : <Sunrise className="w-3 h-3" />}
+          Run standup
+        </button>
         <Link href="/roadmap" className="text-xs text-mc-accent hover:underline">
           View roadmap →
         </Link>
@@ -305,6 +406,28 @@ function PmChatPageInner() {
               <AlertTriangle className="w-4 h-4" /> {error}
             </div>
           )}
+          {standupBanner && (
+            <div className="m-3 px-3 py-2 bg-violet-500/10 border border-violet-500/30 text-violet-200 text-sm rounded-sm flex items-center gap-2">
+              <Sunrise className="w-4 h-4" /> {standupBanner}
+              <button
+                type="button"
+                onClick={() => setStandupBanner(null)}
+                className="ml-auto text-violet-300/70 hover:text-violet-200"
+                aria-label="Dismiss"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+          {pinnedStandup && (
+            <PinnedStandupCard
+              proposal={pinnedStandup}
+              onAccept={onAccept}
+              onReject={onReject}
+              setRef={(el) => cardRefs.current.set(pinnedStandup.id, el)}
+              highlighted={highlightedProposalId === pinnedStandup.id}
+            />
+          )}
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.length === 0 && pmAgent && (
               <div className="text-center py-12 text-mc-text-secondary">
@@ -316,21 +439,32 @@ function PmChatPageInner() {
               </div>
             )}
 
-            {messages.map(m => (
-              <ChatMessageRow
-                key={m.id}
-                message={m}
-                proposal={parseProposalId(m) ? proposals[parseProposalId(m)!] : undefined}
-                onAccept={onAccept}
-                onReject={onReject}
-                refining={refining}
-                refineText={refineText}
-                onRefineStart={(id) => { setRefining(id); setRefineText(''); }}
-                onRefineCancel={() => { setRefining(null); setRefineText(''); }}
-                onRefineSubmit={onRefineSubmit}
-                onRefineTextChange={setRefineText}
-              />
-            ))}
+            {messages.map(m => {
+              const pid = parseProposalId(m);
+              const proposal = pid ? proposals[pid] : undefined;
+              // Suppress duplicate render of the pinned standup card here —
+              // it's already rendered above the thread.
+              if (proposal && pinnedStandup && proposal.id === pinnedStandup.id) {
+                return null;
+              }
+              return (
+                <ChatMessageRow
+                  key={m.id}
+                  message={m}
+                  proposal={proposal}
+                  onAccept={onAccept}
+                  onReject={onReject}
+                  refining={refining}
+                  refineText={refineText}
+                  onRefineStart={(id) => { setRefining(id); setRefineText(''); }}
+                  onRefineCancel={() => { setRefining(null); setRefineText(''); }}
+                  onRefineSubmit={onRefineSubmit}
+                  onRefineTextChange={setRefineText}
+                  setCardRef={(id, el) => cardRefs.current.set(id, el)}
+                  highlighted={proposal ? highlightedProposalId === proposal.id : false}
+                />
+              );
+            })}
           </div>
 
           <div className="border-t border-mc-border p-3 space-y-2 shrink-0">
@@ -422,6 +556,10 @@ interface ChatMessageRowProps {
   onRefineCancel: () => void;
   onRefineSubmit: (id: string) => void;
   onRefineTextChange: (s: string) => void;
+  /** Phase 6: register the card's DOM element so the page can scroll to it. */
+  setCardRef?: (id: string, el: HTMLDivElement | null) => void;
+  /** Phase 6: visual highlight after a deep-link scroll. */
+  highlighted?: boolean;
 }
 
 function ChatMessageRow({
@@ -435,6 +573,8 @@ function ChatMessageRow({
   onRefineCancel,
   onRefineSubmit,
   onRefineTextChange,
+  setCardRef,
+  highlighted,
 }: ChatMessageRowProps) {
   const isUser = message.role === 'user';
 
@@ -457,13 +597,25 @@ function ChatMessageRow({
   }
 
   // Proposal card
+  const trigger = TRIGGER_BADGE[proposal.trigger_kind] ?? TRIGGER_BADGE.manual;
   return (
     <div className="mr-12">
-      <div className="border border-amber-500/40 bg-amber-500/5 rounded-md overflow-hidden">
+      <div
+        ref={(el) => setCardRef?.(proposal.id, el)}
+        className={`border border-amber-500/40 bg-amber-500/5 rounded-md overflow-hidden transition-shadow ${
+          highlighted ? 'ring-2 ring-mc-accent shadow-lg shadow-mc-accent/20' : ''
+        }`}
+      >
         <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/30 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-300" />
           <span className="text-sm font-semibold text-amber-200">
             Proposal — {proposal.proposed_changes.length} change{proposal.proposed_changes.length === 1 ? '' : 's'}
+          </span>
+          <span
+            className={`px-1.5 py-0.5 text-[10px] rounded-sm border uppercase tracking-wide ${trigger.cls}`}
+            title={`trigger_kind: ${proposal.trigger_kind}`}
+          >
+            {trigger.label}
           </span>
           <span className={`ml-auto px-2 py-0.5 text-xs rounded-sm ${STATUS_BADGE[proposal.status]}`}>
             {proposal.status}
@@ -567,4 +719,92 @@ function summarizeDiff(c: PmDiff): string {
 function shortId(id: string | null | undefined): string {
   if (!id) return '∅';
   return id.slice(0, 8);
+}
+
+interface PinnedStandupCardProps {
+  proposal: PmProposal;
+  onAccept: (id: string) => void;
+  onReject: (id: string) => void;
+  setRef: (el: HTMLDivElement | null) => void;
+  highlighted: boolean;
+}
+
+/**
+ * Pinned banner above the chat thread for the current workspace's most-
+ * recent draft standup. Visually distinct from the inline proposal cards
+ * (violet accent + pin icon) so the operator can tell at a glance "this is
+ * today's PM-initiated card, not something I asked for".
+ *
+ * Renders accept/reject inline. Clicking the title scrolls into view (no
+ * change of route) — refining is intentionally NOT exposed here; the
+ * operator can refine via the inline card lower in the thread, or accept
+ * the standup as-is. Keeps the banner uncluttered.
+ */
+function PinnedStandupCard({
+  proposal,
+  onAccept,
+  onReject,
+  setRef,
+  highlighted,
+}: PinnedStandupCardProps) {
+  const created = new Date(
+    proposal.created_at.endsWith('Z') ? proposal.created_at : proposal.created_at + 'Z',
+  ).toLocaleString();
+  return (
+    <div
+      ref={setRef}
+      className={`m-3 border-l-4 border-violet-500 bg-violet-500/10 rounded-sm overflow-hidden transition-shadow ${
+        highlighted ? 'ring-2 ring-mc-accent shadow-lg shadow-mc-accent/20' : ''
+      }`}
+    >
+      <div className="px-3 py-2 flex items-center gap-2 border-b border-violet-500/30">
+        <Pin className="w-4 h-4 text-violet-300" />
+        <span className="text-sm font-semibold text-violet-200">
+          Latest standup — {proposal.proposed_changes.length} change
+          {proposal.proposed_changes.length === 1 ? '' : 's'}
+        </span>
+        <span
+          className="px-1.5 py-0.5 text-[10px] rounded-sm border bg-violet-500/15 text-violet-300 border-violet-500/30 uppercase tracking-wide"
+          title="trigger_kind: scheduled_drift_scan"
+        >
+          scheduled
+        </span>
+        <span className="ml-auto text-[11px] text-mc-text-secondary/80">{created}</span>
+      </div>
+      <div className="p-3 text-sm whitespace-pre-wrap">{proposal.impact_md}</div>
+      {proposal.proposed_changes.length > 0 && (
+        <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
+          {proposal.proposed_changes.slice(0, 6).map((c, idx) => (
+            <div key={idx} className="font-mono">
+              · {summarizeDiff(c)}
+            </div>
+          ))}
+          {proposal.proposed_changes.length > 6 && (
+            <div className="font-mono">
+              …and {proposal.proposed_changes.length - 6} more
+            </div>
+          )}
+        </div>
+      )}
+      <div className="px-3 py-2 border-t border-violet-500/30 bg-violet-500/5 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onAccept(proposal.id)}
+          className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1"
+        >
+          <Check className="w-3 h-3" /> Accept
+        </button>
+        <button
+          type="button"
+          onClick={() => onReject(proposal.id)}
+          className="text-xs px-2 py-1 bg-red-500/20 border border-red-500/40 text-red-200 rounded-sm hover:bg-red-500/30 flex items-center gap-1"
+        >
+          <X className="w-3 h-3" /> Reject
+        </button>
+        <span className="ml-auto text-[10px] text-mc-text-secondary/80">
+          See thread below to refine.
+        </span>
+      </div>
+    </div>
+  );
 }

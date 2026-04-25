@@ -2681,7 +2681,103 @@ const migrations: Migration[] = [
       }
       console.log(`[Migration 045] PM agents: seeded=${seeded} skipped=${skipped}`);
     }
-  }
+  },
+  {
+    id: '046',
+    name: 'seed_roadmap_drift_scan_schedules',
+    up: (db) => {
+      // Phase 6 of the roadmap & PM-agent feature. Auto-enable the daily
+      // roadmap drift scan + PM standup for every workspace that already has
+      // (a) at least one initiative and (b) at least one active product.
+      //
+      // Schedule shape:
+      //   schedule_type = 'roadmap_drift_scan'
+      //   cron = '0 9 * * 1-5'   (9am MT weekdays — matches spec §9.2)
+      //   product_id = the workspace's oldest active product (or first product
+      //     if none active). Phase 4's handler resolves workspace_id from
+      //     this product, so any product within the right workspace works.
+      //   config = JSON {"workspace_id":"<id>"} — explicit, future-proof in
+      //     case the operator moves products between workspaces.
+      //
+      // Idempotent: skips workspaces that already have a roadmap_drift_scan
+      // schedule (matched on schedule_type alone, not on product_id, so
+      // re-running this migration after schedule cleanup never duplicates).
+      console.log('[Migration 046] Seeding roadmap_drift_scan schedules per workspace...');
+
+      const workspaces = db
+        .prepare(
+          `SELECT DISTINCT w.id AS workspace_id
+             FROM workspaces w
+             JOIN initiatives i ON i.workspace_id = w.id`,
+        )
+        .all() as { workspace_id: string }[];
+
+      const insert = db.prepare(`
+        INSERT INTO product_schedules (
+          id, product_id, schedule_type, cron_expression, timezone,
+          enabled, config, created_at, updated_at
+        ) VALUES (?, ?, 'roadmap_drift_scan', '0 9 * * 1-5', 'America/Denver', 1, ?, ?, ?)
+      `);
+      const now = new Date().toISOString();
+      let seeded = 0;
+      let skippedExisting = 0;
+      let skippedNoProduct = 0;
+
+      for (const ws of workspaces) {
+        // Already has a roadmap_drift_scan schedule for any product in this
+        // workspace? skip.
+        const existing = db
+          .prepare(
+            `SELECT ps.id FROM product_schedules ps
+               JOIN products p ON p.id = ps.product_id
+              WHERE p.workspace_id = ? AND ps.schedule_type = 'roadmap_drift_scan'
+              LIMIT 1`,
+          )
+          .get(ws.workspace_id) as { id: string } | undefined;
+        if (existing) {
+          skippedExisting++;
+          continue;
+        }
+
+        // Pick the oldest active product (most likely the workspace's
+        // canonical "main" product). Falls back to the oldest product
+        // regardless of status. Workspaces with no product at all are
+        // skipped — the operator will need to create one or call the
+        // manual `/api/pm/standup` endpoint instead.
+        const product =
+          (db
+            .prepare(
+              `SELECT id FROM products
+                WHERE workspace_id = ? AND status = 'active'
+                ORDER BY created_at LIMIT 1`,
+            )
+            .get(ws.workspace_id) as { id: string } | undefined) ??
+          (db
+            .prepare(
+              `SELECT id FROM products WHERE workspace_id = ?
+                ORDER BY created_at LIMIT 1`,
+            )
+            .get(ws.workspace_id) as { id: string } | undefined);
+
+        if (!product) {
+          skippedNoProduct++;
+          continue;
+        }
+
+        insert.run(
+          crypto.randomUUID(),
+          product.id,
+          JSON.stringify({ workspace_id: ws.workspace_id }),
+          now,
+          now,
+        );
+        seeded++;
+      }
+      console.log(
+        `[Migration 046] roadmap_drift_scan schedules: seeded=${seeded}, skipped_existing=${skippedExisting}, skipped_no_product=${skippedNoProduct}`,
+      );
+    },
+  },
 ];
 
 // Inline PM soul_md reader for migration 045. The full module

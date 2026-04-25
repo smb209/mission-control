@@ -675,6 +675,29 @@ Each phase is a separate PR, demoable.
 
 **Done means:** without prompting, PM posts a daily card if anything's drifting.
 
+**Phase 6 implementation notes (post-merge):**
+
+- Standup synthesis lives in `src/lib/agents/pm-standup.ts` (`generateStandup`).
+  Deterministic — given the same snapshot + `today` anchor, the same diff list comes out.
+- Idempotency uses the `(YYYY-MM-DD)` stamp embedded in `trigger_text` (not
+  `created_at`) so a re-run with the same logical day correctly returns the
+  existing draft. The `force=true` flag bypasses this for "Run standup now".
+- Drift signals: milestone_at_risk, slippage (>3d), stale_blocked (≥3d idle),
+  stale_in_progress (≥7d idle), cycle_detected. Cycle members never receive
+  date-shift diffs.
+- Schedule seeding chosen: **Option A** — migration `046_seed_roadmap_drift_scan_schedules`
+  inserts a per-workspace cron (`0 9 * * 1-5` MT) on the workspace's oldest
+  active product. Workspaces without a product are skipped — operators can
+  trigger via `POST /api/pm/standup` instead.
+- Two new event types: `pm_standup_generated` (with proposal_id) and
+  `pm_standup_skipped` (silent runs). Both surface in `LiveFeed` with deep
+  links into `/pm?proposal=…` (standup) or `/roadmap` (drift scan).
+- `/pm` page additions: pinned-standup banner, "Run standup" toolbar
+  button, `?proposal=<id>` deep-link auto-scroll + highlight, trigger_kind
+  badge on every proposal card.
+- The PM still never auto-applies — every standup proposal is `draft`
+  awaiting operator accept.
+
 ---
 
 ## 15. Out of Scope (v1)
