@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p ${PORT:-4000}",
     "lint": "eslint .",
-    "test": "mkdir -p .tmp && rm -f .tmp/mission-control-test.db* && NODE_ENV=test DATABASE_PATH=.tmp/mission-control-test.db tsx --test src/**/*.test.ts",
+    "test": "mkdir -p .tmp && rm -f .tmp/mission-control-test.db* && find src -name '*.test.ts' -print0 | NODE_ENV=test DATABASE_PATH=.tmp/mission-control-test.db xargs -0 tsx --test",
     "mcp:smoke": "cd mcp-launcher && npm run smoke",
     "mcp:integration": "tsx scripts/mcp-integration-test.mjs",
     "mcp:e2e:next": "node scripts/mcp-next-e2e.mjs",
