@@ -16,6 +16,7 @@ import { AgentLiveTab } from './AgentLiveTab';
 import { TaskChatTab } from './TaskChatTab';
 import { WorkspaceTab } from './WorkspaceTab';
 import { DeliverablePicker, type PickerDeliverable } from './DeliverablePicker';
+import { TaskInitiativePanel } from './TaskInitiativePanel';
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types';
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB — server enforces the same cap
@@ -637,6 +638,17 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               </div>
             )}
           </div>
+
+          {/* Initiative + provenance — only meaningful for existing tasks */}
+          {task && (
+            <TaskInitiativePanel
+              taskId={task.id}
+              taskStatus={task.status}
+              workspaceId={task.workspace_id || workspaceId || 'default'}
+              initiativeId={task.initiative_id ?? null}
+              onChanged={handleSpecLocked}
+            />
+          )}
 
           {/* Pull Request section */}
           {task?.pr_url && (
