@@ -2622,8 +2622,93 @@ const migrations: Migration[] = [
       }
       console.log('[Migration 044] Complete.');
     }
+  },
+  {
+    id: '045',
+    name: 'pm_agent_seed_and_chat_metadata',
+    up: (db) => {
+      // Phase 5 of the roadmap & PM-agent feature. Two changes:
+      //   (a) `agent_chat_messages` gains an optional `metadata` JSON
+      //       column so PM responses can reference a proposal_id (and
+      //       any other future per-message attachments). The /pm chat
+      //       UI keys its proposal-card renderer on metadata.proposal_id.
+      //   (b) Seed one PM agent (role='pm', name='PM') per workspace
+      //       that doesn't already have one. Idempotent.
+      console.log('[Migration 045] Adding agent_chat_messages.metadata + seeding PM agents...');
+
+      // ---- (a) agent_chat_messages.metadata ----
+      const chatInfo = db.prepare('PRAGMA table_info(agent_chat_messages)').all() as { name: string }[];
+      if (!chatInfo.some(c => c.name === 'metadata')) {
+        db.exec(`ALTER TABLE agent_chat_messages ADD COLUMN metadata TEXT`);
+        console.log('[Migration 045] Added agent_chat_messages.metadata column');
+      }
+
+      // ---- (b) Seed PM agents ----
+      // Read soul_md inline to avoid an import cycle (migrations.ts is
+      // imported very early; src/lib/agents/* hasn't necessarily settled).
+      const soulMd = readPmSoulMdFromDisk();
+      const workspaces = db.prepare(
+        'SELECT id FROM workspaces',
+      ).all() as { id: string }[];
+
+      const insert = db.prepare(`
+        INSERT INTO agents (
+          id, name, role, description, avatar_emoji, status, is_master,
+          workspace_id, soul_md, source, is_active, created_at, updated_at
+        ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 0, ?, ?, 'local', 1, ?, ?)
+      `);
+      const now = new Date().toISOString();
+      let seeded = 0;
+      let skipped = 0;
+      for (const ws of workspaces) {
+        const existing = db.prepare(
+          `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
+        ).get(ws.id) as { id: string } | undefined;
+        if (existing) {
+          skipped++;
+          continue;
+        }
+        const id = crypto.randomUUID();
+        insert.run(
+          id,
+          'Workspace project manager — maintains the roadmap, analyzes disruptions, proposes structured changes the operator approves.',
+          ws.id,
+          soulMd,
+          now,
+          now,
+        );
+        seeded++;
+      }
+      console.log(`[Migration 045] PM agents: seeded=${seeded} skipped=${skipped}`);
+    }
   }
 ];
+
+// Inline PM soul_md reader for migration 045. The full module
+// (src/lib/agents/pm-agent.ts) does the same thing but we duplicate it
+// here to avoid a `require` cycle through Next's bundler at startup.
+function readPmSoulMdFromDisk(): string {
+  // Resolve relative to the migrations.ts source location. Falls back to
+  // a stub if the file isn't reachable from the bundle path.
+  try {
+    // Build candidate paths so we work in dev (src/), in `next build`
+    // server bundles, and in tsx test runs.
+    const candidates: string[] = [];
+    try {
+      candidates.push(path.join(__dirname, '..', 'agents', 'pm-soul.md'));
+    } catch { /* __dirname may be undefined under some bundlers */ }
+    // CWD-relative — covers `tsx --test` and `npm run db:seed`.
+    candidates.push(path.join(process.cwd(), 'src', 'lib', 'agents', 'pm-soul.md'));
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        return fs.readFileSync(p, 'utf8');
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return '# PM Agent (fallback)\n\nWorkspace PM. Read the roadmap, propose changes via `propose_changes`. Never edit the execution board directly.';
+}
 
 /**
  * Creates a timestamped backup of the database file before running migrations.

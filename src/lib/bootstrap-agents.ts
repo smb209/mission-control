@@ -230,6 +230,37 @@ export function bootstrapCoreAgentsRaw(
 }
 
 /**
+ * Ensure the workspace has a PM (role='pm') agent. Idempotent. Reads the
+ * soul_md from the .md file next to the pm-agent module so operators can
+ * tweak the prompt without redeploying. Safe to call from API routes.
+ *
+ * Migration 045 also seeds PMs at startup; this function exists so freshly
+ * created workspaces (after migrations have run) get one too.
+ */
+export function ensurePmAgent(workspaceId: string): { id: string; created: boolean } {
+  const db = getDb();
+  const existing = db.prepare(
+    `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
+  ).get(workspaceId) as { id: string } | undefined;
+  if (existing) return { id: existing.id, created: false };
+
+  // Lazy-import to avoid circular deps during migration startup.
+  // pm-agent.ts is plain TS with no DB imports so it's safe everywhere.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { getPmSoulMd, PM_AGENT_DESCRIPTION } = require('./agents/pm-agent') as typeof import('./agents/pm-agent');
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO agents (
+      id, name, role, description, avatar_emoji, status, is_master,
+      workspace_id, soul_md, source, is_active, created_at, updated_at
+    ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 0, ?, ?, 'local', 1, ?, ?)
+  `).run(id, PM_AGENT_DESCRIPTION, workspaceId, getPmSoulMd(), now, now);
+  return { id, created: true };
+}
+
+/**
  * Clone workflow templates from the default workspace into a new workspace.
  */
 export function cloneWorkflowTemplates(db: Database.Database, targetWorkspaceId: string): void {

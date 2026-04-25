@@ -9,6 +9,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerAllTools } from './tools';
+import { registerRoadmapTools } from './roadmap-tools';
 
 export const SERVER_NAME = 'sc-mission-control';
 export const SERVER_VERSION = '0.1.0';
@@ -16,5 +17,6 @@ export const SERVER_VERSION = '0.1.0';
 export function buildServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
   registerAllTools(server);
+  registerRoadmapTools(server);
   return server;
 }

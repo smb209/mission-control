@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { bootstrapCoreAgents, cloneWorkflowTemplates } from '@/lib/bootstrap-agents';
+import { bootstrapCoreAgents, cloneWorkflowTemplates, ensurePmAgent } from '@/lib/bootstrap-agents';
 import type { Workspace, WorkspaceStats, TaskStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -108,6 +108,8 @@ export async function POST(request: NextRequest) {
     // Clone workflow templates and bootstrap core agents for the new workspace
     cloneWorkflowTemplates(db, id);
     bootstrapCoreAgents(id);
+    // Seed the workspace's PM agent (planning layer, role='pm'). Idempotent.
+    ensurePmAgent(id);
 
     const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
     return NextResponse.json(workspace, { status: 201 });
