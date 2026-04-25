@@ -10,8 +10,9 @@
 
 import type { RefObject } from 'react';
 import Link from 'next/link';
-import { ChevronDown, ChevronRight, Square, Diamond, ListTree, Circle } from 'lucide-react';
+import { ChevronDown, ChevronRight, Square, Diamond, ListTree, Circle, AlertTriangle } from 'lucide-react';
 import type { Kind, RoadmapInitiative, RoadmapSnapshot, Status } from './RoadmapTimeline';
+import { daysBetween } from '@/lib/roadmap/date-math';
 
 const KIND_ICON: Record<Kind, React.ComponentType<{ className?: string }>> = {
   theme: Square,
@@ -109,6 +110,16 @@ export function RoadmapRail({
               >
                 {i.title}
               </Link>
+              {/* Drift indicator: milestone whose derived_end overruns
+                  committed_end. Hover shows the gap in days. */}
+              {i.kind === 'milestone' && i.committed_end && i.derived_end && i.derived_end > i.committed_end && (
+                <span
+                  className="text-amber-400"
+                  title={`Schedule debt: ${daysBetween(i.committed_end, i.derived_end)}d past committed_end (${i.committed_end} → ${i.derived_end})`}
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                </span>
+              )}
               <span
                 className={`text-[10px] px-1.5 py-0.5 rounded border ${STATUS_PILL[i.status]}`}
                 title={i.status}

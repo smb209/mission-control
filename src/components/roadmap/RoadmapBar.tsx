@@ -17,6 +17,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   addDays,
+  daysBetween,
   dateToPx,
   rangeWidthPx,
   toIsoDay,
@@ -194,25 +195,41 @@ export function RoadmapBar({
     );
   }
 
-  // Outlined (derived) bar — Phase 4 will populate; in Phase 3 mostly null.
+  // Outlined (derived) bar — populated by the Phase 4 derivation engine.
+  // Highlight in amber when the derived window slips past target_end (or
+  // a milestone's committed_end) so the gap is visible without hovering.
   let outlineEl: React.ReactNode = null;
   if (initiative.derived_start && initiative.derived_end) {
     const x = dateToPx(initiative.derived_start, windowStart, pxPerDay);
     const w = rangeWidthPx(initiative.derived_start, initiative.derived_end, pxPerDay);
+    const compareEnd =
+      initiative.kind === 'milestone' && initiative.committed_end
+        ? initiative.committed_end
+        : initiative.target_end;
+    const overrun = compareEnd && initiative.derived_end > compareEnd
+      ? daysBetween(compareEnd, initiative.derived_end)
+      : 0;
+    const tone = overrun > 0 ? 'text-amber-400' : 'text-mc-text-secondary';
+    const tooltip = overrun > 0
+      ? `Derived ${initiative.derived_start} → ${initiative.derived_end}\nSchedule debt: ${overrun} day${overrun === 1 ? '' : 's'} past ${compareEnd}`
+      : `Derived ${initiative.derived_start} → ${initiative.derived_end}`;
     outlineEl = (
-      <rect
-        x={x}
-        y={yMid - BAR_HEIGHT / 2 - 2}
-        width={w}
-        height={BAR_HEIGHT + 4}
-        rx={3}
-        ry={3}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.2}
-        strokeDasharray="3 3"
-        className="text-mc-text-secondary"
-      />
+      <g className={tone}>
+        <rect
+          x={x}
+          y={yMid - BAR_HEIGHT / 2 - 2}
+          width={w}
+          height={BAR_HEIGHT + 4}
+          rx={3}
+          ry={3}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={overrun > 0 ? 1.6 : 1.2}
+          strokeDasharray="3 3"
+        >
+          <title>{tooltip}</title>
+        </rect>
+      </g>
     );
   }
 

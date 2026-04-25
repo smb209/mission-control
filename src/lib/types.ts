@@ -506,7 +506,8 @@ export type CostCapStatus = 'active' | 'paused' | 'exceeded';
 
 export type ScheduleType =
   | 'research' | 'ideation' | 'maybe_reevaluation' | 'seo_audit'
-  | 'content_refresh' | 'analytics_report' | 'social_batch' | 'growth_experiment';
+  | 'content_refresh' | 'analytics_report' | 'social_batch' | 'growth_experiment'
+  | 'roadmap_drift_scan';
 
 export type OperationType =
   | 'seo_audit' | 'content_publish' | 'content_refresh' | 'social_post'
