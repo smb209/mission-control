@@ -2510,9 +2510,19 @@ const migrations: Migration[] = [
           db.pragma('writable_schema = OFF');
 
           const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
-          const ok = integrity.length === 1 && integrity[0].integrity_check === 'ok';
-          if (!ok) {
-            throw new Error('[Migration 043] integrity_check failed after writable_schema patch: ' + JSON.stringify(integrity));
+          // "Page X: never used" is a benign leaked-space warning (orphan page
+          // from prior writes — does NOT indicate corruption). VACUUM cleans
+          // them up but can't run inside a transaction. Filter them out here
+          // and only fail on actual corruption messages.
+          const isBenign = (msg: string) =>
+            msg === 'ok' || /^Page \d+: never used$/.test(msg);
+          const realErrors = integrity.filter(r => !isBenign(r.integrity_check));
+          if (realErrors.length > 0) {
+            throw new Error('[Migration 043] integrity_check failed after writable_schema patch: ' + JSON.stringify(realErrors));
+          }
+          const orphans = integrity.filter(r => /^Page \d+: never used$/.test(r.integrity_check));
+          if (orphans.length > 0) {
+            console.warn(`[Migration 043] ${orphans.length} orphan page(s) detected (benign — run VACUUM to reclaim): ` + JSON.stringify(orphans));
           }
         } finally {
           db.unsafeMode(false);
