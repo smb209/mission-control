@@ -464,7 +464,19 @@ Apply is a single transaction. v1 is all-or-nothing accept; partial accept (per-
 - **Never** edits `tasks.status` for active tasks (anything beyond `draft`/`inbox`).
 - **Never** writes `derived_*` outside the nightly scan.
 
-The PM is a *suggester*, not an actor on the execution board.
+The PM is a *suggester*, not an actor on the execution board. **Note for `plan_initiative` (§9.5):** plan-initiative proposals are explicitly advisory — `acceptProposal` is a no-op for that trigger_kind. The operator applies the suggestions client-side by populating the new-initiative form. The proposal exists only for audit + the refine chain. (Decompose proposals, by contrast, DO mutate state on accept.)
+
+### 9.5 Guided modes (Polish B)
+
+In addition to the reactive disruption flow, the PM has two operator-driven guided modes. Both reuse the proposal lifecycle (draft → refine* → accept/reject) and the same MCP tools, but specialize the synthesizer:
+
+**Plan an initiative draft** — `trigger_kind='plan_initiative'`. Operator drafts an initiative (title + rough description) and asks the PM for a refined description, suggested complexity, suggested target window, and candidate dependencies surfaced from existing workspace initiatives by keyword overlap. Output is a single advisory proposal: `acceptProposal` is a no-op for this trigger_kind, and `proposed_changes` stays empty. The structured suggestions are returned in the API response and embedded in `impact_md` as an HTML-comment JSON sidecar so the refine endpoint can return them too. The operator applies the suggestions by populating the create-initiative form before clicking Save.
+
+**Decompose an existing epic/milestone** — `trigger_kind='decompose_initiative'`. Operator picks an existing epic or milestone (story-kind initiatives are not decomposable). The PM proposes 3-7 child initiatives (story-kind by default; epic allowed; theme/milestone forbidden as `child_kind`). Each child carries a brief description, a complexity estimate, a `sort_order`, and optional `depends_on_initiative_ids`. Sibling pre-wiring uses placeholder ids (`$0`, `$1`, …) that resolve to the freshly-inserted real ids during the second pass of `acceptProposal`. On accept: children are inserted under the parent in a single transaction with matching `initiative_parent_history` rows (`reason='created via PM decompose proposal #<id>'`).
+
+**New diff kind** — `create_child_initiative`. Only emitted from `decompose_initiative` proposals. Validation rejects `child_kind='theme'` or `'milestone'`.
+
+UI surface: a "Plan with PM" button next to Save in the initiative edit drawer; a "Decompose with PM" entry in the `⋮` action menu (epic/milestone rows) and a button on `/initiatives/[id]` for the same kinds. Both flows use the existing refine endpoint.
 
 ---
 

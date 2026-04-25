@@ -2778,6 +2778,77 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: '047',
+    name: 'pm_proposals_trigger_kind_guided_modes',
+    up: (db) => {
+      // Polish B (guided planning) — extend pm_proposals.trigger_kind CHECK
+      // to include 'plan_initiative' and 'decompose_initiative' so the new
+      // advisory and decomposition flows can write rows. SQLite can't ALTER
+      // a CHECK in place, so we patch the stored CREATE TABLE text via
+      // writable_schema (same surgical technique as migrations 036/037/043).
+      console.log('[Migration 047] Extending pm_proposals.trigger_kind with plan_initiative + decompose_initiative...');
+
+      const row = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='pm_proposals'`,
+      ).get() as { sql: string } | undefined;
+      if (!row) {
+        console.log('[Migration 047] pm_proposals table absent; skipping.');
+        return;
+      }
+      if (row.sql.includes("'plan_initiative'") && row.sql.includes("'decompose_initiative'")) {
+        console.log('[Migration 047] Already extended; skipping.');
+        return;
+      }
+
+      // Match the exact CHECK clause shape from migration 043 first; fall
+      // back to a permissive regex if the stored shape differs.
+      const oldCheck = `trigger_kind TEXT NOT NULL DEFAULT 'manual'
+            CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation'))`;
+      const newCheck = `trigger_kind TEXT NOT NULL DEFAULT 'manual'
+            CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative'))`;
+
+      let patched: string;
+      if (row.sql.includes(oldCheck)) {
+        patched = row.sql.replace(oldCheck, newCheck);
+      } else {
+        // Permissive fallback — match any whitespace shape and append our
+        // two new values to the IN(...) list.
+        const re = /(trigger_kind\s+TEXT\s+NOT\s+NULL\s+DEFAULT\s+'manual'\s*\n?\s*CHECK\s*\(\s*trigger_kind\s+IN\s*\()([^)]+)(\))/i;
+        const m = row.sql.match(re);
+        if (!m) {
+          console.warn('[Migration 047] trigger_kind CHECK shape unrecognized; current schema:\n' + row.sql);
+          throw new Error('[Migration 047] Unable to locate trigger_kind CHECK clause — refusing to patch');
+        }
+        const inList = m[2].trim();
+        const newInList = `${inList}, 'plan_initiative', 'decompose_initiative'`;
+        patched = row.sql.replace(re, `$1${newInList}$3`);
+      }
+
+      const escaped = patched.replace(/'/g, "''");
+      db.unsafeMode(true);
+      try {
+        db.pragma('writable_schema = ON');
+        db.exec(
+          `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='pm_proposals'`,
+        );
+        db.pragma('writable_schema = OFF');
+
+        const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+        // "Page X: never used" is a benign leaked-space warning from prior
+        // VACUUM-less writes (matches migration 043's filter).
+        const isBenign = (msg: string) =>
+          msg === 'ok' || /^Page \d+: never used$/.test(msg);
+        const realErrors = integrity.filter(r => !isBenign(r.integrity_check));
+        if (realErrors.length > 0) {
+          throw new Error('[Migration 047] integrity_check failed after writable_schema patch: ' + JSON.stringify(realErrors));
+        }
+      } finally {
+        db.unsafeMode(false);
+      }
+      console.log('[Migration 047] Complete.');
+    },
+  },
 ];
 
 // Inline PM soul_md reader for migration 045. The full module

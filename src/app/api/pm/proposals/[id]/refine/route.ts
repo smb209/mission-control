@@ -13,6 +13,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getProposal, refineProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { dispatchPm } from '@/lib/agents/pm-dispatch';
+import { synthesizePlanInitiative, synthesizeDecompose } from '@/lib/agents/pm-agent';
+import { getRoadmapSnapshot } from '@/lib/db/roadmap';
+import { getInitiative } from '@/lib/db/initiatives';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +25,22 @@ const Body = z.object({
 
 interface RouteParams {
   params: Promise<{ id: string }>;
+}
+
+/**
+ * Plan/decompose proposals stash structured context as JSON in
+ * trigger_text. Older trigger_text is free-text — we return null and the
+ * caller falls back gracefully.
+ */
+function parseTriggerContext(triggerText: string): Record<string, unknown> | null {
+  try {
+    const trimmed = triggerText.trim();
+    if (!trimmed.startsWith('{')) return null;
+    const parsed = JSON.parse(trimmed.split('\n\n[refine]')[0]);
+    return typeof parsed === 'object' && parsed != null ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
@@ -44,40 +63,70 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     // refineProposal creates the (empty) draft slot and supersedes the
-    // parent; we then re-dispatch with the combined trigger so the slot
-    // is filled with the new impact + diffs. We do this in two steps so
-    // the supersede + new-id pair is visible even if dispatch fails.
+    // parent. We then route the re-synthesis to the right backend based
+    // on the parent's trigger_kind:
+    //   - plan_initiative / decompose_initiative → call the matching
+    //     synthesizer directly with the parent's structured context
+    //     (parsed out of trigger_text).
+    //   - everything else → fall back to dispatchPm (the disruption-
+    //     analysis synthesizer).
     const { child } = refineProposal(id, parsed.data.additional_constraint);
 
-    // Re-dispatch using the parent's full trigger + the additional
-    // constraint as a free-text bolt-on. We then patch the child row
-    // with the new impact + changes by deleting/recreating — simplest
-    // reliable path that doesn't require an "update_proposal" helper.
-    // Call dispatchPm separately (without parent_proposal_id) so it
-    // returns a freshly-synthesized result we copy onto `child`.
-    const synthesized = dispatchPm({
-      workspace_id: parent.workspace_id,
-      trigger_text: child.trigger_text,
-      trigger_kind: parent.trigger_kind,
-      // We do NOT pass parent_proposal_id here — that would create a
-      // SECOND child. The freshly-synthesized proposal exists; we
-      // delete it and update our pre-allocated slot below.
-    });
+    let newImpactMd: string;
+    let newChanges: unknown[];
 
-    // Move the synthesized impact + changes onto our pre-allocated child
-    // row, then delete the side-effect row created by dispatchPm.
-    // Rationale: refineProposal already produced the supersede chain we
-    // want — we're only borrowing dispatchPm's synthesizer.
+    if (parent.trigger_kind === 'plan_initiative') {
+      // Re-run synthesizePlanInitiative with the operator's draft + the
+      // additional constraint folded into the description.
+      const ctx = parseTriggerContext(parent.trigger_text);
+      const draft = (ctx?.draft as Record<string, unknown> | undefined) ?? { title: 'Untitled' };
+      const refinedDraft = {
+        ...draft,
+        description:
+          (draft.description ? `${draft.description as string}\n\n` : '') +
+          `Refine: ${parsed.data.additional_constraint}`,
+      } as Parameters<typeof synthesizePlanInitiative>[1];
+      const snapshot = getRoadmapSnapshot({ workspace_id: parent.workspace_id });
+      const synth = synthesizePlanInitiative(snapshot, refinedDraft);
+      newImpactMd = synth.impact_md;
+      newChanges = synth.changes;
+    } else if (parent.trigger_kind === 'decompose_initiative') {
+      const ctx = parseTriggerContext(parent.trigger_text);
+      const initiativeId = ctx?.initiative_id as string | undefined;
+      const init = initiativeId ? getInitiative(initiativeId) : undefined;
+      if (!init) {
+        return NextResponse.json(
+          { error: 'Original parent initiative no longer exists; cannot refine' },
+          { status: 400 },
+        );
+      }
+      const combinedHint =
+        ((ctx?.hint as string | null) ?? '') +
+        (ctx?.hint ? '\n' : '') +
+        `Refine: ${parsed.data.additional_constraint}`;
+      const synth = synthesizeDecompose(init, combinedHint.trim());
+      newImpactMd = synth.impact_md;
+      newChanges = synth.changes;
+    } else {
+      // Default disruption-analysis path. We borrow dispatchPm's
+      // synthesizer and patch the result onto the pre-allocated child
+      // row, then delete the side-effect row dispatchPm created.
+      const synthesized = dispatchPm({
+        workspace_id: parent.workspace_id,
+        trigger_text: child.trigger_text,
+        trigger_kind: parent.trigger_kind,
+      });
+      newImpactMd = synthesized.proposal.impact_md;
+      newChanges = synthesized.proposal.proposed_changes;
+      const { run } = await import('@/lib/db');
+      run(`DELETE FROM pm_proposals WHERE id = ?`, [synthesized.proposal.id]);
+    }
+
     const { run } = await import('@/lib/db');
     run(
       `UPDATE pm_proposals SET impact_md = ?, proposed_changes = ? WHERE id = ?`,
-      [
-        synthesized.proposal.impact_md,
-        JSON.stringify(synthesized.proposal.proposed_changes),
-        child.id,
-      ],
+      [newImpactMd, JSON.stringify(newChanges), child.id],
     );
-    run(`DELETE FROM pm_proposals WHERE id = ?`, [synthesized.proposal.id]);
 
     const refreshed = getProposal(child.id)!;
     return NextResponse.json({ proposal: refreshed }, { status: 201 });
