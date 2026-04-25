@@ -4,23 +4,22 @@
  * Left navigation column rendered by the unified app shell. Replaces the
  * grab-bag of per-page header buttons with a single static taxonomy:
  *
- *   EXECUTE → home, activity
+ *   EXECUTE → task board, activity
  *   PLAN    → roadmap, initiatives, pm
  *   AUTOPILOT → products
- *   WORKSPACE → settings (and knowledge / workflows when those routes exist)
+ *   WORKSPACE → settings
  *
- * The workspace switcher at the top replaces the per-page "Workspaces"
- * button. After this PR, drilling into a specific workspace board still
- * lives at `/workspace/[slug]` (kept outside the shell — it has its own
- * dense Header). The switcher here is a global "which workspace are we
- * planning against" picker for /initiatives, /roadmap, /pm.
+ * The workspace switcher at the top is the single source of "which
+ * workspace are we operating against?" — selecting one routes to that
+ * workspace's task board (`/workspace/[slug]`). After Polish D the task
+ * board lives inside the shell, so the nav stays visible while the
+ * operator is queueing up work.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  Home,
   Activity as ActivityIcon,
   GanttChart,
   ListTree,
@@ -31,12 +30,16 @@ import {
   Check,
   Zap,
   X,
+  Plus,
+  KanbanSquare,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
   useSetCurrentWorkspaceId,
   type WorkspaceLite,
 } from './workspace-context';
+import { CreateWorkspaceDrawer } from './CreateWorkspaceDrawer';
+import type { Workspace } from '@/lib/types';
 
 interface NavItem {
   href: string;
@@ -55,35 +58,37 @@ interface NavSection {
   items: NavItem[];
 }
 
-const SECTIONS: NavSection[] = [
-  {
-    title: 'Execute',
-    items: [
-      { href: '/', label: 'Home', icon: Home },
-      { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
-    ],
-  },
-  {
-    title: 'Plan',
-    items: [
-      { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
-      { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
-      { href: '/pm', label: 'PM', icon: Bot },
-    ],
-  },
-  {
-    title: 'Autopilot',
-    items: [
-      { href: '/autopilot', label: 'Products', icon: Rocket, prefix: true },
-    ],
-  },
-  {
-    title: 'Workspace',
-    items: [
-      { href: '/settings', label: 'Settings', icon: SettingsIcon },
-    ],
-  },
-];
+function buildSections(taskBoardHref: string): NavSection[] {
+  return [
+    {
+      title: 'Execute',
+      items: [
+        { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
+        { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
+      ],
+    },
+    {
+      title: 'Plan',
+      items: [
+        { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
+        { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
+        { href: '/pm', label: 'PM', icon: Bot },
+      ],
+    },
+    {
+      title: 'Autopilot',
+      items: [
+        { href: '/autopilot', label: 'Products', icon: Rocket, prefix: true },
+      ],
+    },
+    {
+      title: 'Workspace',
+      items: [
+        { href: '/settings', label: 'Settings', icon: SettingsIcon },
+      ],
+    },
+  ];
+}
 
 function isActive(pathname: string, item: NavItem): boolean {
   if (item.href === '/') return pathname === '/';
@@ -98,6 +103,29 @@ interface AppNavProps {
 }
 
 export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const currentWorkspaceId = useCurrentWorkspaceId();
+
+  // Fetch workspaces in the parent so we can derive the active task-board
+  // href and pass the same list to the switcher.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workspaces')
+      .then(r => (r.ok ? r.json() : []))
+      .then((rows: WorkspaceLite[]) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setWorkspaces(rows);
+      })
+      .catch(() => { /* ignore — switcher just stays empty */ });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  const activeWorkspace =
+    workspaces.find(w => w.id === currentWorkspaceId) ?? workspaces[0];
+  const taskBoardHref = activeWorkspace ? `/workspace/${activeWorkspace.slug}` : '/';
+  const sections = buildSections(taskBoardHref);
+
   return (
     <>
       {/* Mobile drawer overlay */}
@@ -137,10 +165,13 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
           </button>
         </div>
 
-        <WorkspaceSwitcher />
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          onWorkspaceCreated={() => setRefreshKey(k => k + 1)}
+        />
 
         <div className="flex-1 overflow-y-auto py-2">
-          {SECTIONS.map(section => (
+          {sections.map(section => (
             <NavSectionView
               key={section.title}
               section={section}
@@ -150,7 +181,7 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
         </div>
 
         <div className="px-3 py-2 border-t border-mc-border text-[11px] text-mc-text-secondary/70">
-          <span className="hidden md:inline">v2.5 · unified shell</span>
+          <span className="hidden md:inline">v2.6 · unified shell</span>
         </div>
       </nav>
     </>
@@ -175,7 +206,7 @@ function NavSectionView({
           const Icon = item.icon;
           const active = isActive(pathname, item);
           return (
-            <li key={item.href}>
+            <li key={`${section.title}:${item.label}`}>
               <Link
                 href={item.href}
                 aria-current={active ? 'page' : undefined}
@@ -200,30 +231,23 @@ function NavSectionView({
 
 /**
  * Switcher at the top of the nav. On click, a small dropdown lists every
- * workspace; selecting one updates the global current-workspace id (used
- * by Plan-section pages) and routes back to "/" so the operator lands in
- * the new context.
+ * workspace; selecting one updates the global current-workspace id and
+ * routes to that workspace's task board. A "+ New Workspace" entry at
+ * the bottom opens the create drawer.
  */
-function WorkspaceSwitcher() {
+function WorkspaceSwitcher({
+  workspaces,
+  onWorkspaceCreated,
+}: {
+  workspaces: WorkspaceLite[];
+  onWorkspaceCreated: () => void;
+}) {
   const router = useRouter();
   const currentWorkspaceId = useCurrentWorkspaceId();
   const setCurrentWorkspaceId = useSetCurrentWorkspaceId();
-  const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
   const [open, setOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
-  // Pull the workspace list once. Cheap: the route returns a few rows.
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/workspaces')
-      .then(r => (r.ok ? r.json() : []))
-      .then((rows: WorkspaceLite[]) => {
-        if (cancelled || !Array.isArray(rows)) return;
-        setWorkspaces(rows);
-      })
-      .catch(() => { /* ignore — switcher just stays empty */ });
-    return () => { cancelled = true; };
-  }, []);
 
   // Close the dropdown when clicking outside.
   useEffect(() => {
@@ -240,64 +264,94 @@ function WorkspaceSwitcher() {
     ?? null;
 
   const handlePick = useCallback(
-    (id: string) => {
-      setCurrentWorkspaceId(id);
+    (w: WorkspaceLite) => {
+      setCurrentWorkspaceId(w.id);
       setOpen(false);
-      router.push('/');
+      router.push(`/workspace/${w.slug}`);
     },
     [router, setCurrentWorkspaceId],
   );
 
+  const handleCreated = useCallback(
+    (_w: Workspace) => {
+      onWorkspaceCreated();
+    },
+    [onWorkspaceCreated],
+  );
+
   return (
-    <div ref={ref} className="relative px-2 pt-2 pb-1">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen(v => !v)}
-        className="w-full px-2 py-1.5 rounded-sm border border-mc-border bg-mc-bg hover:bg-mc-bg-tertiary text-left flex items-center gap-2 min-h-9"
-      >
-        {current ? (
-          <>
-            <span className="text-base shrink-0">{current.icon ?? '📁'}</span>
-            <span className="flex-1 truncate text-sm text-mc-text">{current.name}</span>
-          </>
-        ) : (
-          <>
-            <Zap className="w-4 h-4 text-mc-accent-cyan shrink-0" />
-            <span className="flex-1 truncate text-sm text-mc-text-secondary">
-              {workspaces.length === 0 ? 'No workspaces' : 'Select workspace'}
-            </span>
-          </>
-        )}
-        <ChevronDown className={`w-3.5 h-3.5 text-mc-text-secondary transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && workspaces.length > 0 && (
-        <ul
-          role="listbox"
-          className="absolute left-2 right-2 mt-1 z-50 max-h-72 overflow-y-auto rounded-sm border border-mc-border bg-mc-bg-secondary shadow-lg"
+    <>
+      <div ref={ref} className="relative px-2 pt-2 pb-1">
+        <button
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => setOpen(v => !v)}
+          className="w-full px-2 py-1.5 rounded-sm border border-mc-border bg-mc-bg hover:bg-mc-bg-tertiary text-left flex items-center gap-2 min-h-9"
         >
-          {workspaces.map(w => {
-            const selected = current?.id === w.id;
-            return (
-              <li key={w.id}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  onClick={() => handlePick(w.id)}
-                  className={`w-full text-left px-2 py-1.5 flex items-center gap-2 text-sm hover:bg-mc-bg-tertiary
-                    ${selected ? 'text-mc-accent' : 'text-mc-text'}`}
-                >
-                  <span className="text-base shrink-0">{w.icon ?? '📁'}</span>
-                  <span className="flex-1 truncate">{w.name}</span>
-                  {selected && <Check className="w-3.5 h-3.5 shrink-0" />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
+          {current ? (
+            <>
+              <span className="text-base shrink-0">{current.icon ?? '📁'}</span>
+              <span className="flex-1 truncate text-sm text-mc-text">{current.name}</span>
+            </>
+          ) : (
+            <>
+              <Zap className="w-4 h-4 text-mc-accent-cyan shrink-0" />
+              <span className="flex-1 truncate text-sm text-mc-text-secondary">
+                {workspaces.length === 0 ? 'No workspaces' : 'Select workspace'}
+              </span>
+            </>
+          )}
+          <ChevronDown className={`w-3.5 h-3.5 text-mc-text-secondary transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && (
+          <ul
+            role="listbox"
+            className="absolute left-2 right-2 mt-1 z-50 max-h-72 overflow-y-auto rounded-sm border border-mc-border bg-mc-bg-secondary shadow-lg"
+          >
+            {workspaces.map(w => {
+              const selected = current?.id === w.id;
+              return (
+                <li key={w.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => handlePick(w)}
+                    className={`w-full text-left px-2 py-1.5 flex items-center gap-2 text-sm hover:bg-mc-bg-tertiary
+                      ${selected ? 'text-mc-accent' : 'text-mc-text'}`}
+                  >
+                    <span className="text-base shrink-0">{w.icon ?? '📁'}</span>
+                    <span className="flex-1 truncate">{w.name}</span>
+                    {selected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                  </button>
+                </li>
+              );
+            })}
+            {/* Divider + create entry */}
+            <li className="border-t border-mc-border" aria-hidden="true" />
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setCreateOpen(true);
+                }}
+                className="w-full text-left px-2 py-1.5 flex items-center gap-2 text-sm text-mc-accent hover:bg-mc-bg-tertiary"
+              >
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span className="flex-1 truncate">New workspace</span>
+              </button>
+            </li>
+          </ul>
+        )}
+      </div>
+
+      <CreateWorkspaceDrawer
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={handleCreated}
+      />
+    </>
   );
 }
