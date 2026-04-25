@@ -34,7 +34,9 @@ export type PmProposalTriggerKind =
   | 'manual'
   | 'scheduled_drift_scan'
   | 'disruption_event'
-  | 'status_check_investigation';
+  | 'status_check_investigation'
+  | 'plan_initiative'
+  | 'decompose_initiative';
 
 export type PmDiff =
   | {
@@ -72,6 +74,25 @@ export type PmDiff =
       kind: 'update_status_check';
       initiative_id: string;
       status_check_md: string;
+    }
+  | {
+      // Polish B (decompose flow). On accept, the decompose handler inserts
+      // one initiative row under `parent_initiative_id`. `depends_on_initiative_ids`
+      // can carry placeholder ids (`$0`, `$1`, …) that point to other
+      // siblings created in the SAME accept call (resolved post-insert) or
+      // real ids for existing initiatives. `child_kind` is constrained to
+      // {epic, story} — themes/milestones are operator-driven only.
+      kind: 'create_child_initiative';
+      parent_initiative_id: string;
+      title: string;
+      description?: string | null;
+      child_kind: 'epic' | 'story';
+      complexity?: 'S' | 'M' | 'L' | 'XL' | null;
+      estimated_effort_hours?: number | null;
+      sort_order?: number;
+      depends_on_initiative_ids?: string[];
+      /** Optional placeholder id for cross-sibling dep resolution. */
+      placeholder_id?: string;
     };
 
 export interface PmProposal {
@@ -261,6 +282,39 @@ export function validateProposedChanges(
         }
         break;
       }
+      case 'create_child_initiative': {
+        if (!c.parent_initiative_id) {
+          errors.push(`changes[${i}]: parent_initiative_id required`);
+          break;
+        }
+        assertInitiativeInWorkspace(workspaceId, c.parent_initiative_id, errors, initiativeCache);
+        if (!c.title || typeof c.title !== 'string') {
+          errors.push(`changes[${i}]: title required`);
+        }
+        // Hard-coded allowlist for child_kind — themes/milestones are
+        // operator-driven and never proposed by the PM.
+        if (c.child_kind !== 'epic' && c.child_kind !== 'story') {
+          errors.push(
+            `changes[${i}]: child_kind must be 'epic' or 'story' (got '${c.child_kind}')`,
+          );
+        }
+        if (c.complexity != null && !['S', 'M', 'L', 'XL'].includes(c.complexity)) {
+          errors.push(`changes[${i}]: complexity must be one of S/M/L/XL`);
+        }
+        if (Array.isArray(c.depends_on_initiative_ids)) {
+          for (const ref of c.depends_on_initiative_ids) {
+            // Placeholder ids ($0, $1, …) are resolved at apply time so we
+            // skip the workspace check here. Real ids must already exist.
+            if (typeof ref !== 'string') {
+              errors.push(`changes[${i}]: depends_on_initiative_ids must be strings`);
+              continue;
+            }
+            if (ref.startsWith('$')) continue;
+            assertInitiativeInWorkspace(workspaceId, ref, errors, initiativeCache);
+          }
+        }
+        break;
+      }
       default: {
         const exhaustive: never = c;
         errors.push(`changes[${i}]: unknown kind "${(exhaustive as { kind?: string }).kind ?? '?'}"`);
@@ -430,10 +484,66 @@ export function acceptProposal(
   let changesApplied = 0;
   const now = new Date().toISOString();
 
+  // plan_initiative is advisory: no DB writes other than flipping the
+  // proposal row to 'accepted'. The operator applies the suggestions
+  // client-side by populating the create-initiative form. Keeps the
+  // refine + audit chain intact without touching real state.
+  const isAdvisory = existing.trigger_kind === 'plan_initiative';
+
   db.transaction(() => {
-    for (const change of existing.proposed_changes) {
-      applyDiff(change, now);
-      changesApplied++;
+    if (!isAdvisory) {
+      // Build placeholder→real id map for cross-sibling dep resolution
+      // (used by create_child_initiative diffs in decompose flows).
+      const placeholderMap = new Map<string, string>();
+      // First pass: insert children, populate the map.
+      for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+        const change = existing.proposed_changes[idx];
+        if (change.kind === 'create_child_initiative') {
+          const newId = applyCreateChildInitiative(
+            existing.workspace_id,
+            change,
+            now,
+            applied_by_agent_id,
+            id,
+          );
+          // Two index forms accepted: explicit `placeholder_id` field or
+          // ordinal `$N` based on diff position.
+          placeholderMap.set(`$${idx}`, newId);
+          if (change.placeholder_id) {
+            placeholderMap.set(change.placeholder_id, newId);
+          }
+          changesApplied++;
+        }
+      }
+      // Second pass: dep edges + remaining diffs.
+      for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+        const change = existing.proposed_changes[idx];
+        if (change.kind === 'create_child_initiative') {
+          // Resolve dep placeholders against the freshly-built map and
+          // create dependency edges.
+          const childId = placeholderMap.get(`$${idx}`);
+          if (childId && Array.isArray(change.depends_on_initiative_ids)) {
+            for (const rawRef of change.depends_on_initiative_ids) {
+              const realRef = rawRef.startsWith('$')
+                ? placeholderMap.get(rawRef)
+                : rawRef;
+              if (!realRef) {
+                throw new PmProposalValidationError(
+                  `create_child_initiative: unresolved placeholder dep "${rawRef}"`,
+                );
+              }
+              run(
+                `INSERT INTO initiative_dependencies (id, initiative_id, depends_on_initiative_id, kind, note, created_at)
+                 VALUES (?, ?, ?, 'finish_to_start', ?, ?)`,
+                [uuidv4(), childId, realRef, null, now],
+              );
+            }
+          }
+          continue;
+        }
+        applyDiff(change, now);
+        changesApplied++;
+      }
     }
 
     // Flip the proposal row.
@@ -545,11 +655,68 @@ function applyDiff(diff: PmDiff, now: string): void {
       );
       return;
     }
+    case 'create_child_initiative': {
+      // Handled out-of-band in acceptProposal so cross-sibling dep
+      // placeholders can resolve in a second pass. Reaching this branch
+      // is a programming error.
+      throw new Error('create_child_initiative must be applied via applyCreateChildInitiative');
+    }
     default: {
       const exhaustive: never = diff;
       throw new Error(`Unknown diff kind: ${(exhaustive as { kind?: string }).kind ?? '?'}`);
     }
   }
+}
+
+/**
+ * Apply one `create_child_initiative` diff. Inserts the initiative row,
+ * appends an `initiative_parent_history` audit row, and returns the new
+ * id so the caller can wire dep placeholders post-hoc.
+ *
+ * Caller wraps in a transaction — same pattern as `applyDiff`.
+ */
+function applyCreateChildInitiative(
+  workspace_id: string,
+  diff: Extract<PmDiff, { kind: 'create_child_initiative' }>,
+  now: string,
+  applied_by_agent_id: string | null,
+  proposal_id: string,
+): string {
+  const childId = uuidv4();
+  run(
+    `INSERT INTO initiatives (
+       id, workspace_id, parent_initiative_id, kind, title, description,
+       status, complexity, estimated_effort_hours, sort_order,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)`,
+    [
+      childId,
+      workspace_id,
+      diff.parent_initiative_id,
+      diff.child_kind,
+      diff.title,
+      diff.description ?? null,
+      diff.complexity ?? null,
+      diff.estimated_effort_hours ?? null,
+      diff.sort_order ?? 0,
+      now,
+      now,
+    ],
+  );
+  run(
+    `INSERT INTO initiative_parent_history (
+       id, initiative_id, from_parent_id, to_parent_id, moved_by_agent_id, reason, created_at
+     ) VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+    [
+      uuidv4(),
+      childId,
+      diff.parent_initiative_id,
+      applied_by_agent_id,
+      `created via PM decompose proposal #${proposal_id}`,
+      now,
+    ],
+  );
+  return childId;
 }
 
 // ─── Reject / refine ────────────────────────────────────────────────

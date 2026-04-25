@@ -14,9 +14,13 @@ import {
   History,
   Send,
   CornerUpLeft,
+  Sparkles,
+  Network,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
+import PlanWithPmPanel, { type PlanInitiativeSuggestions } from '@/components/PlanWithPmPanel';
+import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -96,6 +100,7 @@ export default function InitiativesPage() {
   const [promoting, setPromoting] = useState<Initiative | null>(null);
   const [historyFor, setHistoryFor] = useState<Initiative | null>(null);
   const [addingDepFor, setAddingDepFor] = useState<Initiative | null>(null);
+  const [decomposing, setDecomposing] = useState<Initiative | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -205,6 +210,7 @@ export default function InitiativesPage() {
                 onShowHistory={setHistoryFor}
                 onAddDependency={setAddingDepFor}
                 onDetach={detach}
+                onDecompose={setDecomposing}
                 onDelete={async (init) => {
                   if (!confirm(`Delete "${init.title}"?`)) return;
                   const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
@@ -289,6 +295,16 @@ export default function InitiativesPage() {
           }}
         />
       )}
+      {decomposing && (
+        <DecomposeWithPmModal
+          initiative={decomposing}
+          onClose={() => setDecomposing(null)}
+          onAccepted={() => {
+            setDecomposing(null);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -321,6 +337,7 @@ function InitiativeRow({
   onShowHistory,
   onAddDependency,
   onDetach,
+  onDecompose,
   onDelete,
 }: {
   node: TreeNode;
@@ -336,12 +353,14 @@ function InitiativeRow({
   onAddDependency: (init: Initiative) => void;
   onDetach: (init: Initiative) => void;
   onDelete: (init: Initiative) => void;
+  onDecompose: (init: Initiative) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const counts = taskCounts[node.id];
   const isStory = node.kind === 'story';
   const isContainer = node.kind !== 'story';
   const hasParent = !!node.parent_initiative_id;
+  const isDecomposable = node.kind === 'epic' || node.kind === 'milestone';
 
   // The carat for expand/collapse stays as its own affordance per the spec.
   // High-frequency actions ("Promote to task" for stories, "Add child" for
@@ -349,6 +368,15 @@ function InitiativeRow({
   // overflow menu.
   const menuItems: ActionMenuItem[] = [
     { label: 'Edit', icon: <Pencil className="w-3.5 h-3.5" />, onClick: () => onEdit(node) },
+    ...(isDecomposable
+      ? [
+          {
+            label: 'Decompose with PM',
+            icon: <Network className="w-3.5 h-3.5" />,
+            onClick: () => onDecompose(node),
+          },
+        ]
+      : []),
     { label: 'Move', icon: <MoveRight className="w-3.5 h-3.5" />, onClick: () => onMove(node) },
     { label: 'Convert kind', icon: <Shuffle className="w-3.5 h-3.5" />, onClick: () => onConvert(node) },
     { label: 'Add dependency', icon: <Link2 className="w-3.5 h-3.5" />, onClick: () => onAddDependency(node) },
@@ -458,6 +486,7 @@ function InitiativeRow({
           onShowHistory={onShowHistory}
           onAddDependency={onAddDependency}
           onDetach={onDetach}
+          onDecompose={onDecompose}
           onDelete={onDelete}
         />
       ))}
@@ -811,6 +840,18 @@ function EditDrawer({
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  // The plan panel needs a stable draft snapshot — re-running the plan
+  // on every keystroke would spam the synthesizer. We snapshot the form
+  // state at the moment the operator clicks "Plan with PM".
+  const [planDraft, setPlanDraft] = useState<{
+    title: string;
+    description: string;
+    complexity?: 'S' | 'M' | 'L' | 'XL';
+    target_start?: string | null;
+    target_end?: string | null;
+    parent_initiative_id?: string | null;
+  } | null>(null);
 
   // Reset form state when a new initiative is opened.
   useEffect(() => {
@@ -827,6 +868,8 @@ function EditDrawer({
     setOwnerAgentId('');
     setLoaded(false);
     setErr(null);
+    setPlanOpen(false);
+    setPlanDraft(null);
   }, [initiative]);
 
   // Pull the full record so we have the optional fields not in the list view.
@@ -926,6 +969,27 @@ function EditDrawer({
       footer={
         <div className="flex justify-end gap-2">
           {err && <div className="text-red-400 text-sm mr-auto self-center">{err}</div>}
+          <button
+            onClick={() => {
+              if (!title) return;
+              // Snapshot the current draft. The panel re-fetches on open
+              // so re-clicking after edits triggers a fresh plan.
+              setPlanDraft({
+                title,
+                description,
+                complexity: complexity || undefined,
+                target_start: targetStart || null,
+                target_end: targetEnd || null,
+                parent_initiative_id: initiative?.parent_initiative_id ?? null,
+              });
+              setPlanOpen(true);
+            }}
+            disabled={!title}
+            className="px-3 py-2 rounded border border-mc-accent/50 text-mc-accent text-sm inline-flex items-center gap-1 disabled:opacity-50"
+            title="Ask the PM agent to suggest description / complexity / window / dependencies"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Plan with PM
+          </button>
           <button
             onClick={onClose}
             className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
@@ -1077,6 +1141,25 @@ function EditDrawer({
             />
           </label>
         </FormSection>
+
+        {planOpen && planDraft && initiative && (
+          <PlanWithPmPanel
+            open={planOpen}
+            workspaceId={initiative.workspace_id}
+            draft={planDraft}
+            onClose={() => setPlanOpen(false)}
+            onApply={(s: PlanInitiativeSuggestions) => {
+              // Populate the form fields with the PM's recommendations.
+              // The operator can still tweak before Save.
+              if (s.refined_description) setDescription(s.refined_description);
+              if (s.complexity) setComplexity(s.complexity);
+              if (s.target_start) setTargetStart(s.target_start);
+              if (s.target_end) setTargetEnd(s.target_end);
+              if (s.status_check_md) setStatusCheck(s.status_check_md);
+              setPlanOpen(false);
+            }}
+          />
+        )}
       </form>
     </Drawer>
   );

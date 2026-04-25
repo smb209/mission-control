@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, use } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ChevronRight, Plus, Send, History, Link2 } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Plus, Send, History, Link2, Sparkles } from 'lucide-react';
+import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 
 type Kind = 'theme' | 'milestone' | 'epic' | 'story';
 type Status = 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
@@ -108,6 +109,7 @@ export default function InitiativeDetailPage({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showPromoteModal, setShowPromoteModal] = useState(false);
+  const [showDecomposeModal, setShowDecomposeModal] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -229,6 +231,15 @@ export default function InitiativeDetailPage({
                 kind={initiative.kind}
                 onClick={() => setShowPromoteModal(true)}
               />
+              {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
+                <button
+                  onClick={() => setShowDecomposeModal(true)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-mc-accent/40 text-mc-accent hover:bg-mc-accent/10"
+                  title="Ask the PM to propose 3-7 child initiatives"
+                >
+                  <Sparkles className="w-4 h-4" /> Decompose with PM
+                </button>
+              )}
             </div>
           </div>
 
@@ -374,6 +385,21 @@ export default function InitiativeDetailPage({
           onClose={() => setShowPromoteModal(false)}
           onSaved={() => {
             setShowPromoteModal(false);
+            refresh();
+          }}
+        />
+      )}
+      {showDecomposeModal && (
+        <DecomposeWithPmModal
+          initiative={{
+            id: initiative.id,
+            title: initiative.title,
+            kind: initiative.kind,
+            workspace_id: initiative.workspace_id,
+          }}
+          onClose={() => setShowDecomposeModal(false)}
+          onAccepted={() => {
+            setShowDecomposeModal(false);
             refresh();
           }}
         />
