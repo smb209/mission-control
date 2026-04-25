@@ -2,7 +2,21 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { Plus, ChevronRight, ChevronDown, Pencil, Trash2, MoveRight, Shuffle, Link2, History, Send } from 'lucide-react';
+import {
+  Plus,
+  ChevronRight,
+  ChevronDown,
+  Pencil,
+  Trash2,
+  MoveRight,
+  Shuffle,
+  Link2,
+  History,
+  Send,
+  CornerUpLeft,
+} from 'lucide-react';
+import Drawer from '@/components/Drawer';
+import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -38,6 +52,17 @@ interface TaskCounts {
   done: number;
 }
 
+// Minimal agent shape for the owner dropdown — just what we render plus the
+// id we persist. The /api/agents endpoint returns the full Agent shape; we
+// don't need most of it here.
+interface AgentLite {
+  id: string;
+  name: string;
+  role: string;
+  avatar_emoji: string;
+  workspace_id: string;
+}
+
 const ACTIVE_STATUSES = new Set([
   'inbox',
   'planning',
@@ -69,6 +94,8 @@ export default function InitiativesPage() {
   const [moving, setMoving] = useState<Initiative | null>(null);
   const [converting, setConverting] = useState<Initiative | null>(null);
   const [promoting, setPromoting] = useState<Initiative | null>(null);
+  const [historyFor, setHistoryFor] = useState<Initiative | null>(null);
+  const [addingDepFor, setAddingDepFor] = useState<Initiative | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -108,6 +135,29 @@ export default function InitiativesPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Detach = move to no parent. Surfaced from the action menu when the
+  // initiative currently has a parent.
+  const detach = useCallback(
+    async (init: Initiative) => {
+      try {
+        const res = await fetch(`/api/initiatives/${init.id}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to_parent_id: null, reason: 'detach' }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          alert(body.error || 'Detach failed');
+          return;
+        }
+        refresh();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : 'Detach failed');
+      }
+    },
+    [refresh],
+  );
 
   return (
     <div className="min-h-screen bg-mc-bg p-6">
@@ -153,6 +203,9 @@ export default function InitiativesPage() {
                 onMove={setMoving}
                 onConvert={setConverting}
                 onPromote={setPromoting}
+                onShowHistory={setHistoryFor}
+                onAddDependency={setAddingDepFor}
+                onDetach={detach}
                 onDelete={async (init) => {
                   if (!confirm(`Delete "${init.title}"?`)) return;
                   const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
@@ -180,16 +233,14 @@ export default function InitiativesPage() {
           }}
         />
       )}
-      {editing && (
-        <EditModal
-          initiative={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            refresh();
-          }}
-        />
-      )}
+      <EditDrawer
+        initiative={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          refresh();
+        }}
+      />
       {moving && (
         <MoveModal
           initiative={moving}
@@ -217,6 +268,24 @@ export default function InitiativesPage() {
           onClose={() => setPromoting(null)}
           onSaved={() => {
             setPromoting(null);
+            refresh();
+          }}
+        />
+      )}
+      {historyFor && (
+        <HistoryDrawer
+          initiative={historyFor}
+          allInitiatives={flat}
+          onClose={() => setHistoryFor(null)}
+        />
+      )}
+      {addingDepFor && (
+        <AddDependencyModal
+          initiative={addingDepFor}
+          allInitiatives={flat}
+          onClose={() => setAddingDepFor(null)}
+          onSaved={() => {
+            setAddingDepFor(null);
             refresh();
           }}
         />
@@ -250,6 +319,9 @@ function InitiativeRow({
   onMove,
   onConvert,
   onPromote,
+  onShowHistory,
+  onAddDependency,
+  onDetach,
   onDelete,
 }: {
   node: TreeNode;
@@ -261,11 +333,43 @@ function InitiativeRow({
   onMove: (init: Initiative) => void;
   onConvert: (init: Initiative) => void;
   onPromote: (init: Initiative) => void;
+  onShowHistory: (init: Initiative) => void;
+  onAddDependency: (init: Initiative) => void;
+  onDetach: (init: Initiative) => void;
   onDelete: (init: Initiative) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const counts = taskCounts[node.id];
   const isStory = node.kind === 'story';
+  const isContainer = node.kind !== 'story';
+  const hasParent = !!node.parent_initiative_id;
+
+  // The carat for expand/collapse stays as its own affordance per the spec.
+  // High-frequency actions ("Promote to task" for stories, "Add child" for
+  // containers) get inline labelled buttons; everything else is in the ⋮
+  // overflow menu.
+  const menuItems: ActionMenuItem[] = [
+    { label: 'Edit', icon: <Pencil className="w-3.5 h-3.5" />, onClick: () => onEdit(node) },
+    { label: 'Move', icon: <MoveRight className="w-3.5 h-3.5" />, onClick: () => onMove(node) },
+    { label: 'Convert kind', icon: <Shuffle className="w-3.5 h-3.5" />, onClick: () => onConvert(node) },
+    { label: 'Add dependency', icon: <Link2 className="w-3.5 h-3.5" />, onClick: () => onAddDependency(node) },
+    { label: 'View history', icon: <History className="w-3.5 h-3.5" />, onClick: () => onShowHistory(node) },
+    ...(hasParent
+      ? [
+          {
+            label: 'Detach (no parent)',
+            icon: <CornerUpLeft className="w-3.5 h-3.5" />,
+            onClick: () => onDetach(node),
+          },
+        ]
+      : []),
+    {
+      label: 'Delete',
+      icon: <Trash2 className="w-3.5 h-3.5" />,
+      onClick: () => onDelete(node),
+      destructive: true,
+    },
+  ];
 
   return (
     <>
@@ -273,7 +377,15 @@ function InitiativeRow({
         className="flex items-center gap-2 p-2 rounded-lg bg-mc-bg-secondary border border-mc-border hover:border-mc-accent/40"
         style={{ marginLeft: depth * 24 }}
       >
-        {depth > 0 && <ChevronRight className="w-4 h-4 text-mc-text-secondary" />}
+        <button
+          title={expanded ? 'Hide details' : 'Show details (history + dependencies)'}
+          onClick={() => setExpanded(v => !v)}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          aria-expanded={expanded}
+          className="p-1 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
+        >
+          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
         <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
           {node.kind}
         </span>
@@ -302,65 +414,26 @@ function InitiativeRow({
             )}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            title={expanded ? 'Hide details' : 'Show details (history + dependencies)'}
-            onClick={() => setExpanded(v => !v)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-          >
-            {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          </button>
-          <button
-            title="Add child"
-            onClick={() => onAddChild(node)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-          <button
-            title={
-              isStory
-                ? 'Promote story to draft task'
-                : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
-            }
-            onClick={() => isStory && onPromote(node)}
-            disabled={!isStory}
-            className={`p-1.5 rounded ${
-              isStory
-                ? 'hover:bg-mc-bg text-mc-accent hover:text-mc-accent'
-                : 'text-mc-text-secondary/40 cursor-not-allowed'
-            }`}
-          >
-            <Send className="w-4 h-4" />
-          </button>
-          <button
-            title="Edit"
-            onClick={() => onEdit(node)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-          >
-            <Pencil className="w-4 h-4" />
-          </button>
-          <button
-            title="Move"
-            onClick={() => onMove(node)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-          >
-            <MoveRight className="w-4 h-4" />
-          </button>
-          <button
-            title="Convert kind"
-            onClick={() => onConvert(node)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-          >
-            <Shuffle className="w-4 h-4" />
-          </button>
-          <button
-            title="Delete"
-            onClick={() => onDelete(node)}
-            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-red-400"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+        <div className="ml-auto flex items-center gap-2">
+          {isStory && (
+            <button
+              title="Create a draft task linked to this initiative"
+              onClick={() => onPromote(node)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-mc-accent/15 text-mc-accent border border-mc-accent/30 hover:bg-mc-accent/25"
+            >
+              <Send className="w-3 h-3" /> Promote to task
+            </button>
+          )}
+          {isContainer && (
+            <button
+              title="Add a child initiative under this one"
+              onClick={() => onAddChild(node)}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
+            >
+              <Plus className="w-3 h-3" /> Add child
+            </button>
+          )}
+          <ActionMenu items={menuItems} ariaLabel={`Actions for ${node.title}`} />
         </div>
       </li>
       {expanded && (
@@ -383,6 +456,9 @@ function InitiativeRow({
           onMove={onMove}
           onConvert={onConvert}
           onPromote={onPromote}
+          onShowHistory={onShowHistory}
+          onAddDependency={onAddDependency}
+          onDetach={onDetach}
           onDelete={onDelete}
         />
       ))}
@@ -701,32 +777,62 @@ function CreateModal({
 
 type Complexity = 'S' | 'M' | 'L' | 'XL';
 
-function EditModal({
+/**
+ * Edit drawer — slide-over replacement for the prior narrow modal.
+ *
+ * Renders nothing when `initiative` is null so the parent can keep using a
+ * single piece of state (`editing`) to control open/close.
+ *
+ * Fields are grouped into vertical sections: Identity, Sizing, Schedule,
+ * Ownership, Status check. The Save button lives in a sticky footer so it
+ * stays reachable when the form scrolls. All save semantics are preserved
+ * from the previous modal.
+ */
+function EditDrawer({
   initiative,
   onClose,
   onSaved,
 }: {
-  initiative: Initiative;
+  initiative: Initiative | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [title, setTitle] = useState(initiative.title);
-  const [description, setDescription] = useState(initiative.description ?? '');
-  const [status, setStatus] = useState<Status>(initiative.status);
-  const [targetStart, setTargetStart] = useState(initiative.target_start ?? '');
-  const [targetEnd, setTargetEnd] = useState(initiative.target_end ?? '');
-  // The list query doesn't return these fields, so default to empty strings;
-  // the patch only sends fields the operator actually edited.
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [status, setStatus] = useState<Status>('planned');
+  const [targetStart, setTargetStart] = useState('');
+  const [targetEnd, setTargetEnd] = useState('');
+  const [committedEnd, setCommittedEnd] = useState('');
   const [complexity, setComplexity] = useState<Complexity | ''>('');
   const [effort, setEffort] = useState('');
   const [statusCheck, setStatusCheck] = useState('');
   const [ownerAgentId, setOwnerAgentId] = useState('');
+  const [agents, setAgents] = useState<AgentLite[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
+  // Reset form state when a new initiative is opened.
+  useEffect(() => {
+    if (!initiative) return;
+    setTitle(initiative.title);
+    setDescription(initiative.description ?? '');
+    setStatus(initiative.status);
+    setTargetStart(initiative.target_start ?? '');
+    setTargetEnd(initiative.target_end ?? '');
+    setCommittedEnd('');
+    setComplexity('');
+    setEffort('');
+    setStatusCheck('');
+    setOwnerAgentId('');
+    setLoaded(false);
+    setErr(null);
+  }, [initiative]);
+
   // Pull the full record so we have the optional fields not in the list view.
   useEffect(() => {
+    if (!initiative) return;
     let cancelled = false;
     (async () => {
       try {
@@ -738,6 +844,7 @@ function EditModal({
         setEffort(full.estimated_effort_hours == null ? '' : String(full.estimated_effort_hours));
         setStatusCheck(full.status_check_md ?? '');
         setOwnerAgentId(full.owner_agent_id ?? '');
+        setCommittedEnd(full.committed_end ?? '');
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -745,9 +852,32 @@ function EditModal({
     return () => {
       cancelled = true;
     };
-  }, [initiative.id]);
+  }, [initiative]);
+
+  // Fetch the agents list once when the drawer opens. The /api/agents
+  // endpoint already filters by workspace_id, matching the pattern used by
+  // /pm/page.tsx and /workspace/[slug]/page.tsx.
+  useEffect(() => {
+    if (!initiative) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/agents?workspace_id=${encodeURIComponent(initiative.workspace_id)}`);
+        if (!r.ok) return;
+        const list = await r.json();
+        if (cancelled) return;
+        setAgents(Array.isArray(list) ? list : []);
+      } finally {
+        if (!cancelled) setAgentsLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initiative]);
 
   const submit = async () => {
+    if (!initiative) return;
     setSubmitting(true);
     setErr(null);
     try {
@@ -757,6 +887,7 @@ function EditModal({
         status,
         target_start: targetStart || null,
         target_end: targetEnd || null,
+        committed_end: committedEnd || null,
         complexity: complexity || null,
         estimated_effort_hours: effort ? Number(effort) : null,
         status_check_md: statusCheck || null,
@@ -779,109 +910,27 @@ function EditModal({
     }
   };
 
+  // Enter-to-save anywhere in the form (except inside textareas where Enter
+  // is a newline).
+  const onFormKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      if (title && !submitting) submit();
+    }
+  };
+
   return (
-    <ModalShell title="Edit initiative" onClose={onClose}>
-      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-        <label className="block">
-          <span className="text-sm text-mc-text-secondary">Title</span>
-          <input
-            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm text-mc-text-secondary">Description</span>
-          <textarea
-            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border h-24"
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm text-mc-text-secondary">Status</span>
-          <select
-            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-            value={status}
-            onChange={e => setStatus(e.target.value as Status)}
+    <Drawer
+      open={!!initiative}
+      title={initiative ? `Edit "${initiative.title}"` : 'Edit initiative'}
+      onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          {err && <div className="text-red-400 text-sm mr-auto self-center">{err}</div>}
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
           >
-            <option value="planned">planned</option>
-            <option value="in_progress">in_progress</option>
-            <option value="at_risk">at_risk</option>
-            <option value="blocked">blocked</option>
-            <option value="done">done</option>
-            <option value="cancelled">cancelled</option>
-          </select>
-        </label>
-        <div className="grid grid-cols-2 gap-3">
-          <label className="block">
-            <span className="text-sm text-mc-text-secondary">Target start</span>
-            <input
-              type="date"
-              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-              value={targetStart.slice(0, 10)}
-              onChange={e => setTargetStart(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-mc-text-secondary">Target end</span>
-            <input
-              type="date"
-              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-              value={targetEnd.slice(0, 10)}
-              onChange={e => setTargetEnd(e.target.value)}
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-mc-text-secondary">Complexity</span>
-            <select
-              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-              value={complexity}
-              onChange={e => setComplexity(e.target.value as Complexity | '')}
-              disabled={!loaded}
-            >
-              <option value="">(unset)</option>
-              <option value="S">S</option>
-              <option value="M">M</option>
-              <option value="L">L</option>
-              <option value="XL">XL</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-sm text-mc-text-secondary">Effort (hours)</span>
-            <input
-              type="number"
-              step="0.5"
-              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-              value={effort}
-              onChange={e => setEffort(e.target.value)}
-              disabled={!loaded}
-            />
-          </label>
-        </div>
-        <label className="block">
-          <span className="text-sm text-mc-text-secondary">Owner agent id (optional)</span>
-          <input
-            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
-            value={ownerAgentId}
-            onChange={e => setOwnerAgentId(e.target.value)}
-            disabled={!loaded}
-            placeholder="e.g. agent-uuid"
-          />
-        </label>
-        <label className="block">
-          <span className="text-sm text-mc-text-secondary">Status check (markdown)</span>
-          <textarea
-            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border h-20 font-mono text-xs"
-            value={statusCheck}
-            onChange={e => setStatusCheck(e.target.value)}
-            disabled={!loaded}
-            placeholder="Linked PR / waiting on / customer demo / etc."
-          />
-        </label>
-        {err && <div className="text-red-400 text-sm">{err}</div>}
-        <div className="flex justify-end gap-2 pt-2 sticky bottom-0 bg-mc-bg-secondary">
-          <button onClick={onClose} className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm">
             Cancel
           </button>
           <button
@@ -889,11 +938,157 @@ function EditModal({
             disabled={submitting || !title}
             className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
           >
-            Save
+            {submitting ? 'Saving…' : 'Save'}
           </button>
         </div>
-      </div>
-    </ModalShell>
+      }
+    >
+      <form onKeyDown={onFormKey} onSubmit={e => e.preventDefault()} className="space-y-6">
+        <FormSection heading="Identity">
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Title</span>
+            <input
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Description</span>
+            <textarea
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border h-28"
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+            />
+          </label>
+        </FormSection>
+
+        <FormSection heading="Sizing">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm text-mc-text-secondary">Complexity</span>
+              <select
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={complexity}
+                onChange={e => setComplexity(e.target.value as Complexity | '')}
+                disabled={!loaded}
+              >
+                <option value="">(unset)</option>
+                <option value="S">S</option>
+                <option value="M">M</option>
+                <option value="L">L</option>
+                <option value="XL">XL</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-sm text-mc-text-secondary">Effort (hours)</span>
+              <input
+                type="number"
+                step="0.5"
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={effort}
+                onChange={e => setEffort(e.target.value)}
+                disabled={!loaded}
+              />
+            </label>
+          </div>
+        </FormSection>
+
+        <FormSection heading="Schedule">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm text-mc-text-secondary">Target start</span>
+              <input
+                type="date"
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={targetStart.slice(0, 10)}
+                onChange={e => setTargetStart(e.target.value)}
+              />
+            </label>
+            <label className="block">
+              <span className="text-sm text-mc-text-secondary">Target end</span>
+              <input
+                type="date"
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={targetEnd.slice(0, 10)}
+                onChange={e => setTargetEnd(e.target.value)}
+              />
+            </label>
+            <label className="block col-span-2">
+              <span className="text-sm text-mc-text-secondary">Committed end</span>
+              <input
+                type="date"
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={committedEnd.slice(0, 10)}
+                onChange={e => setCommittedEnd(e.target.value)}
+                disabled={!loaded}
+              />
+            </label>
+          </div>
+        </FormSection>
+
+        <FormSection heading="Ownership">
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Owner agent</span>
+            <select
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+              value={ownerAgentId}
+              onChange={e => setOwnerAgentId(e.target.value)}
+              disabled={!loaded || !agentsLoaded}
+            >
+              <option value="">Unassigned</option>
+              {agents.map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.avatar_emoji}  {a.name}  {a.role}
+                </option>
+              ))}
+            </select>
+            {agentsLoaded && agents.length === 0 && (
+              <p className="text-xs text-mc-text-secondary mt-1">
+                No agents in this workspace yet.
+              </p>
+            )}
+          </label>
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Status</span>
+            <select
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+              value={status}
+              onChange={e => setStatus(e.target.value as Status)}
+            >
+              <option value="planned">planned</option>
+              <option value="in_progress">in_progress</option>
+              <option value="at_risk">at_risk</option>
+              <option value="blocked">blocked</option>
+              <option value="done">done</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </label>
+        </FormSection>
+
+        <FormSection heading="Status check">
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Markdown — linked PR / waiting on / customer demo / etc.</span>
+            <textarea
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border h-28 font-mono text-xs"
+              value={statusCheck}
+              onChange={e => setStatusCheck(e.target.value)}
+              disabled={!loaded}
+              placeholder="Linked PR / waiting on / customer demo / etc."
+            />
+          </label>
+        </FormSection>
+      </form>
+    </Drawer>
+  );
+}
+
+function FormSection({ heading, children }: { heading: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <h3 className="text-xs uppercase tracking-wide text-mc-text-secondary">{heading}</h3>
+      {children}
+    </section>
   );
 }
 
@@ -1137,5 +1332,148 @@ function PromoteModal({
         </div>
       </div>
     </ModalShell>
+  );
+}
+
+/**
+ * Standalone "Add dependency" modal — fired from the action menu, since the
+ * inline DetailsPanel only appears when the row is expanded.
+ */
+function AddDependencyModal({
+  initiative,
+  allInitiatives,
+  onClose,
+  onSaved,
+}: {
+  initiative: Initiative;
+  allInitiatives: Initiative[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [chosen, setChosen] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!chosen) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiative.id}/dependencies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depends_on_initiative_id: chosen }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Add failed (${res.status})`);
+      }
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Add failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell title={`Add dependency for "${initiative.title}"`} onClose={onClose}>
+      <div className="space-y-3">
+        <label className="block">
+          <span className="text-sm text-mc-text-secondary">This initiative depends on…</span>
+          <select
+            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+            value={chosen}
+            onChange={e => setChosen(e.target.value)}
+            autoFocus
+          >
+            <option value="">(choose initiative)</option>
+            {allInitiatives
+              .filter(i => i.id !== initiative.id)
+              .map(i => (
+                <option key={i.id} value={i.id}>
+                  {i.kind} — {i.title}
+                </option>
+              ))}
+          </select>
+        </label>
+        {err && <div className="text-red-400 text-sm">{err}</div>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm">
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || !chosen}
+            className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+/**
+ * Read-only history drawer launched from the action menu. Reuses the
+ * Drawer shell so it matches the edit affordance shape.
+ */
+function HistoryDrawer({
+  initiative,
+  allInitiatives,
+  onClose,
+}: {
+  initiative: Initiative;
+  allInitiatives: Initiative[];
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<HistoryRow[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/initiatives/${initiative.id}/history`);
+        const body = r.ok ? await r.json() : [];
+        if (!cancelled) setRows(Array.isArray(body) ? body : []);
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initiative.id]);
+
+  const titleFor = (id: string | null) =>
+    id ? allInitiatives.find(i => i.id === id)?.title ?? id : '(root)';
+
+  return (
+    <Drawer open={true} title={`History — ${initiative.title}`} onClose={onClose}>
+      {err && <div className="text-red-400 text-sm">{err}</div>}
+      {rows === null ? (
+        <p className="text-sm text-mc-text-secondary">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-mc-text-secondary">No moves recorded.</p>
+      ) : (
+        <ul className="space-y-2 text-sm">
+          {rows.map(h => (
+            <li key={h.id} className="p-2 rounded border border-mc-border bg-mc-bg">
+              <div className="text-xs text-mc-text-secondary">
+                {h.created_at.replace('T', ' ').slice(0, 19)}
+              </div>
+              <div className="text-mc-text">
+                {titleFor(h.from_parent_id)} → {titleFor(h.to_parent_id)}
+              </div>
+              {h.reason && (
+                <div className="text-xs text-mc-text-secondary italic mt-1">— {h.reason}</div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Drawer>
   );
 }
