@@ -2364,6 +2364,184 @@ const migrations: Migration[] = [
       );
       console.log('[Migration 042] Complete.');
     }
+  },
+  {
+    id: '043',
+    name: 'roadmap_planning_layer',
+    up: (db) => {
+      // Phase 1 of the roadmap & PM-agent feature (specs/roadmap-and-pm-spec.md).
+      // Schema-only migration — no logic on top of the new tables yet:
+      //   (a) initiatives + dependencies + parent/task audit logs
+      //   (b) owner_availability + pm_proposals (Phase 5 will use these)
+      //   (c) tasks gains initiative_id + status_check_md, status CHECK
+      //       extended to include 'draft' (planning-board task)
+      //   (d) ideas gains initiative_id (idea → initiative promotion path)
+      console.log('[Migration 043] Adding roadmap planning layer tables and columns...');
+
+      // ---- (a) New tables ----
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS initiatives (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+          product_id TEXT REFERENCES products(id),
+          parent_initiative_id TEXT REFERENCES initiatives(id),
+          kind TEXT NOT NULL CHECK (kind IN ('theme','milestone','epic','story')),
+          title TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'planned'
+            CHECK (status IN ('planned','in_progress','at_risk','blocked','done','cancelled')),
+          owner_agent_id TEXT REFERENCES agents(id),
+          estimated_effort_hours REAL,
+          complexity TEXT CHECK (complexity IN ('S','M','L','XL')),
+          target_start TEXT,
+          target_end TEXT,
+          derived_start TEXT,
+          derived_end TEXT,
+          committed_end TEXT,
+          status_check_md TEXT,
+          sort_order INTEGER DEFAULT 0,
+          source_idea_id TEXT REFERENCES ideas(id),
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS initiative_dependencies (
+          id TEXT PRIMARY KEY,
+          initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+          depends_on_initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL DEFAULT 'finish_to_start'
+            CHECK (kind IN ('finish_to_start','start_to_start','blocking','informational')),
+          note TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(initiative_id, depends_on_initiative_id)
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS initiative_parent_history (
+          id TEXT PRIMARY KEY,
+          initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+          from_parent_id TEXT REFERENCES initiatives(id),
+          to_parent_id TEXT REFERENCES initiatives(id),
+          moved_by_agent_id TEXT REFERENCES agents(id),
+          reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_initiative_history (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          from_initiative_id TEXT REFERENCES initiatives(id),
+          to_initiative_id TEXT REFERENCES initiatives(id),
+          moved_by_agent_id TEXT REFERENCES agents(id),
+          reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS owner_availability (
+          id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          unavailable_start TEXT NOT NULL,
+          unavailable_end TEXT NOT NULL,
+          reason TEXT,
+          created_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pm_proposals (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+          trigger_text TEXT NOT NULL,
+          trigger_kind TEXT NOT NULL DEFAULT 'manual'
+            CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation')),
+          impact_md TEXT NOT NULL,
+          proposed_changes TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK (status IN ('draft','accepted','rejected','superseded')),
+          applied_at TEXT,
+          applied_by_agent_id TEXT REFERENCES agents(id),
+          parent_proposal_id TEXT REFERENCES pm_proposals(id),
+          created_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+
+      // ---- (c) tasks: add initiative_id + status_check_md ----
+      const tasksInfo = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      const taskHas = (n: string) => tasksInfo.some(c => c.name === n);
+      if (!taskHas('initiative_id')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN initiative_id TEXT REFERENCES initiatives(id)`);
+      }
+      if (!taskHas('status_check_md')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN status_check_md TEXT`);
+      }
+
+      // ---- (c) extend tasks.status CHECK to include 'draft' ----
+      // Same writable_schema technique as migration 036/037 — surgical
+      // rewrite of the CREATE TABLE text. Migration 036 added
+      // 'needs_user_input', so the current CHECK shape includes it.
+      const tasksSchema = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+      ).get() as { sql: string } | undefined;
+
+      if (tasksSchema && !tasksSchema.sql.includes("'draft'")) {
+        const oldCheck = `status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled', 'needs_user_input')`;
+        const newCheck = `status IN ('pending_dispatch', 'planning', 'inbox', 'draft', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled', 'needs_user_input')`;
+
+        if (!tasksSchema.sql.includes(oldCheck)) {
+          console.warn('[Migration 043] tasks CHECK constraint shape unexpected; current schema:\n' + tasksSchema.sql);
+          throw new Error('[Migration 043] Unable to locate status CHECK clause in tasks CREATE TABLE — refusing to patch');
+        }
+
+        const patched = tasksSchema.sql.replace(oldCheck, newCheck);
+        const escaped = patched.replace(/'/g, "''");
+        db.unsafeMode(true);
+        try {
+          db.pragma('writable_schema = ON');
+          db.exec(
+            `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='tasks'`
+          );
+          db.pragma('writable_schema = OFF');
+
+          const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+          const ok = integrity.length === 1 && integrity[0].integrity_check === 'ok';
+          if (!ok) {
+            throw new Error('[Migration 043] integrity_check failed after writable_schema patch: ' + JSON.stringify(integrity));
+          }
+        } finally {
+          db.unsafeMode(false);
+        }
+      }
+
+      // ---- (d) ideas: initiative_id ----
+      const ideasInfo = db.prepare('PRAGMA table_info(ideas)').all() as { name: string }[];
+      if (!ideasInfo.some(c => c.name === 'initiative_id')) {
+        db.exec(`ALTER TABLE ideas ADD COLUMN initiative_id TEXT REFERENCES initiatives(id)`);
+      }
+
+      // ---- Indexes (§5.3) ----
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiatives_workspace ON initiatives(workspace_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiatives_parent ON initiatives(parent_initiative_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiatives_product ON initiatives(product_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiatives_status ON initiatives(status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiatives_target_window ON initiatives(target_start, target_end)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiative_deps_from ON initiative_dependencies(initiative_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiative_deps_to ON initiative_dependencies(depends_on_initiative_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_initiative_history_task ON task_initiative_history(task_id, created_at)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_initiative_parent_history ON initiative_parent_history(initiative_id, created_at)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_owner_availability_agent ON owner_availability(agent_id, unavailable_start)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_initiative ON tasks(initiative_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_draft ON tasks(status, initiative_id) WHERE status='draft'`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC)`);
+
+      console.log('[Migration 043] Complete.');
+    }
   }
 ];
 
