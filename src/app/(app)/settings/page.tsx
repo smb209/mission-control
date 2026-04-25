@@ -6,7 +6,6 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import {
   Settings, Save, RotateCcw, Home, FolderOpen, Link as LinkIcon,
   HardDrive, Download, Upload, Trash2, RotateCw, ChevronDown, ChevronRight,
@@ -61,7 +60,6 @@ function timeAgo(dateStr: string): string {
 // ---------------------------------------------------------------------------
 
 export default function SettingsPage() {
-  const router = useRouter();
   const [config, setConfig] = useState<MissionControlConfig | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -234,13 +232,6 @@ export default function SettingsPage() {
       <div className="border-b border-mc-border bg-mc-bg-secondary">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.push('/')}
-              className="p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary"
-              title="Back to Mission Control"
-            >
-              ← Back
-            </button>
             <Settings className="w-6 h-6 text-mc-accent" />
             <h1 className="text-2xl font-bold text-mc-text">Settings</h1>
           </div>

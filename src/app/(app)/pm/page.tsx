@@ -12,9 +12,12 @@
  */
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
-import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin } from 'lucide-react';
+import {
+  useCurrentWorkspaceId,
+  useSetCurrentWorkspaceId,
+} from '@/components/shell/workspace-context';
 
 interface Workspace {
   id: string;
@@ -108,8 +111,9 @@ export default function PmChatPage() {
 }
 
 function PmChatPageInner() {
+  const workspaceId = useCurrentWorkspaceId();
+  const setCurrentWorkspaceId = useSetCurrentWorkspaceId();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<string>('default');
   const [pmAgent, setPmAgent] = useState<AgentLite | null>(null);
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [proposals, setProposals] = useState<Record<string, PmProposal>>({});
@@ -131,17 +135,22 @@ function PmChatPageInner() {
   const focusProposalId = searchParams?.get('proposal') ?? null;
   const [highlightedProposalId, setHighlightedProposalId] = useState<string | null>(null);
 
-  // Load workspace list once.
+  // Load workspace list once. The global switcher in the left nav owns the
+  // selected id; we only fetch the list here so the legacy fallback path
+  // can still pick up a sensible default if the stored id no longer exists.
   useEffect(() => {
     fetch('/api/workspaces')
       .then(r => r.json())
       .then((rows: Workspace[]) => {
         setWorkspaces(rows);
-        if (rows.length > 0 && !rows.find(w => w.id === 'default')) {
-          setWorkspaceId(rows[0].id);
+        if (rows.length > 0 && !rows.find(w => w.id === workspaceId)) {
+          setCurrentWorkspaceId(rows[0].id);
         }
       })
       .catch(() => { /* leave empty */ });
+    // intentionally only on mount — workspaceId/setCurrentWorkspaceId
+    // changes after a switcher click and we don't need to re-bootstrap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Resolve the PM agent for the selected workspace.
@@ -364,22 +373,14 @@ function PmChatPageInner() {
   }, [recentProposals, workspaceId]);
 
   return (
-    <div className="flex flex-col h-screen bg-mc-bg text-mc-text">
-      {/* Header */}
+    <div className="flex flex-col h-full bg-mc-bg text-mc-text">
+      {/* Page header. Workspace selection now lives in the unified left
+          nav — this header only carries page-scoped controls. */}
       <header className="border-b border-mc-border px-4 py-3 flex items-center gap-4 shrink-0">
         <h1 className="text-lg font-semibold">📋 PM Chat</h1>
-        <select
-          value={workspaceId}
-          onChange={e => setWorkspaceId(e.target.value)}
-          className="bg-mc-bg border border-mc-border rounded-sm px-3 py-1.5 text-sm focus:outline-hidden focus:border-mc-accent"
-        >
-          {workspaces.length === 0 && <option value="default">default</option>}
-          {workspaces.map(w => (
-            <option key={w.id} value={w.id}>
-              {w.icon ?? '📁'} {w.name}
-            </option>
-          ))}
-        </select>
+        <span className="text-xs text-mc-text-secondary">
+          {workspaces.find(w => w.id === workspaceId)?.name ?? workspaceId}
+        </span>
         <div className="ml-auto text-xs text-mc-text-secondary">
           {proposalCount.draft} draft · {proposalCount.total} total
         </div>
@@ -393,9 +394,6 @@ function PmChatPageInner() {
           {runningStandup ? <Loader className="w-3 h-3 animate-spin" /> : <Sunrise className="w-3 h-3" />}
           Run standup
         </button>
-        <Link href="/roadmap" className="text-xs text-mc-accent hover:underline">
-          View roadmap →
-        </Link>
       </header>
 
       <div className="flex flex-1 overflow-hidden">

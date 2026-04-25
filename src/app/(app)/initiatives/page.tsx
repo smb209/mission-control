@@ -167,9 +167,8 @@ export default function InitiativesPage() {
           <p className="text-sm text-mc-text-secondary">Planning tree (Phase 1 — list view).</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/" className="px-3 py-2 rounded-lg border border-mc-border text-mc-text-secondary hover:text-mc-text text-sm">
-            Workspaces
-          </Link>
+          {/* "Workspaces" button removed — global workspace switcher lives
+              in the unified left nav now. */}
           <button
             onClick={() => setCreating({ parent_id: null })}
             className="px-3 py-2 rounded-lg bg-mc-accent text-white hover:bg-mc-accent/90 text-sm flex items-center gap-2"
