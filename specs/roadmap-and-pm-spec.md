@@ -701,7 +701,9 @@ Each phase is a separate PR, demoable.
 
 4. **Backlog UI.** A `/backlog` flat view for initiatives with no parent and no dates is included in Phase 2 — confirm scope.
 
-5. **Convert operation vs `kind` PATCH.** A dedicated `/convert` endpoint exists for clarity in audit logs, but mechanically it's a `kind` change. Lean: keep `/convert` as the operator-facing endpoint; PATCH on `kind` is allowed but discouraged.
+5. **Convert operation vs `kind` PATCH.** A dedicated `/convert` endpoint exists for clarity in audit logs, but mechanically it's a `kind` change. **Resolved (post-Phase 1):** keep `/convert` as the operator-facing endpoint; convert emits a row in the existing `events` table with `type='initiative_kind_changed'` (no new audit table). PATCH on `kind` is allowed but discouraged and does not emit the event.
+
+6. **`parent_id` query param semantics on `GET /api/initiatives`.** **Resolved (post-Phase 1):** missing = no filter; literal string `"null"` = roots only (parent_initiative_id IS NULL); any other value = exact match.
 
 ---
 
