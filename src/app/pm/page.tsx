@@ -11,7 +11,7 @@
  * proposals" sidebar on the right with proposal status chips.
  */
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox } from 'lucide-react';
 
@@ -78,6 +78,16 @@ const STATUS_BADGE: Record<PmProposal['status'], string> = {
 };
 
 export default function PmChatPage() {
+  // useSearchParams() requires a Suspense boundary during static prerender
+  // (Next 16). The actual page contents live in PmChatPageInner below.
+  return (
+    <Suspense fallback={null}>
+      <PmChatPageInner />
+    </Suspense>
+  );
+}
+
+function PmChatPageInner() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>('default');
   const [pmAgent, setPmAgent] = useState<AgentLite | null>(null);
