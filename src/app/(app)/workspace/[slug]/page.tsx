@@ -1,10 +1,18 @@
 'use client';
 
+/**
+ * Per-workspace task board ("Mission Queue"). After Polish D this page lives
+ * inside the `(app)` route group, so the unified left-nav shell renders
+ * around it. The previous standalone Header (with its own nav buttons) was
+ * removed in favor of the shell — we still emit a workspace-internal
+ * mobile bottom tab bar for switching between Queue / Agents / Feed /
+ * Settings panels at small viewport sizes.
+ */
+
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronLeft, ListTodo, Users, Activity, Settings as SettingsIcon, ExternalLink, Home, BarChart3 } from 'lucide-react';
-import { Header } from '@/components/Header';
+import { ChevronLeft, ListTodo, Users, Activity, Settings as SettingsIcon, ExternalLink, BarChart3 } from 'lucide-react';
 import { AgentsSidebar } from '@/components/AgentsSidebar';
 import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
@@ -13,6 +21,7 @@ import { SSEDebugPanel } from '@/components/SSEDebugPanel';
 import { useMissionControl } from '@/lib/store';
 import { useSSE } from '@/hooks/useSSE';
 import { debug } from '@/lib/debug';
+import { useSetCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Task, Workspace } from '@/lib/types';
 
 type MobileTab = 'queue' | 'agents' | 'feed' | 'settings';
@@ -20,6 +29,7 @@ type MobileTab = 'queue' | 'agents' | 'feed' | 'settings';
 export default function WorkspacePage() {
   const params = useParams();
   const slug = params.slug as string;
+  const setCurrentWorkspaceId = useSetCurrentWorkspaceId();
 
   const { setAgents, setTasks, setEvents, setIsOnline, setIsLoading, isLoading } = useMissionControl();
 
@@ -51,6 +61,10 @@ export default function WorkspacePage() {
         if (res.ok) {
           const data = await res.json();
           setWorkspace(data);
+          // Sync the shell's active-workspace context to whichever slug
+          // we just landed on. Keeps the left-nav switcher in agreement
+          // with the URL bar on direct navigation / refresh.
+          if (data?.id) setCurrentWorkspaceId(data.id);
         } else if (res.status === 404) {
           setNotFound(true);
           setIsLoading(false);
@@ -65,7 +79,7 @@ export default function WorkspacePage() {
     }
 
     loadWorkspace();
-  }, [slug, setIsLoading]);
+  }, [slug, setIsLoading, setCurrentWorkspaceId]);
 
   useEffect(() => {
     if (!isPortrait && mobileTab === 'queue') {
@@ -178,14 +192,14 @@ export default function WorkspacePage() {
 
   if (notFound) {
     return (
-      <div className="min-h-screen bg-mc-bg flex items-center justify-center">
+      <div className="h-full bg-mc-bg flex items-center justify-center">
         <div className="text-center">
           <div className="text-6xl mb-4">🔍</div>
           <h1 className="text-2xl font-bold mb-2">Workspace Not Found</h1>
           <p className="text-mc-text-secondary mb-6">The workspace &ldquo;{slug}&rdquo; doesn&apos;t exist.</p>
           <Link href="/" className="inline-flex items-center gap-2 px-6 py-3 bg-mc-accent text-mc-bg rounded-lg font-medium hover:bg-mc-accent/90">
             <ChevronLeft className="w-4 h-4" />
-            Back to Dashboard
+            Back to Mission Control
           </Link>
         </div>
       </div>
@@ -194,7 +208,7 @@ export default function WorkspacePage() {
 
   if (isLoading || !workspace) {
     return (
-      <div className="min-h-screen bg-mc-bg flex items-center justify-center">
+      <div className="h-full bg-mc-bg flex items-center justify-center">
         <div className="text-center">
           <div className="text-4xl mb-4 animate-pulse">🦞</div>
           <p className="text-mc-text-secondary">Loading {slug}...</p>
@@ -206,9 +220,7 @@ export default function WorkspacePage() {
   const showMobileBottomTabs = isPortrait;
 
   return (
-    <div className="h-screen flex flex-col bg-mc-bg overflow-hidden">
-      <Header workspace={workspace} isPortrait={isPortrait} />
-
+    <div className="h-full flex flex-col bg-mc-bg overflow-hidden">
       <div className="hidden lg:flex flex-1 overflow-hidden">
         <AgentsSidebar workspaceId={workspace.id} />
         <MissionQueue workspaceId={workspace.id} />
@@ -275,7 +287,7 @@ export default function WorkspacePage() {
       </div>
 
       {showMobileBottomTabs && (
-        <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-mc-border bg-mc-bg-secondary pb-[env(safe-area-inset-bottom)]">
+        <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-30 border-t border-mc-border bg-mc-bg-secondary pb-[env(safe-area-inset-bottom)]">
           <div className="grid grid-cols-4 gap-1 p-2">
             <MobileTabButton label="Queue" active={mobileTab === 'queue'} icon={<ListTodo className="w-5 h-5" />} onClick={() => setMobileTab('queue')} />
             <MobileTabButton label="Agents" active={mobileTab === 'agents'} icon={<Users className="w-5 h-5" />} onClick={() => setMobileTab('agents')} />
@@ -332,11 +344,10 @@ function MobileSettingsPanel({ workspace, denseLandscape = false }: { workspace:
           </span>
           <ExternalLink className="w-4 h-4 text-mc-text-secondary" />
         </Link>
-
-        <Link href="/" className="w-full min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg-secondary flex items-center justify-between text-sm">
+        <Link href="/settings/workspaces" className="w-full min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg-secondary flex items-center justify-between text-sm">
           <span className="flex items-center gap-2">
-            <Home className="w-4 h-4" />
-            Back to Workspaces
+            <SettingsIcon className="w-4 h-4" />
+            Manage Workspaces
           </span>
           <ExternalLink className="w-4 h-4 text-mc-text-secondary" />
         </Link>

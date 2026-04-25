@@ -1,26 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import {
+  deleteWorkspaceCascade,
+  getWorkspaceCascadeCounts,
+} from '@/lib/db/workspaces';
 
 export const dynamic = 'force-dynamic';
 // GET /api/workspaces/[id] - Get a single workspace
+//   Optional query: ?counts=true → also include cascade row counts
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  
+  const wantCounts = request.nextUrl.searchParams.get('counts') === 'true';
+
   try {
     const db = getDb();
-    
+
     // Try to find by ID or slug
     const workspace = db.prepare(
       'SELECT * FROM workspaces WHERE id = ? OR slug = ?'
-    ).get(id, id);
-    
+    ).get(id, id) as { id: string } | undefined;
+
     if (!workspace) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
-    
+
+    if (wantCounts) {
+      const cascadeCounts = getWorkspaceCascadeCounts(workspace.id);
+      return NextResponse.json({ ...workspace, cascadeCounts });
+    }
+
     return NextResponse.json(workspace);
   } catch (error) {
     console.error('Failed to fetch workspace:', error);
@@ -34,23 +45,23 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  
+
   try {
     const body = await request.json();
     const { name, description, icon } = body;
-    
+
     const db = getDb();
-    
+
     // Check workspace exists
     const existing = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
     if (!existing) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
-    
+
     // Build update query dynamically
     const updates: string[] = [];
     const values: unknown[] = [];
-    
+
     if (name !== undefined) {
       updates.push('name = ?');
       values.push(name);
@@ -63,18 +74,18 @@ export async function PATCH(
       updates.push('icon = ?');
       values.push(icon);
     }
-    
+
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
     }
-    
+
     updates.push("updated_at = datetime('now')");
     values.push(id);
-    
+
     db.prepare(`
       UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?
     `).run(...values);
-    
+
     const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
     return NextResponse.json(workspace);
   } catch (error) {
@@ -83,53 +94,66 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/workspaces/[id] - Delete a workspace
+// DELETE /api/workspaces/[id]
+//
+// Requires `?confirm=<workspace-name>` to actually delete (typed
+// confirmation guard). Cascades through all workspace-scoped tables —
+// see `deleteWorkspaceCascade` for the dependency walk.
+//
+// Refuses to delete the special `default` workspace and refuses to
+// delete the *last* remaining workspace (operators always need at
+// least one to land on).
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  
+  const confirm = request.nextUrl.searchParams.get('confirm');
+
   try {
     const db = getDb();
-    
-    // Don't allow deleting the default workspace
+
     if (id === 'default') {
       return NextResponse.json({ error: 'Cannot delete the default workspace' }, { status: 400 });
     }
-    
-    // Check workspace exists
-    const existing = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+
+    const existing = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get(id) as
+      | { id: string; name: string }
+      | undefined;
+
     if (!existing) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
-    
-    // Check if workspace has tasks or agents (cannot delete)
-    const taskCount = db.prepare(
-      'SELECT COUNT(*) as count FROM tasks WHERE workspace_id = ?'
-    ).get(id) as { count: number };
-    
-    const agentCount = db.prepare(
-      'SELECT COUNT(*) as count FROM agents WHERE workspace_id = ?'
-    ).get(id) as { count: number };
-    
-    if (taskCount.count > 0 || agentCount.count > 0) {
-      return NextResponse.json({ 
-        error: 'Cannot delete workspace with existing tasks or agents',
-        taskCount: taskCount.count,
-        agentCount: agentCount.count
+
+    // Block deleting the last workspace — operators always need at
+    // least one container to drop into.
+    const total = (db.prepare('SELECT COUNT(*) as c FROM workspaces').get() as { c: number }).c;
+    if (total <= 1) {
+      return NextResponse.json({
+        error: 'Cannot delete the last remaining workspace',
       }, { status: 400 });
     }
-    
-    // Delete associated records that don't block deletion
-    db.prepare('DELETE FROM workflow_templates WHERE workspace_id = ?').run(id);
-    db.prepare('DELETE FROM knowledge_entries WHERE workspace_id = ?').run(id);
-    
-    db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
-    
-    return NextResponse.json({ success: true });
+
+    // Typed-name confirmation guard. The UI sends `?confirm=<name>`
+    // after the operator types the workspace name into the modal.
+    if (!confirm || confirm !== existing.name) {
+      return NextResponse.json({
+        error: 'Workspace name confirmation required',
+        expected: existing.name,
+      }, { status: 400 });
+    }
+
+    const counts = deleteWorkspaceCascade(id);
+
+    return NextResponse.json({
+      success: true,
+      deleted: { id, name: existing.name },
+      cascadeCounts: counts,
+    });
   } catch (error) {
     console.error('Failed to delete workspace:', error);
-    return NextResponse.json({ error: 'Failed to delete workspace' }, { status: 500 });
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : 'Failed to delete workspace',
+    }, { status: 500 });
   }
 }

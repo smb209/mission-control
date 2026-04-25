@@ -8,8 +8,6 @@
  *   - /api-docs           (full-page Scalar)
  *   - /debug, /debug/mcp  (debugging surfaces, intentionally chrome-free)
  *   - /deliverables/[id]/view (markdown viewer, embedded surface)
- *   - /workspace/[slug]   (has its own dense Header — keeping a parallel
- *                          shell here while we settle on the new taxonomy)
  */
 
 import { AppShell } from '@/components/shell/AppShell';

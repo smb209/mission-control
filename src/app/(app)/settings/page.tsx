@@ -6,10 +6,11 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import {
   Settings, Save, RotateCcw, Home, FolderOpen, Link as LinkIcon,
   HardDrive, Download, Upload, Trash2, RotateCw, ChevronDown, ChevronRight,
-  AlertTriangle, Check, Loader2, Cloud, CloudOff, Shield,
+  AlertTriangle, Check, Loader2, Cloud, CloudOff, Shield, Folder,
 } from 'lucide-react';
 import { getConfig, updateConfig, resetConfig, type MissionControlConfig } from '@/lib/config';
 
@@ -271,6 +272,27 @@ export default function SettingsPage() {
             ✗ {error}
           </div>
         )}
+
+        {/* Workspaces management quick link */}
+        <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Folder className="w-5 h-5 text-mc-accent" />
+              <div>
+                <h2 className="text-xl font-semibold text-mc-text">Workspaces</h2>
+                <p className="text-sm text-mc-text-secondary">
+                  Create, rename, or delete workspaces. Each workspace owns its own tasks, agents, and initiatives.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/settings/workspaces"
+              className="px-3 py-1.5 text-sm rounded-sm bg-mc-accent text-mc-bg font-medium hover:bg-mc-accent/90 shrink-0"
+            >
+              Manage workspaces
+            </Link>
+          </div>
+        </section>
 
         {/* Workspace Paths */}
         <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
