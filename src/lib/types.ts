@@ -122,6 +122,10 @@ export interface Task {
   merge_pr_url?: string;
   is_archived?: number;
   archived_at?: string;
+  // Roadmap planning layer (v0.2): pointer to the owning initiative and an
+  // optional freeform status check string. See specs/roadmap-and-pm-spec.md.
+  initiative_id?: string | null;
+  status_check_md?: string | null;
   /**
    * Opt-in: when truthy, dispatch injects a PREVIOUS LESSONS LEARNED
    * block from workspace knowledge. Off by default because the legacy
@@ -726,6 +730,11 @@ export interface Idea {
   auto_suppressed?: number; // 1 = suppressed due to similarity
   suppress_reason?: string;
   variant_id?: string;
+  // Roadmap planning layer (v0.2): when the operator promotes an idea to
+  // an initiative (sibling of the existing autopilot idea→task path), this
+  // holds the resulting initiatives.id. The two paths can coexist on the
+  // same idea — task_id covers autopilot, initiative_id covers planning.
+  initiative_id?: string | null;
   created_at: string;
   updated_at: string;
 }

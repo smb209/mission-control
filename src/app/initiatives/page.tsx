@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { Plus, ChevronRight, ChevronDown, Pencil, Trash2, MoveRight, Shuffle, Link2, History } from 'lucide-react';
+import { Plus, ChevronRight, ChevronDown, Pencil, Trash2, MoveRight, Shuffle, Link2, History, Send } from 'lucide-react';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -29,6 +29,26 @@ interface TreeNode extends Initiative {
   children: TreeNode[];
 }
 
+// Counts of tasks linked to an initiative, broken out by status family so
+// the tree can render "3 tasks: 1 draft, 2 active" inline.
+interface TaskCounts {
+  total: number;
+  draft: number;
+  active: number;
+  done: number;
+}
+
+const ACTIVE_STATUSES = new Set([
+  'inbox',
+  'planning',
+  'assigned',
+  'in_progress',
+  'convoy_active',
+  'testing',
+  'review',
+  'verification',
+]);
+
 const KIND_BADGE: Record<Kind, string> = {
   theme: 'bg-purple-500/20 text-purple-300',
   milestone: 'bg-amber-500/20 text-amber-300',
@@ -41,21 +61,43 @@ const WORKSPACE_ID = 'default';
 export default function InitiativesPage() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [flat, setFlat] = useState<Initiative[]>([]);
+  const [taskCounts, setTaskCounts] = useState<Record<string, TaskCounts>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Initiative | null>(null);
   const [creating, setCreating] = useState<{ parent_id: string | null } | null>(null);
   const [moving, setMoving] = useState<Initiative | null>(null);
   const [converting, setConverting] = useState<Initiative | null>(null);
+  const [promoting, setPromoting] = useState<Initiative | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const res = await fetch(`/api/initiatives?workspace_id=${WORKSPACE_ID}`);
-      if (!res.ok) throw new Error(`Failed to load (${res.status})`);
-      const rows: Initiative[] = await res.json();
+      const [iRes, tRes] = await Promise.all([
+        fetch(`/api/initiatives?workspace_id=${WORKSPACE_ID}`),
+        fetch(`/api/tasks?workspace_id=${WORKSPACE_ID}`),
+      ]);
+      if (!iRes.ok) throw new Error(`Failed to load (${iRes.status})`);
+      const rows: Initiative[] = await iRes.json();
       setFlat(rows);
       setTree(buildTree(rows));
+
+      // Count tasks per initiative_id, partitioned by status family.
+      const counts: Record<string, TaskCounts> = {};
+      if (tRes.ok) {
+        const tasks: Array<{ initiative_id: string | null; status: string }> = await tRes.json();
+        for (const t of tasks) {
+          if (!t.initiative_id) continue;
+          const entry =
+            counts[t.initiative_id] ||
+            (counts[t.initiative_id] = { total: 0, draft: 0, active: 0, done: 0 });
+          entry.total += 1;
+          if (t.status === 'draft') entry.draft += 1;
+          else if (t.status === 'done') entry.done += 1;
+          else if (ACTIVE_STATUSES.has(t.status)) entry.active += 1;
+        }
+      }
+      setTaskCounts(counts);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
     } finally {
@@ -105,10 +147,12 @@ export default function InitiativesPage() {
                 node={node}
                 depth={0}
                 allInitiatives={flat}
+                taskCounts={taskCounts}
                 onEdit={setEditing}
                 onAddChild={parent => setCreating({ parent_id: parent.id })}
                 onMove={setMoving}
                 onConvert={setConverting}
+                onPromote={setPromoting}
                 onDelete={async (init) => {
                   if (!confirm(`Delete "${init.title}"?`)) return;
                   const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
@@ -167,6 +211,16 @@ export default function InitiativesPage() {
           }}
         />
       )}
+      {promoting && (
+        <PromoteModal
+          initiative={promoting}
+          onClose={() => setPromoting(null)}
+          onSaved={() => {
+            setPromoting(null);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -190,22 +244,28 @@ function InitiativeRow({
   node,
   depth,
   allInitiatives,
+  taskCounts,
   onEdit,
   onAddChild,
   onMove,
   onConvert,
+  onPromote,
   onDelete,
 }: {
   node: TreeNode;
   depth: number;
   allInitiatives: Initiative[];
+  taskCounts: Record<string, TaskCounts>;
   onEdit: (init: Initiative) => void;
   onAddChild: (parent: Initiative) => void;
   onMove: (init: Initiative) => void;
   onConvert: (init: Initiative) => void;
+  onPromote: (init: Initiative) => void;
   onDelete: (init: Initiative) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const counts = taskCounts[node.id];
+  const isStory = node.kind === 'story';
 
   return (
     <>
@@ -217,8 +277,31 @@ function InitiativeRow({
         <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
           {node.kind}
         </span>
-        <span className="font-medium text-mc-text">{node.title}</span>
+        <Link
+          href={`/initiatives/${node.id}`}
+          className="font-medium text-mc-text hover:text-mc-accent"
+          title="Open initiative detail"
+        >
+          {node.title}
+        </Link>
         <span className="text-xs text-mc-text-secondary">{node.status}</span>
+        {counts && counts.total > 0 && (
+          <span
+            className="text-[11px] text-mc-text-secondary"
+            title={`${counts.total} tasks: ${counts.draft} draft, ${counts.active} active, ${counts.done} done`}
+          >
+            · {counts.total} task{counts.total === 1 ? '' : 's'}
+            {counts.draft > 0 && (
+              <span className="ml-1 px-1 rounded bg-slate-500/20 text-slate-300">{counts.draft} draft</span>
+            )}
+            {counts.active > 0 && (
+              <span className="ml-1 px-1 rounded bg-blue-500/20 text-blue-300">{counts.active} active</span>
+            )}
+            {counts.done > 0 && (
+              <span className="ml-1 px-1 rounded bg-emerald-500/20 text-emerald-300">{counts.done} done</span>
+            )}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <button
             title={expanded ? 'Hide details' : 'Show details (history + dependencies)'}
@@ -233,6 +316,22 @@ function InitiativeRow({
             className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
           >
             <Plus className="w-4 h-4" />
+          </button>
+          <button
+            title={
+              isStory
+                ? 'Promote story to draft task'
+                : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
+            }
+            onClick={() => isStory && onPromote(node)}
+            disabled={!isStory}
+            className={`p-1.5 rounded ${
+              isStory
+                ? 'hover:bg-mc-bg text-mc-accent hover:text-mc-accent'
+                : 'text-mc-text-secondary/40 cursor-not-allowed'
+            }`}
+          >
+            <Send className="w-4 h-4" />
           </button>
           <button
             title="Edit"
@@ -278,10 +377,12 @@ function InitiativeRow({
           node={c}
           depth={depth + 1}
           allInitiatives={allInitiatives}
+          taskCounts={taskCounts}
           onEdit={onEdit}
           onAddChild={onAddChild}
           onMove={onMove}
           onConvert={onConvert}
+          onPromote={onPromote}
           onDelete={onDelete}
         />
       ))}
@@ -951,6 +1052,87 @@ function ConvertModal({
             className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
           >
             Convert
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function PromoteModal({
+  initiative,
+  onClose,
+  onSaved,
+}: {
+  initiative: Initiative;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(initiative.title);
+  const [description, setDescription] = useState(initiative.description ?? '');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiative.id}/promote-to-task`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_title: title,
+          task_description: description || null,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Promote failed (${res.status})`);
+      }
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Promote failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell title={`Promote "${initiative.title}" to task draft`} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs text-mc-text-secondary">
+          Creates one task in <code>status=draft</code>, linked to this initiative.
+          The draft stays on the planning board until you promote it to the
+          execution queue.
+        </p>
+        <label className="block">
+          <span className="text-sm text-mc-text-secondary">Task title</span>
+          <input
+            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            autoFocus
+          />
+        </label>
+        <label className="block">
+          <span className="text-sm text-mc-text-secondary">Description (optional)</span>
+          <textarea
+            className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border h-24"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+          />
+        </label>
+        {err && <div className="text-red-400 text-sm">{err}</div>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm">
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || !title.trim()}
+            className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
+          >
+            Promote to draft
           </button>
         </div>
       </div>

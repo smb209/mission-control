@@ -29,10 +29,40 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'done', label: 'Done', color: 'border-t-mc-accent-green' },
 ];
 
+interface InitiativeMini {
+  id: string;
+  title: string;
+}
+
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
   const [compactEmptyColumns, setCompactEmptyColumns] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
+  // Light-weight lookup so task cards can render the owning initiative's
+  // title without a per-card fetch. Refreshed when workspaceId changes.
+  const [initiativeTitles, setInitiativeTitles] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          workspaceId ? `/api/initiatives?workspace_id=${workspaceId}` : '/api/initiatives',
+        );
+        if (!res.ok) return;
+        const rows: InitiativeMini[] = await res.json();
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const r of rows) map[r.id] = r.title;
+        setInitiativeTitles(map);
+      } catch {
+        /* non-fatal — badge falls back to id */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
   // Per-column manual override. Without an entry, the column uses the default
   // (empty = collapsed to a vertical rail, non-empty = expanded).
   const [columnOverride, setColumnOverride] = useState<Record<string, 'expanded' | 'collapsed'>>({});
@@ -71,8 +101,15 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
   const [pendingMove, setPendingMove] = useState<{ task: Task; targetStatus: TaskStatus } | null>(null);
 
+  // Drafts (status='draft') belong to the planning board only — see spec
+  // §13.2 (Workflow Unification). They never appear in the execution queue.
   const getTasksByStatus = (status: TaskStatus) =>
-    tasks.filter((task) => task.status === status && (showArchived || !task.is_archived));
+    tasks.filter(
+      (task) =>
+        task.status === status &&
+        task.status !== ('draft' as TaskStatus) &&
+        (showArchived || !task.is_archived),
+    );
 
   // Active pipeline states where manual moves are dangerous
   const ACTIVE_PIPELINE_STATES: TaskStatus[] = ['assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification'];
@@ -279,6 +316,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                       mobileMode={false}
                       portraitMode={false}
                       unreadCount={unreadCounts[task.id] || 0}
+                      initiativeTitles={initiativeTitles}
                     />
                   ))}
                 </div>
@@ -325,6 +363,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                   mobileMode
                   portraitMode={isPortrait}
                   unreadCount={unreadCounts[task.id] || 0}
+                  initiativeTitles={initiativeTitles}
                 />
               ))
             )}
@@ -467,9 +506,10 @@ interface TaskCardProps {
   mobileMode: boolean;
   portraitMode?: boolean;
   unreadCount?: number;
+  initiativeTitles?: Record<string, string>;
 }
 
-function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobileMode, portraitMode = true, unreadCount = 0 }: TaskCardProps) {
+function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobileMode, portraitMode = true, unreadCount = 0, initiativeTitles = {} }: TaskCardProps) {
   const priorityStyles = {
     low: 'text-mc-text-secondary',
     normal: 'text-mc-accent',
@@ -528,6 +568,23 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
             </span>
           )}
         </div>
+
+        {task.initiative_id && (
+          // Quiet initiative badge — clicking it stops propagation so the
+          // card click (open modal) doesn't fire when the operator wants
+          // to navigate to the initiative detail page.
+          <a
+            href={`/initiatives/${task.initiative_id}`}
+            onClick={(e) => e.stopPropagation()}
+            className={`inline-flex items-center gap-1 ${portraitMode ? 'mb-2' : 'mb-1.5'} max-w-full text-[10px] px-1.5 py-0.5 rounded-sm bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 hover:bg-emerald-500/20 truncate`}
+            title="Linked to initiative"
+          >
+            <span className="opacity-70">↳</span>
+            <span className="truncate">
+              {initiativeTitles[task.initiative_id] ?? `Initiative ${task.initiative_id.slice(0, 6)}…`}
+            </span>
+          </a>
+        )}
 
         {isPlanning && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-purple-500/10 rounded-md border border-purple-500/20`}>
