@@ -137,6 +137,39 @@ export async function checkAndRunDueSchedules(): Promise<void> {
           evaluateMaybePool(schedule.product_id);
           break;
         }
+        case 'roadmap_drift_scan': {
+          // Phase 4: workspace-scoped derivation. The product row is just a
+          // hook for the cron — the real target is the product's workspace.
+          // If the operator provides an explicit workspace_id in `config`,
+          // we honor it; otherwise we look up the workspace from the
+          // product. This lets a single product schedule cover the whole
+          // workspace's roadmap.
+          const { applyDerivation } = await import('@/lib/roadmap/apply-derivation');
+          let cfgWorkspaceId: string | null = null;
+          try {
+            if (schedule.config) {
+              const parsed = JSON.parse(schedule.config) as { workspace_id?: string };
+              cfgWorkspaceId = parsed.workspace_id ?? null;
+            }
+          } catch {
+            // Config malformed — fall through to product lookup.
+          }
+          let workspaceId = cfgWorkspaceId;
+          if (!workspaceId) {
+            const { queryOne } = await import('@/lib/db');
+            const prod = queryOne<{ workspace_id: string }>(
+              'SELECT workspace_id FROM products WHERE id = ?',
+              [schedule.product_id],
+            );
+            workspaceId = prod?.workspace_id ?? null;
+          }
+          if (!workspaceId) {
+            console.warn(`[Schedule] roadmap_drift_scan ${schedule.id} has no resolvable workspace`);
+            break;
+          }
+          applyDerivation(workspaceId);
+          break;
+        }
         default:
           console.log(`[Schedule] Unhandled schedule type: ${schedule.schedule_type}`);
       }

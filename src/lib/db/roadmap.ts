@@ -68,10 +68,25 @@ export interface RoadmapTask {
   assigned_agent_id: string | null;
 }
 
+export interface RoadmapOwnerAvailability {
+  id: string;
+  agent_id: string;
+  unavailable_start: string;
+  unavailable_end: string;
+  reason: string | null;
+}
+
 export interface RoadmapSnapshot {
   initiatives: RoadmapInitiative[];
   dependencies: RoadmapDependency[];
   tasks: RoadmapTask[];
+  /**
+   * Owner-availability rows for every agent that owns at least one
+   * initiative in the snapshot. The derivation engine uses these to push
+   * `derived_end` later by the overlap of any owner-out-of-office windows.
+   * The roadmap UI does not currently render them.
+   */
+  owner_availability: RoadmapOwnerAvailability[];
   workspace_id: string;
   product_id: string | null;
   truncated: boolean;
@@ -265,6 +280,28 @@ export function getRoadmapSnapshot(filters: RoadmapFilters): RoadmapSnapshot {
     task_counts: counts[r.id] || { draft: 0, active: 0, done: 0, total: 0 },
   }));
 
+  // Owner-availability rows scoped to agents that own at least one
+  // initiative in the visible set. We deliberately do NOT return all
+  // availability rows for the workspace — most owners don't own initiatives
+  // here, and the derivation engine only consumes availability for owners
+  // on the schedule. (Document choice: agents with no initiatives in the
+  // snapshot have no schedule to push, so their availability is irrelevant
+  // to the engine. If a future caller needs every row, query
+  // `listOwnerAvailability({ workspace_id })` directly.)
+  const ownerIds = new Set<string>();
+  for (const r of visibleRows) {
+    if (r.owner_agent_id) ownerIds.add(r.owner_agent_id);
+  }
+  const ownerAvailRows: RoadmapOwnerAvailability[] = ownerIds.size === 0
+    ? []
+    : queryAll<RoadmapOwnerAvailability>(
+        `SELECT id, agent_id, unavailable_start, unavailable_end, reason
+         FROM owner_availability
+         WHERE agent_id IN (${Array.from(ownerIds).map(() => '?').join(',')})
+         ORDER BY unavailable_start, created_at`,
+        Array.from(ownerIds),
+      );
+
   return {
     initiatives,
     dependencies: depRows,
@@ -277,6 +314,7 @@ export function getRoadmapSnapshot(filters: RoadmapFilters): RoadmapSnapshot {
         status: t.status,
         assigned_agent_id: t.assigned_agent_id,
       })),
+    owner_availability: ownerAvailRows,
     workspace_id: filters.workspace_id,
     product_id: filters.product_id ?? null,
     truncated,

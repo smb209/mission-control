@@ -618,7 +618,8 @@ CREATE TABLE IF NOT EXISTS product_schedules (
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   schedule_type TEXT NOT NULL CHECK (schedule_type IN (
     'research', 'ideation', 'maybe_reevaluation', 'seo_audit',
-    'content_refresh', 'analytics_report', 'social_batch', 'growth_experiment'
+    'content_refresh', 'analytics_report', 'social_batch', 'growth_experiment',
+    'roadmap_drift_scan'
   )),
   cron_expression TEXT NOT NULL,
   timezone TEXT DEFAULT 'America/Denver',

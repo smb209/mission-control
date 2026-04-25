@@ -2552,6 +2552,76 @@ const migrations: Migration[] = [
 
       console.log('[Migration 043] Complete.');
     }
+  },
+  {
+    id: '044',
+    name: 'roadmap_drift_scan_schedule_type',
+    up: (db) => {
+      // Phase 4 of the roadmap & PM-agent feature. Extend the
+      // product_schedules.schedule_type CHECK list to include
+      // 'roadmap_drift_scan'. SQLite can't ALTER a CHECK in place — we
+      // patch the stored CREATE TABLE text via writable_schema, the same
+      // technique migration 043 uses on tasks.status.
+      console.log('[Migration 044] Extending product_schedules.schedule_type with roadmap_drift_scan...');
+      const row = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='product_schedules'`,
+      ).get() as { sql: string } | undefined;
+      if (!row) {
+        console.log('[Migration 044] product_schedules table absent; skipping.');
+        return;
+      }
+      if (row.sql.includes("'roadmap_drift_scan'")) {
+        console.log('[Migration 044] Already extended; skipping.');
+        return;
+      }
+      const oldCheck = `schedule_type TEXT NOT NULL CHECK (schedule_type IN (
+            'research', 'ideation', 'maybe_reevaluation', 'seo_audit',
+            'content_refresh', 'analytics_report', 'social_batch', 'growth_experiment'
+          ))`;
+      const newCheck = `schedule_type TEXT NOT NULL CHECK (schedule_type IN (
+            'research', 'ideation', 'maybe_reevaluation', 'seo_audit',
+            'content_refresh', 'analytics_report', 'social_batch', 'growth_experiment',
+            'roadmap_drift_scan'
+          ))`;
+
+      // Try the canonical shape from migration 035 first; fall back to a
+      // permissive single-line shape if older databases stored it
+      // differently.
+      let patched = row.sql;
+      if (row.sql.includes(oldCheck)) {
+        patched = row.sql.replace(oldCheck, newCheck);
+      } else {
+        // Permissive fallback — find the schedule_type CHECK clause via
+        // regex and append our new value to its IN(...) list.
+        const re = /(schedule_type\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*schedule_type\s+IN\s*\()([^)]+)(\))/i;
+        const m = row.sql.match(re);
+        if (!m) {
+          console.warn('[Migration 044] schedule_type CHECK shape unrecognized; current schema:\n' + row.sql);
+          throw new Error('[Migration 044] Unable to locate schedule_type CHECK clause — refusing to patch');
+        }
+        const inList = m[2].trim();
+        const newInList = `${inList}, 'roadmap_drift_scan'`;
+        patched = row.sql.replace(re, `$1${newInList}$3`);
+      }
+
+      const escaped = patched.replace(/'/g, "''");
+      db.unsafeMode(true);
+      try {
+        db.pragma('writable_schema = ON');
+        db.exec(
+          `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='product_schedules'`,
+        );
+        db.pragma('writable_schema = OFF');
+        const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+        const ok = integrity.length === 1 && integrity[0].integrity_check === 'ok';
+        if (!ok) {
+          throw new Error('[Migration 044] integrity_check failed: ' + JSON.stringify(integrity));
+        }
+      } finally {
+        db.unsafeMode(false);
+      }
+      console.log('[Migration 044] Complete.');
+    }
   }
 ];
 

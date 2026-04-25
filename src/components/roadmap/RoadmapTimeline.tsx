@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Plus } from 'lucide-react';
+import { Plus, RefreshCw } from 'lucide-react';
 import { RoadmapRail } from './RoadmapRail';
 import { RoadmapCanvas } from './RoadmapCanvas';
 import { RoadmapToolbar } from './RoadmapToolbar';
@@ -120,6 +120,8 @@ export function RoadmapTimeline() {
     statuses: new Set(ALL_STATUSES),
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [recomputing, setRecomputing] = useState(false);
+  const [recomputeMsg, setRecomputeMsg] = useState<string | null>(null);
 
   // Read zoom on mount only (client-only).
   useEffect(() => {
@@ -151,6 +153,35 @@ export function RoadmapTimeline() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  const recompute = useCallback(async () => {
+    setRecomputing(true);
+    setRecomputeMsg(null);
+    try {
+      const r = await fetch('/api/roadmap/recompute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: WORKSPACE_ID }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || `Recompute failed (${r.status})`);
+      }
+      const result = await r.json() as {
+        initiatives_updated: number;
+        status_flips: number;
+        drifts: unknown[];
+      };
+      setRecomputeMsg(
+        `Recomputed: ${result.initiatives_updated} updated, ${result.status_flips} flipped, ${result.drifts.length} drift${result.drifts.length === 1 ? '' : 's'}`,
+      );
+      await refresh();
+    } catch (e) {
+      setRecomputeMsg(e instanceof Error ? e.message : 'Recompute failed');
+    } finally {
+      setRecomputing(false);
+    }
   }, [refresh]);
 
   // Apply client-side kind+status filters and collapse logic to the snapshot.
@@ -282,6 +313,15 @@ export function RoadmapTimeline() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={recompute}
+            disabled={recomputing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-mc-border text-mc-text-secondary hover:text-mc-text text-sm disabled:opacity-60"
+            title="Run the derivation engine: refresh derived_start/end and at_risk flags"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${recomputing ? 'animate-spin' : ''}`} />
+            {recomputing ? 'Recomputing…' : 'Recompute now'}
+          </button>
           <Link
             href="/initiatives"
             className="px-3 py-1.5 rounded-lg border border-mc-border text-mc-text-secondary hover:text-mc-text text-sm"
@@ -296,6 +336,11 @@ export function RoadmapTimeline() {
           </Link>
         </div>
       </header>
+      {recomputeMsg && (
+        <div className="mx-4 mt-2 p-2 rounded-lg bg-mc-accent/10 border border-mc-accent/30 text-mc-accent text-xs">
+          {recomputeMsg}
+        </div>
+      )}
 
       <RoadmapToolbar
         filters={filters}
