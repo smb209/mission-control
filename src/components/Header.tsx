@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Zap, Settings, ChevronLeft, LayoutGrid, Rocket } from 'lucide-react';
+import { Zap, Settings, ChevronLeft, LayoutGrid, Rocket, GanttChart, ListTree, Bot } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { format } from 'date-fns';
 import type { Workspace, Agent, Task, TaskStatus } from '@/lib/types';
@@ -136,6 +136,15 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
               </div>
             </div>
 
+            <Link href="/roadmap" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Roadmap">
+              <GanttChart className="w-5 h-5" />
+            </Link>
+            <Link href="/initiatives" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Initiatives">
+              <ListTree className="w-5 h-5" />
+            </Link>
+            <Link href="/pm" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="PM agent">
+              <Bot className="w-5 h-5" />
+            </Link>
             <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Autopilot">
               <Rocket className="w-5 h-5" />
             </Link>
@@ -237,6 +246,15 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
               <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-mc-accent-green animate-pulse' : 'bg-mc-accent-red'}`} />
               {isOnline ? 'ONLINE' : 'OFFLINE'}
             </div>
+            <Link href="/roadmap" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Roadmap">
+              <GanttChart className="w-5 h-5" />
+            </Link>
+            <Link href="/initiatives" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Initiatives">
+              <ListTree className="w-5 h-5" />
+            </Link>
+            <Link href="/pm" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="PM agent">
+              <Bot className="w-5 h-5" />
+            </Link>
             <Link href="/autopilot" className="min-h-11 min-w-11 p-2 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary" title="Autopilot">
               <Rocket className="w-5 h-5" />
             </Link>

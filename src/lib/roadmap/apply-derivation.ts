@@ -25,7 +25,11 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, queryAll } from '@/lib/db';
-import { getRoadmapSnapshot, type RoadmapSnapshot } from '@/lib/db/roadmap';
+import {
+  getRoadmapSnapshot,
+  type RoadmapSnapshot,
+  type RoadmapOwnerAvailability,
+} from '@/lib/db/roadmap';
 import { deriveSchedule, type DeriveResult } from './derive';
 import { detectDrift, type DriftEvent } from './drift';
 import { computeVelocity } from './velocity';
@@ -57,23 +61,9 @@ export function applyDerivation(
   opts: ApplyDerivationOptions = {},
 ): ApplyDerivationResult {
   const snapshot = opts.snapshot ?? getRoadmapSnapshot({ workspace_id });
-
-  // Compute per-owner velocity unless a map was supplied.
-  let velocityMap = opts.velocityMap;
-  if (!velocityMap) {
-    velocityMap = new Map<string, number>();
-    const owners = new Set<string>();
-    for (const i of snapshot.initiatives) {
-      if (i.owner_agent_id) owners.add(i.owner_agent_id);
-    }
-    for (const owner of owners) {
-      velocityMap.set(owner, computeVelocity({ owner_agent_id: owner }));
-    }
-  }
-
-  const derived: DeriveResult = deriveSchedule(snapshot, {
-    velocityMap,
+  const { derived } = computeDerivedSchedule(snapshot, {
     today: opts.today,
+    velocityMap: opts.velocityMap,
   });
 
   const drifts = detectDrift(snapshot, derived);
@@ -169,4 +159,133 @@ export function listWorkspacesWithInitiatives(): string[] {
   return queryAll<{ workspace_id: string }>(
     'SELECT DISTINCT workspace_id FROM initiatives',
   ).map(r => r.workspace_id);
+}
+
+// ─── Preview helpers (Phase 5) ──────────────────────────────────────
+
+export interface PreviewDerivationOptions {
+  today?: Date | string;
+  velocityMap?: Map<string, number>;
+  /**
+   * Override velocity for specific owners on top of (or in place of) the
+   * computed velocity map. Useful for "if Sarah were 50% slower" what-ifs.
+   */
+  velocityOverrides?: Record<string, number>;
+  /**
+   * Extra availability rows to layer on top of the snapshot's existing
+   * rows. Each row is treated identically to a real DB row by the
+   * derivation engine — same overlap math, same effort calendar push.
+   * IDs are auto-generated if missing.
+   */
+  availabilityOverrides?: Array<Omit<RoadmapOwnerAvailability, 'id'> & { id?: string }>;
+}
+
+export interface PreviewDerivationResult {
+  derived: DeriveResult;
+  drifts: DriftEvent[];
+  /**
+   * Per-initiative diff vs the snapshot's currently-stored derived_*
+   * fields. Empty when nothing would change.
+   */
+  diffs: Array<{
+    initiative_id: string;
+    title: string;
+    before: { derived_start: string | null; derived_end: string | null };
+    after: { derived_start: string | null; derived_end: string | null };
+  }>;
+}
+
+/**
+ * Pure compute step: build the velocity map (computed + overrides) and run
+ * `deriveSchedule`. Shared between `applyDerivation` and `previewDerivation`
+ * so both honour the same precedence rules.
+ *
+ * Precedence: `opts.velocityMap` (if explicitly passed) wins as the base;
+ * otherwise we compute per-owner from history. `opts.velocityOverrides`
+ * are applied last and override either base.
+ */
+function computeDerivedSchedule(
+  snapshot: RoadmapSnapshot,
+  opts: { today?: Date | string; velocityMap?: Map<string, number>; velocityOverrides?: Record<string, number> },
+): { derived: DeriveResult; velocityMap: Map<string, number> } {
+  let velocityMap = opts.velocityMap;
+  if (!velocityMap) {
+    velocityMap = new Map<string, number>();
+    const owners = new Set<string>();
+    for (const i of snapshot.initiatives) {
+      if (i.owner_agent_id) owners.add(i.owner_agent_id);
+    }
+    for (const owner of owners) {
+      velocityMap.set(owner, computeVelocity({ owner_agent_id: owner }));
+    }
+  } else {
+    // Clone so we don't mutate the caller's map when applying overrides.
+    velocityMap = new Map(velocityMap);
+  }
+  if (opts.velocityOverrides) {
+    for (const [owner, ratio] of Object.entries(opts.velocityOverrides)) {
+      velocityMap.set(owner, ratio);
+    }
+  }
+  const derived = deriveSchedule(snapshot, { velocityMap, today: opts.today });
+  return { derived, velocityMap };
+}
+
+/**
+ * What-if derivation: compute the schedule WITHOUT writing anything to the
+ * database. Used by:
+ *
+ *   - The PM agent ("if Sarah is out, what slips?") via the
+ *     `preview_derivation` MCP tool.
+ *   - The /api/roadmap/recompute endpoint (Phase 4 follow-up) when the
+ *     caller passes `?dry=1`.
+ *
+ * Layers `availabilityOverrides` on top of the snapshot's rows and applies
+ * `velocityOverrides` on top of the computed/passed velocity map.
+ *
+ * Returns the full `DeriveResult`, the would-be drift events, and a
+ * before-vs-after diff list for direct UI rendering.
+ */
+export function previewDerivation(
+  snapshot: RoadmapSnapshot,
+  opts: PreviewDerivationOptions = {},
+): PreviewDerivationResult {
+  // Layer availability overrides. We don't mutate the caller's snapshot;
+  // we shallow-clone the array.
+  const extraAvail: RoadmapOwnerAvailability[] = (opts.availabilityOverrides ?? []).map(
+    (a, idx) => ({
+      id: a.id ?? `__preview_${idx}`,
+      agent_id: a.agent_id,
+      unavailable_start: a.unavailable_start,
+      unavailable_end: a.unavailable_end,
+      reason: a.reason ?? null,
+    }),
+  );
+  const previewSnapshot: RoadmapSnapshot = {
+    ...snapshot,
+    owner_availability: [...(snapshot.owner_availability ?? []), ...extraAvail],
+  };
+
+  const { derived } = computeDerivedSchedule(previewSnapshot, {
+    today: opts.today,
+    velocityOverrides: opts.velocityOverrides,
+  });
+
+  const drifts = detectDrift(previewSnapshot, derived);
+
+  const diffs: PreviewDerivationResult['diffs'] = [];
+  for (const i of snapshot.initiatives) {
+    const range = derived.schedule.get(i.id);
+    if (!range) continue;
+    if (range.derived_start !== i.derived_start || range.derived_end !== i.derived_end) {
+      diffs.push({
+        initiative_id: i.id,
+        title: i.title,
+        before: { derived_start: i.derived_start, derived_end: i.derived_end },
+        after: { derived_start: range.derived_start, derived_end: range.derived_end },
+      });
+    }
+  }
+
+  return { derived, drifts, diffs };
 }

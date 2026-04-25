@@ -851,6 +851,9 @@ export interface AgentChatMessage {
   content: string;
   status: AgentChatMessageStatus;
   session_key?: string;
+  /** JSON-encoded metadata. PM responses use { proposal_id } so the chat UI
+   *  renders a proposal card. */
+  metadata?: string;
   created_at: string;
 }
 

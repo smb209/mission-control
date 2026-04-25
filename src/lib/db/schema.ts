@@ -723,6 +723,7 @@ CREATE TABLE IF NOT EXISTS agent_chat_messages (
   content TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered')),
   session_key TEXT,
+  metadata TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
