@@ -12,7 +12,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronLeft, ListTodo, Activity, Settings as SettingsIcon, ExternalLink, BarChart3 } from 'lucide-react';
+import { ChevronLeft, ListTodo, Activity } from 'lucide-react';
 import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
 import { ReadyDeliverablesPanel } from '@/components/ReadyDeliverablesPanel';
@@ -22,11 +22,11 @@ import { debug } from '@/lib/debug';
 import { useSetCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Task, Workspace } from '@/lib/types';
 
-// 'agents' is intentionally NOT in this union: agents have their own
-// /agents page now, so we no longer mirror them on the workspace
-// surface (used to be a leftover from the pre-/agents responsive
-// layout that ate horizontal real estate even when shrunk).
-type MobileTab = 'queue' | 'feed' | 'settings';
+// Workspace mobile tabs only cover what's genuinely workspace-scoped:
+// the queue and live feed. Agents have their own /agents page; settings
+// is reachable from the global left nav at every size — duplicating
+// either here just clutters the workspace surface.
+type MobileTab = 'queue' | 'feed';
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -251,34 +251,16 @@ export default function WorkspacePage() {
                 <LiveFeed mobileMode isPortrait />
               </div>
             )}
-            {mobileTab === 'settings' && <MobileSettingsPanel workspace={workspace} />}
           </>
         ) : (
+          // Landscape: queue on the left, live feed on the right. No
+          // tab strip — Feed is the only side panel left now that
+          // Agents has its own page and Settings lives in the global
+          // left nav.
           <div className="h-full p-3 grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-3">
             <MissionQueue workspaceId={workspace.id} mobileMode isPortrait={false} />
-            <div className="min-w-0 h-full flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setMobileTab('feed')}
-                  className={`min-h-11 rounded-lg text-xs ${mobileTab === 'feed' ? 'bg-mc-accent text-mc-bg font-medium' : 'bg-mc-bg-secondary border border-mc-border text-mc-text-secondary'}`}
-                >
-                  Feed
-                </button>
-                <button
-                  onClick={() => setMobileTab('settings')}
-                  className={`min-h-11 rounded-lg text-xs ${mobileTab === 'settings' ? 'bg-mc-accent text-mc-bg font-medium' : 'bg-mc-bg-secondary border border-mc-border text-mc-text-secondary'}`}
-                >
-                  Settings
-                </button>
-              </div>
-
-              <div className="min-h-0 flex-1">
-                {mobileTab === 'settings' ? (
-                  <MobileSettingsPanel workspace={workspace} denseLandscape />
-                ) : (
-                  <LiveFeed mobileMode isPortrait={false} />
-                )}
-              </div>
+            <div className="min-w-0 h-full">
+              <LiveFeed mobileMode isPortrait={false} />
             </div>
           </div>
         )}
@@ -286,10 +268,9 @@ export default function WorkspacePage() {
 
       {showMobileBottomTabs && (
         <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-30 border-t border-mc-border bg-mc-bg-secondary pb-[env(safe-area-inset-bottom)]">
-          <div className="grid grid-cols-3 gap-1 p-2">
+          <div className="grid grid-cols-2 gap-1 p-2">
             <MobileTabButton label="Queue" active={mobileTab === 'queue'} icon={<ListTodo className="w-5 h-5" />} onClick={() => setMobileTab('queue')} />
             <MobileTabButton label="Feed" active={mobileTab === 'feed'} icon={<Activity className="w-5 h-5" />} onClick={() => setMobileTab('feed')} />
-            <MobileTabButton label="Settings" active={mobileTab === 'settings'} icon={<SettingsIcon className="w-5 h-5" />} onClick={() => setMobileTab('settings')} />
           </div>
         </nav>
       )}
@@ -313,42 +294,3 @@ function MobileTabButton({ label, active, icon, onClick }: { label: string; acti
   );
 }
 
-function MobileSettingsPanel({ workspace, denseLandscape = false }: { workspace: Workspace; denseLandscape?: boolean }) {
-  return (
-    <div className={`h-full overflow-y-auto ${denseLandscape ? 'p-0 pb-[env(safe-area-inset-bottom)]' : 'p-3 pb-[calc(1rem+env(safe-area-inset-bottom))]'}`}>
-      <div className="space-y-3">
-        <div className="bg-mc-bg-secondary border border-mc-border rounded-lg p-4">
-          <div className="text-sm text-mc-text-secondary mb-2">Current workspace</div>
-          <div className="flex items-center gap-2 text-base font-medium">
-            <span>{workspace.icon}</span>
-            <span>{workspace.name}</span>
-          </div>
-          <div className="text-xs text-mc-text-secondary mt-1">/{workspace.slug}</div>
-        </div>
-
-
-        <Link href={`/workspace/${workspace.slug}/activity`} className="w-full min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg-secondary flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" />
-            Agent Activity Dashboard
-          </span>
-          <ExternalLink className="w-4 h-4 text-mc-text-secondary" />
-        </Link>
-        <Link href="/settings" className="w-full min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg-secondary flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2">
-            <SettingsIcon className="w-4 h-4" />
-            Open Mission Control Settings
-          </span>
-          <ExternalLink className="w-4 h-4 text-mc-text-secondary" />
-        </Link>
-        <Link href="/settings/workspaces" className="w-full min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg-secondary flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2">
-            <SettingsIcon className="w-4 h-4" />
-            Manage Workspaces
-          </span>
-          <ExternalLink className="w-4 h-4 text-mc-text-secondary" />
-        </Link>
-      </div>
-    </div>
-  );
-}
