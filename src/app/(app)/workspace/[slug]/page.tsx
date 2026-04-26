@@ -12,8 +12,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronLeft, ListTodo, Users, Activity, Settings as SettingsIcon, ExternalLink, BarChart3 } from 'lucide-react';
-import { AgentsSidebar } from '@/components/AgentsSidebar';
+import { ChevronLeft, ListTodo, Activity, Settings as SettingsIcon, ExternalLink, BarChart3 } from 'lucide-react';
 import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
 import { ReadyDeliverablesPanel } from '@/components/ReadyDeliverablesPanel';
@@ -23,7 +22,11 @@ import { debug } from '@/lib/debug';
 import { useSetCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Task, Workspace } from '@/lib/types';
 
-type MobileTab = 'queue' | 'agents' | 'feed' | 'settings';
+// 'agents' is intentionally NOT in this union: agents have their own
+// /agents page now, so we no longer mirror them on the workspace
+// surface (used to be a leftover from the pre-/agents responsive
+// layout that ate horizontal real estate even when shrunk).
+type MobileTab = 'queue' | 'feed' | 'settings';
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -82,8 +85,11 @@ export default function WorkspacePage() {
   }, [slug, setIsLoading, setCurrentWorkspaceId]);
 
   useEffect(() => {
+    // In landscape mode the queue gets a side-panel — default that
+    // panel to the live feed (used to default to the agents tab back
+    // when agents were rendered here).
     if (!isPortrait && mobileTab === 'queue') {
-      setMobileTab('agents');
+      setMobileTab('feed');
     }
   }, [isPortrait, mobileTab]);
 
@@ -223,10 +229,10 @@ export default function WorkspacePage() {
     <div className="h-full flex flex-col bg-mc-bg overflow-hidden">
       <div className="hidden lg:flex flex-1 overflow-hidden">
         {/*
-          Agent roster moved to its own /agents page so the task board
-          isn't sharing horizontal real estate with status pills. Mobile
-          tabs below still expose AgentsSidebar — the compact list earns
-          its place on space-constrained screens.
+          Agent roster lives on its own /agents page now — the
+          workspace shows just queue + live feed regardless of
+          viewport size. Removes the artifact where shrinking the
+          window made an agents panel pop in over the right side.
         */}
         <MissionQueue workspaceId={workspace.id} />
         <LiveFeed topSlot={<ReadyDeliverablesPanel workspaceId={workspace.id} />} />
@@ -240,11 +246,6 @@ export default function WorkspacePage() {
         {isPortrait ? (
           <>
             {mobileTab === 'queue' && <MissionQueue workspaceId={workspace.id} mobileMode isPortrait />}
-            {mobileTab === 'agents' && (
-              <div className="h-full p-3 overflow-y-auto">
-                <AgentsSidebar workspaceId={workspace.id} mobileMode isPortrait />
-              </div>
-            )}
             {mobileTab === 'feed' && (
               <div className="h-full p-3 overflow-y-auto">
                 <LiveFeed mobileMode isPortrait />
@@ -256,13 +257,7 @@ export default function WorkspacePage() {
           <div className="h-full p-3 grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-3">
             <MissionQueue workspaceId={workspace.id} mobileMode isPortrait={false} />
             <div className="min-w-0 h-full flex flex-col gap-3">
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  onClick={() => setMobileTab('agents')}
-                  className={`min-h-11 rounded-lg text-xs ${mobileTab === 'agents' ? 'bg-mc-accent text-mc-bg font-medium' : 'bg-mc-bg-secondary border border-mc-border text-mc-text-secondary'}`}
-                >
-                  Agents
-                </button>
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setMobileTab('feed')}
                   className={`min-h-11 rounded-lg text-xs ${mobileTab === 'feed' ? 'bg-mc-accent text-mc-bg font-medium' : 'bg-mc-bg-secondary border border-mc-border text-mc-text-secondary'}`}
@@ -280,8 +275,6 @@ export default function WorkspacePage() {
               <div className="min-h-0 flex-1">
                 {mobileTab === 'settings' ? (
                   <MobileSettingsPanel workspace={workspace} denseLandscape />
-                ) : mobileTab === 'agents' ? (
-                  <AgentsSidebar workspaceId={workspace.id} mobileMode isPortrait={false} />
                 ) : (
                   <LiveFeed mobileMode isPortrait={false} />
                 )}
@@ -293,9 +286,8 @@ export default function WorkspacePage() {
 
       {showMobileBottomTabs && (
         <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-30 border-t border-mc-border bg-mc-bg-secondary pb-[env(safe-area-inset-bottom)]">
-          <div className="grid grid-cols-4 gap-1 p-2">
+          <div className="grid grid-cols-3 gap-1 p-2">
             <MobileTabButton label="Queue" active={mobileTab === 'queue'} icon={<ListTodo className="w-5 h-5" />} onClick={() => setMobileTab('queue')} />
-            <MobileTabButton label="Agents" active={mobileTab === 'agents'} icon={<Users className="w-5 h-5" />} onClick={() => setMobileTab('agents')} />
             <MobileTabButton label="Feed" active={mobileTab === 'feed'} icon={<Activity className="w-5 h-5" />} onClick={() => setMobileTab('feed')} />
             <MobileTabButton label="Settings" active={mobileTab === 'settings'} icon={<SettingsIcon className="w-5 h-5" />} onClick={() => setMobileTab('settings')} />
           </div>
