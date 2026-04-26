@@ -27,10 +27,10 @@ import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
 // surface stabilises).
-type Kind = 'theme' | 'milestone' | 'epic' | 'story';
-type Status = 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
+export type Kind = 'theme' | 'milestone' | 'epic' | 'story';
+export type Status = 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
 
-interface Initiative {
+export interface Initiative {
   id: string;
   workspace_id: string;
   parent_initiative_id: string | null;
@@ -726,7 +726,7 @@ function ModalShell({
   );
 }
 
-function CreateModal({
+export function CreateModal({
   parentId,
   allInitiatives,
   onClose,
@@ -840,7 +840,7 @@ type Complexity = 'S' | 'M' | 'L' | 'XL';
  * stays reachable when the form scrolls. All save semantics are preserved
  * from the previous modal.
  */
-function EditDrawer({
+export function EditDrawer({
   initiative,
   onClose,
   onSaved,
@@ -1198,7 +1198,7 @@ function FormSection({ heading, children }: { heading: string; children: React.R
   );
 }
 
-function MoveModal({
+export function MoveModal({
   initiative,
   allInitiatives,
   onClose,
@@ -1283,7 +1283,7 @@ function MoveModal({
   );
 }
 
-function ConvertModal({
+export function ConvertModal({
   initiative,
   onClose,
   onSaved,
@@ -1445,7 +1445,7 @@ function PromoteModal({
  * Standalone "Add dependency" modal — fired from the action menu, since the
  * inline DetailsPanel only appears when the row is expanded.
  */
-function AddDependencyModal({
+export function AddDependencyModal({
   initiative,
   allInitiatives,
   onClose,
@@ -1525,7 +1525,7 @@ function AddDependencyModal({
  * Read-only history drawer launched from the action menu. Reuses the
  * Drawer shell so it matches the edit affordance shape.
  */
-function HistoryDrawer({
+export function HistoryDrawer({
   initiative,
   allInitiatives,
   onClose,

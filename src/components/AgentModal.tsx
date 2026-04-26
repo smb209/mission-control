@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Save, Trash2, Lock } from 'lucide-react';
+import { X, Save, Trash2, Lock, RotateCcw } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Agent, AgentStatus } from '@/lib/types';
 import { AgentActivityTab } from '@/components/AgentActivityTab';
@@ -26,6 +26,9 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [modelsLoading, setModelsLoading] = useState(true);
+  const [isResetting, setIsResetting] = useState(false);
+  // Inline feedback after a reset attempt — null clears the strip.
+  const [resetMsg, setResetMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const [form, setForm] = useState({
     name: agent?.name || '',
@@ -151,6 +154,48 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
       }
     } catch (error) {
       console.error('Failed to delete agent:', error);
+    }
+  };
+
+  // Reset just this agent's session — the per-agent equivalent of the
+  // sidebar's "Reset all sessions". Hits POST /api/agents/[id]/reset which
+  // clears MC-side session rows and sends `/reset` to the gateway.
+  const handleReset = async () => {
+    if (!agent) return;
+    if (!confirm(`Reset ${agent.name}'s session? The agent will re-init its persona files on the next message.`)) {
+      return;
+    }
+    setIsResetting(true);
+    setResetMsg(null);
+    try {
+      const res = await fetch(`/api/agents/${agent.id}/reset`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.sent) {
+        setResetMsg({
+          kind: 'ok',
+          text: `Reset sent — gateway re-init in flight (cleared ${body.deleted ?? 0} session row(s)).`,
+        });
+      } else if (res.ok && !body.sent) {
+        // Phase 1 succeeded but gateway send didn't land (offline, no
+        // session, etc.). Surface it so the operator knows MC-side is
+        // clean but they may need to type `/reset` in the chat manually.
+        setResetMsg({
+          kind: 'err',
+          text: `MC-side cleared (${body.deleted ?? 0} row(s)) but gateway didn't ack: ${body.error ?? body.gateway_error ?? 'send failed'}.`,
+        });
+      } else {
+        setResetMsg({
+          kind: 'err',
+          text: body.error ?? `Reset failed (${res.status})`,
+        });
+      }
+    } catch (e) {
+      setResetMsg({
+        kind: 'err',
+        text: e instanceof Error ? e.message : 'Reset failed',
+      });
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -368,6 +413,47 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                   &quot;agent:&lt;gateway_agent_id&gt;:&quot; (or &quot;agent:&lt;name&gt;:&quot; for local agents).
                 </p>
               </div>
+
+              {/*
+                Per-agent session reset. Mirrors the sidebar's "Reset all
+                sessions" action but scoped to this one agent — clears the
+                agent's openclaw_sessions rows and sends `/reset` to the
+                gateway so the agent re-init's its persona files. Gated on
+                an existing agent with a gateway_agent_id, since the route
+                400s for local-only agents.
+              */}
+              {agent?.id && agent.gateway_agent_id && (
+                <div className="pt-2 border-t border-mc-border">
+                  <label className="block text-sm font-medium mb-1">Session</label>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    disabled={isResetting}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-sm border border-mc-border text-sm hover:bg-mc-bg disabled:opacity-50"
+                  >
+                    <RotateCcw className={`w-4 h-4 ${isResetting ? 'animate-spin' : ''}`} />
+                    {isResetting ? 'Resetting…' : 'Reset session'}
+                  </button>
+                  <p className="text-xs text-mc-text-secondary mt-1">
+                    Clears MC-side session rows for this agent and sends
+                    <code className="mx-1 px-1 rounded bg-mc-bg">/reset</code>
+                    to the gateway. The agent re-init&rsquo;s its persona files
+                    (SOUL.md / AGENTS.md / USER.md) on its next message.
+                  </p>
+                  {resetMsg && (
+                    <p
+                      className={`mt-2 text-xs px-2 py-1.5 rounded border ${
+                        resetMsg.kind === 'ok'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                          : 'bg-red-500/10 border-red-500/30 text-red-300'
+                      }`}
+                      role="status"
+                    >
+                      {resetMsg.text}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

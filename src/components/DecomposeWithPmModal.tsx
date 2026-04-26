@@ -223,7 +223,7 @@ export default function DecomposeWithPmModal({
       aria-label="Decompose initiative with PM"
     >
       <div
-        className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col text-mc-text"
+        className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-5xl h-[88vh] flex flex-col text-mc-text"
         onClick={e => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-5 py-3 border-b border-mc-border">
@@ -241,7 +241,14 @@ export default function DecomposeWithPmModal({
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        {/*
+          Body is a flex column with min-h-0 so the children list (the only
+          flex-1 region inside) can scroll independently. Without min-h-0 a
+          flex child's intrinsic height wins and the inner overflow-y-auto
+          collapses. Impact summary gets its own capped height so a long
+          blurb can't push the children list out of view.
+        */}
+        <div className="flex-1 min-h-0 flex flex-col px-5 py-4 gap-4">
           {err && (
             <div className="p-3 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
               {err}
@@ -255,13 +262,13 @@ export default function DecomposeWithPmModal({
           ) : (
             <>
               {displayMd && (
-                <div className="text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
+                <div className="shrink-0 max-h-32 overflow-y-auto text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
                   {displayMd}
                 </div>
               )}
 
-              <div>
-                <div className="flex items-center gap-2 mb-2">
+              <div className="flex-1 min-h-0 flex flex-col">
+                <div className="shrink-0 flex items-center gap-2 mb-2">
                   <h3 className="text-sm font-medium text-mc-text">
                     Proposed children ({children.length})
                   </h3>
@@ -276,7 +283,7 @@ export default function DecomposeWithPmModal({
                 {children.length === 0 ? (
                   <p className="text-sm text-mc-text-secondary">No children proposed. Add one manually above or refine below.</p>
                 ) : (
-                  <ul className="space-y-2">
+                  <ul className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
                     {children.map((c, i) => (
                       <li
                         key={i}
@@ -341,7 +348,7 @@ export default function DecomposeWithPmModal({
                           value={c.description ?? ''}
                           onChange={e => updateChild(i, { description: e.target.value })}
                           placeholder="Description (optional)"
-                          className="w-full px-2 py-1 rounded bg-mc-bg-secondary border border-mc-border text-xs h-12"
+                          className="w-full px-2 py-1.5 rounded bg-mc-bg-secondary border border-mc-border text-xs min-h-[80px] resize-y leading-relaxed"
                           aria-label={`Description for child ${i + 1}`}
                         />
                       </li>
@@ -350,7 +357,7 @@ export default function DecomposeWithPmModal({
                 )}
               </div>
 
-              <div className="space-y-2">
+              <div className="shrink-0 space-y-2">
                 <label className="block">
                   <span className="text-xs text-mc-text-secondary">
                     Refine (e.g., &ldquo;skip the marketing step&rdquo;, &ldquo;add a security review child&rdquo;)

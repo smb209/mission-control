@@ -1,9 +1,34 @@
 'use client';
 
 import { useState, useEffect, useCallback, use } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, ChevronRight, Plus, Send, History, Link2, Sparkles } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronRight,
+  Plus,
+  Send,
+  History,
+  Link2,
+  Sparkles,
+  Pencil,
+  MoveRight,
+  Shuffle,
+  CornerUpLeft,
+  Trash2,
+} from 'lucide-react';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
+// Reuse the modal components defined alongside the list page so the detail
+// page exposes the same action surface — but as visible buttons rather than
+// behind a dropdown, since the operator already drilled into one initiative.
+import {
+  EditDrawer,
+  MoveModal,
+  ConvertModal,
+  AddDependencyModal,
+  HistoryDrawer,
+  type Initiative as ListInitiative,
+} from '../page';
 
 type Kind = 'theme' | 'milestone' | 'epic' | 'story';
 type Status = 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
@@ -27,6 +52,9 @@ interface Initiative {
   committed_end: string | null;
   status_check_md: string | null;
   source_idea_id: string | null;
+  // Required by the list-page Initiative shape that the shared modals
+  // (Move/Convert/AddDependency) consume; the API returns it on every row.
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }
@@ -101,6 +129,7 @@ export default function InitiativeDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const router = useRouter();
   const [initiative, setInitiative] = useState<InitiativeWithRelations | null>(null);
   const [allInitiatives, setAllInitiatives] = useState<Initiative[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -110,6 +139,11 @@ export default function InitiativeDetailPage({
   const [actionError, setActionError] = useState<string | null>(null);
   const [showPromoteModal, setShowPromoteModal] = useState(false);
   const [showDecomposeModal, setShowDecomposeModal] = useState(false);
+  const [showEditDrawer, setShowEditDrawer] = useState(false);
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [showAddDepModal, setShowAddDepModal] = useState(false);
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -146,6 +180,45 @@ export default function InitiativeDetailPage({
     },
     [allInitiatives],
   );
+
+  // Detach (move to no parent). Mirrors the action on the list page so the
+  // detail page can break a parent link without a round-trip via Move.
+  const detach = useCallback(async () => {
+    if (!initiative) return;
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiative.id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to_parent_id: null, reason: 'detach' }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Detach failed (${res.status})`);
+      }
+      refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Detach failed');
+    }
+  }, [initiative, refresh]);
+
+  // Delete with confirm. On success, route back to the list — the detail
+  // page no longer has a row to render.
+  const deleteInitiative = useCallback(async () => {
+    if (!initiative) return;
+    if (!confirm(`Delete "${initiative.title}"? This cannot be undone.`)) return;
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiative.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      router.push('/initiatives');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  }, [initiative, router]);
 
   const promoteDraft = async (taskId: string) => {
     setActionError(null);
@@ -240,6 +313,49 @@ export default function InitiativeDetailPage({
                   <Sparkles className="w-4 h-4" /> Decompose with PM
                 </button>
               )}
+            </div>
+          </div>
+
+          {/*
+            Secondary action toolbar — surfaces every action that lives in
+            the ⋮ overflow menu on the list page, but as visible buttons
+            since this is a dedicated detail page and the operator already
+            committed to one initiative. Destructive actions (Detach,
+            Delete) sit at the right with a divider and tinted styling.
+          */}
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
+            <ToolbarButton icon={<Pencil className="w-3.5 h-3.5" />} onClick={() => setShowEditDrawer(true)}>
+              Edit
+            </ToolbarButton>
+            <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
+              Move
+            </ToolbarButton>
+            <ToolbarButton icon={<Shuffle className="w-3.5 h-3.5" />} onClick={() => setShowConvertModal(true)}>
+              Convert kind
+            </ToolbarButton>
+            <ToolbarButton icon={<Link2 className="w-3.5 h-3.5" />} onClick={() => setShowAddDepModal(true)}>
+              Add dependency
+            </ToolbarButton>
+            <ToolbarButton icon={<History className="w-3.5 h-3.5" />} onClick={() => setShowHistoryDrawer(true)}>
+              View history
+            </ToolbarButton>
+            <div className="ml-auto flex items-center gap-2">
+              {initiative.parent_initiative_id && (
+                <ToolbarButton
+                  icon={<CornerUpLeft className="w-3.5 h-3.5" />}
+                  onClick={detach}
+                  title="Move to no parent"
+                >
+                  Detach
+                </ToolbarButton>
+              )}
+              <ToolbarButton
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+                onClick={deleteInitiative}
+                destructive
+              >
+                Delete
+              </ToolbarButton>
             </div>
           </div>
 
@@ -404,7 +520,82 @@ export default function InitiativeDetailPage({
           }}
         />
       )}
+      <EditDrawer
+        initiative={showEditDrawer ? (initiative as ListInitiative) : null}
+        onClose={() => setShowEditDrawer(false)}
+        onSaved={() => {
+          setShowEditDrawer(false);
+          refresh();
+        }}
+      />
+      {showMoveModal && (
+        <MoveModal
+          initiative={initiative as ListInitiative}
+          allInitiatives={allInitiatives as ListInitiative[]}
+          onClose={() => setShowMoveModal(false)}
+          onSaved={() => {
+            setShowMoveModal(false);
+            refresh();
+          }}
+        />
+      )}
+      {showConvertModal && (
+        <ConvertModal
+          initiative={initiative as ListInitiative}
+          onClose={() => setShowConvertModal(false)}
+          onSaved={() => {
+            setShowConvertModal(false);
+            refresh();
+          }}
+        />
+      )}
+      {showAddDepModal && (
+        <AddDependencyModal
+          initiative={initiative as ListInitiative}
+          allInitiatives={allInitiatives as ListInitiative[]}
+          onClose={() => setShowAddDepModal(false)}
+          onSaved={() => {
+            setShowAddDepModal(false);
+            refresh();
+          }}
+        />
+      )}
+      {showHistoryDrawer && (
+        <HistoryDrawer
+          initiative={initiative as ListInitiative}
+          allInitiatives={allInitiatives as ListInitiative[]}
+          onClose={() => setShowHistoryDrawer(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function ToolbarButton({
+  icon,
+  onClick,
+  children,
+  destructive,
+  title,
+}: {
+  icon: React.ReactNode;
+  onClick: () => void;
+  children: React.ReactNode;
+  destructive?: boolean;
+  title?: string;
+}) {
+  const palette = destructive
+    ? 'border-red-500/30 text-red-300 hover:bg-red-500/10 hover:border-red-500/50'
+    : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40';
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border ${palette}`}
+    >
+      {icon}
+      <span>{children}</span>
+    </button>
   );
 }
 
