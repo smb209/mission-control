@@ -53,7 +53,21 @@ function refreshPrefixIndex(): void {
         const slug = r.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         if (slug) prefix = `agent:${slug}:`;
       }
-      if (prefix) entries.push({ agentId: r.id, prefix });
+      if (prefix) {
+        entries.push({ agentId: r.id, prefix });
+        // Mirror buildAgentSessionKey's collapse rule: when an explicit
+        // prefix already encodes `:main:` and the caller asks for the
+        // `main` suffix, the helper strips the trailing `:` so we don't
+        // emit `…:main:main`. The wire sessionKey is therefore one char
+        // shorter than the indexed prefix, and `startsWith` would miss
+        // it. Push the collapsed form too so the inbound/outbound ping
+        // resolver matches the same sessionKey the gateway actually saw.
+        // Without this, the PM (the only seeded agent with an explicit
+        // `:main:` prefix today) never lit up the activity dot.
+        if (/:main:$/.test(prefix)) {
+          entries.push({ agentId: r.id, prefix: prefix.slice(0, -1) });
+        }
+      }
     }
     // Sort by prefix length desc so more-specific prefixes win when they
     // happen to overlap (e.g. "agent:mc-builder-2:" vs "agent:mc-builder:").
