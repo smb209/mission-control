@@ -24,6 +24,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
 import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
@@ -74,6 +75,12 @@ export async function POST(request: NextRequest) {
     const snapshot = getRoadmapSnapshot({ workspace_id: parsed.data.workspace_id });
     const synth = synthesizePlanInitiative(snapshot, parsed.data.draft);
 
+    // Mint a session key for this planning conversation. Each new plan gets
+    // a fresh gateway session (clean context, no prior-plan bleed). Refine
+    // calls read planSessionKey back out of trigger_text and route to the
+    // same session so multi-turn refinements share context.
+    const planSessionKey = `plan-${uuidv4()}`;
+
     // Persist the suggestions inside trigger_text so refine() can
     // re-synthesize from the same draft without losing the planning
     // context. Guidance lives on trigger_text too so refine chains and
@@ -82,6 +89,7 @@ export async function POST(request: NextRequest) {
       mode: 'plan_initiative',
       draft: parsed.data.draft,
       ...(parsed.data.guidance ? { guidance: parsed.data.guidance } : {}),
+      planSessionKey,
     });
 
     // Dedupe identical requests fired in quick succession. React
@@ -130,6 +138,7 @@ export async function POST(request: NextRequest) {
       trigger_text: triggerText,
       trigger_kind: 'plan_initiative',
       target_initiative_id: parsed.data.target_initiative_id ?? null,
+      planSessionKey,
       synth: { impact_md: synth.impact_md, changes: synth.changes },
       agent_prompt:
         `Plan an initiative draft titled "${parsed.data.draft.title}". ` +

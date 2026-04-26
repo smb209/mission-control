@@ -313,6 +313,15 @@ export interface DispatchSynthesizedInput {
    * re-open instead of throwing away their refinements.
    */
   target_initiative_id?: string | null;
+  /**
+   * Gateway session suffix to use instead of the default ':main' session.
+   * Pass 'plan-<uuid>' (minted by the caller) for plan_initiative and
+   * decompose_initiative dispatches so each planning conversation starts
+   * with a clean context. Pass the same key on subsequent refine calls so
+   * multi-turn refinements share the session and the PM remembers prior
+   * turns. When omitted, falls back to ':main'.
+   */
+  planSessionKey?: string | null;
 }
 
 export async function dispatchPmSynthesized(
@@ -325,6 +334,7 @@ export async function dispatchPmSynthesized(
       try {
         const correlationId = uuidv4();
         const sinceIso = new Date().toISOString();
+        const sessionSuffix = input.planSessionKey ?? 'main';
         const result = await sendChatAndAwaitReply({
           agent: pm,
           message:
@@ -332,6 +342,7 @@ export async function dispatchPmSynthesized(
             input.agent_prompt,
           idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
           timeoutMs: namedAgentTimeoutMs(),
+          sessionSuffix,
         });
         if (result.sent) {
           // Whether we got a `final` frame or hit the timeout, the agent
