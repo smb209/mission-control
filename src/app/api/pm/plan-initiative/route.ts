@@ -28,6 +28,8 @@ import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
+import { parseSuggestionsFromImpactMd } from '@/lib/pm/applyPlanInitiativeProposal';
+import { run } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -88,7 +90,25 @@ export async function POST(request: NextRequest) {
         `includes a "<!--pm-plan-suggestions ...-->" sidecar so the form can apply your ` +
         `suggestions. proposed_changes should be [] (advisory). See your SOUL.md.`,
     });
-    const proposal = dispatch.proposal;
+    let proposal = dispatch.proposal;
+
+    // Always-embed-the-sidecar guarantee: when the PM agent answered via
+    // the gateway, its impact_md is freeform — LLMs are unreliable about
+    // including arbitrary HTML-comment JSON sidecars even when SOUL.md
+    // tells them to. Without the sidecar, the chat-card Apply flow has
+    // no structured suggestions to apply. We always have synth.suggestions
+    // here, so inject it post-hoc when missing and persist the patched
+    // impact_md to the same row. The synth path naturally already
+    // includes it, so this is a no-op there.
+    if (!parseSuggestionsFromImpactMd(proposal.impact_md)) {
+      const sidecar = `\n\n<!--pm-plan-suggestions ${JSON.stringify(synth.suggestions)} -->`;
+      const patchedMd = proposal.impact_md + sidecar;
+      run(
+        'UPDATE pm_proposals SET impact_md = ? WHERE id = ?',
+        [patchedMd, proposal.id],
+      );
+      proposal = { ...proposal, impact_md: patchedMd };
+    }
 
     // Best-effort chat echo for audit visibility in /pm. Use the
     // PROPOSAL's impact_md — when the named PM agent answered, that's
