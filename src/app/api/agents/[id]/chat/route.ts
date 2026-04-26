@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import { sendChatToAgent, buildAgentSessionKey } from '@/lib/openclaw/send-chat';
 import { attachChatListener, expectAgentReply } from '@/lib/chat-listener';
 import { broadcast } from '@/lib/events';
 import type { Agent, AgentChatMessage } from '@/lib/types';
@@ -25,8 +25,7 @@ interface RouteParams {
  * misattribute these rows to a task that doesn't exist.
  */
 function agentChatSessionKey(agent: Pick<Agent, 'session_key_prefix' | 'gateway_agent_id' | 'name' | 'id'>): string {
-  const prefix = resolveAgentSessionKeyPrefix(agent);
-  return `${prefix}chat-${agent.id.slice(0, 8)}`;
+  return buildAgentSessionKey(agent, `chat-${agent.id.slice(0, 8)}`);
 }
 
 // GET /api/agents/[id]/chat — history, oldest first
@@ -75,21 +74,32 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     try {
       const client = getOpenClawClient();
       if (client.isConnected()) {
-        const sendPromise = client.call('chat.send', {
-          sessionKey,
+        // Use the shared helper but enforce the same 5s budget by
+        // racing against a timeout — sendChatToAgent doesn't expose
+        // its own timeout (its only failure modes are no_session /
+        // send_failed). The race preserves the previous "if the
+        // gateway is mid-turn we still register the user message"
+        // semantics.
+        const sendPromise = sendChatToAgent({
+          agent,
           message: message.trim(),
           idempotencyKey: `agent-chat-${messageId}`,
+          sessionSuffix: `chat-${agent.id.slice(0, 8)}`,
         });
-        const timeout = new Promise((_, reject) =>
+        const timeout = new Promise<{ sent: false; reason: 'send_failed'; sessionKey: string; error: Error }>((_, reject) =>
           setTimeout(() => reject(new Error('timeout')), 5000)
         );
-        await Promise.race([sendPromise, timeout]);
-        delivered = true;
-        run(
-          `UPDATE agent_chat_messages SET status = 'delivered' WHERE id = ?`,
-          [messageId]
-        );
-        expectAgentReply(sessionKey, agentId);
+        const result = await Promise.race([sendPromise, timeout]);
+        if (result.sent) {
+          delivered = true;
+          run(
+            `UPDATE agent_chat_messages SET status = 'delivered' WHERE id = ?`,
+            [messageId]
+          );
+          expectAgentReply(sessionKey, agentId);
+        } else if (result.error) {
+          throw result.error;
+        }
       }
     } catch (err) {
       console.warn(`[AgentChat] chat.send failed for ${sessionKey}:`, err);

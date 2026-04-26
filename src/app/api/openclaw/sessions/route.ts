@@ -3,7 +3,7 @@ import { getOpenClawClient } from '@/lib/openclaw/client';
 import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { logDebugEvent } from '@/lib/debug-log';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import { sendChatToAgent } from '@/lib/openclaw/send-chat';
 import { emitAutopilotActivity } from '@/lib/autopilot/activity';
 import type { Agent, OpenClawSession, ResearchCycle, IdeationCycle } from '@/lib/types';
 
@@ -242,22 +242,21 @@ export async function DELETE() {
       }
 
       for (const agent of gatewayAgents) {
-        const prefix = resolveAgentSessionKeyPrefix(agent);
-        const sessionKey = `${prefix}main`;
-        try {
-          await client.call('chat.send', {
-            sessionKey,
-            message: '/reset',
-            idempotencyKey: `reset-${agent.id}-${Date.now()}`,
-          });
-          agentsReset.push({ agent_id: agent.id, name: agent.name, sessionKey, ok: true });
-        } catch (err) {
+        const result = await sendChatToAgent({
+          agent,
+          message: '/reset',
+          idempotencyKey: `reset-${agent.id}-${Date.now()}`,
+          // sessionSuffix defaults to 'main'.
+        });
+        if (result.sent) {
+          agentsReset.push({ agent_id: agent.id, name: agent.name, sessionKey: result.sessionKey, ok: true });
+        } else {
           agentsReset.push({
             agent_id: agent.id,
             name: agent.name,
-            sessionKey,
+            sessionKey: result.sessionKey,
             ok: false,
-            error: (err as Error).message,
+            error: result.error?.message ?? result.reason ?? 'send failed',
           });
         }
       }

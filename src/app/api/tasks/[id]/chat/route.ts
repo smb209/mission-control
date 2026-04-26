@@ -66,6 +66,12 @@ export async function POST(
       try {
         const client = getOpenClawClient();
         if (client.isConnected()) {
+          // TODO(comms-cleanup): migrate to `sendChatToAgent`. Held back
+          // because `getActiveSessionForTask` returns a pre-built
+          // `sessionKey` rather than an Agent row; either teach it to
+          // surface the agent identity, or extend the helper to accept
+          // a raw sessionKey override before migrating.
+          //
           // Try chat.send with a 5s timeout — if agent is mid-turn, this works quickly
           const sendPromise = client.call('chat.send', {
             sessionKey: sessionInfo.sessionKey,

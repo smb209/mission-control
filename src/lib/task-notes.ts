@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import { sendChatToAgent } from '@/lib/openclaw/send-chat';
 import type { TaskNote, OpenClawSession, Agent } from '@/lib/types';
 
 /**
@@ -97,20 +97,34 @@ export async function deliverPendingNotesAtCheckpoint(taskId: string): Promise<n
     const client = getOpenClawClient();
     if (!client.isConnected()) await client.connect();
 
-    // Get the agent's session key prefix
+    // Get the agent's session key prefix via the shared helper.
     const agent = queryOne<Agent>('SELECT * FROM agents WHERE id = ?', [activeSession.agent_id]);
-    const prefix = agent ? resolveAgentSessionKeyPrefix(agent) : 'agent:main:';
-    const sessionKey = `${prefix}${activeSession.openclaw_session_id}`;
+    if (!agent) {
+      // Without an agent row we have no canonical prefix; preserve the
+      // old "agent:main:" fallback by synthesising a minimal stub.
+      console.warn(`[TaskNotes] No agent row for session ${activeSession.id}, falling back to default prefix`);
+    }
+    const targetAgent = agent ?? {
+      id: activeSession.agent_id,
+      name: 'main',
+      session_key_prefix: undefined,
+      gateway_agent_id: undefined,
+    };
 
     // Build the message
     const lines = notes.map(n => `- ${n.content}`);
     const message = `📌 **OPERATOR NOTES:**\n${lines.join('\n')}\n\nPlease incorporate these into your current work.`;
 
-    await client.call('chat.send', {
-      sessionKey,
+    const result = await sendChatToAgent({
+      agent: targetAgent,
       message,
-      idempotencyKey: `notes-${taskId}-${Date.now()}`
+      idempotencyKey: `notes-${taskId}-${Date.now()}`,
+      sessionSuffix: activeSession.openclaw_session_id,
     });
+    if (!result.sent) {
+      console.error(`[TaskNotes] Failed to deliver notes for task ${taskId}:`, result.error?.message ?? result.reason);
+      return 0;
+    }
 
     markNotesDelivered(notes.map(n => n.id));
     return notes.length;

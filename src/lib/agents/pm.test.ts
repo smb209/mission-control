@@ -21,7 +21,75 @@ import {
   __setOpenClawClientForTests,
   __setNamedAgentTimeoutForTests,
 } from './pm-dispatch';
+import type { ChatEvent, SendChatClient } from '@/lib/openclaw/send-chat';
 import { createProposal } from '@/lib/db/pm-proposals';
+
+/**
+ * Build a SendChatClient stub that satisfies both `client.call('chat.send')`
+ * and the chat_event subscription surface used by the new
+ * `sendChatAndAwaitReply` primitive (PR #N follow-up).
+ *
+ * Pass `onChatSend` to react to outbound sends (e.g. simulate the agent
+ * calling propose_changes via MCP). The stub auto-emits a synthetic
+ * `state: 'final'` chat_event after each send unless you set
+ * `emitFinal: false` (used to test the timeout path).
+ */
+function makeFakeClient(opts: {
+  isConnected?: boolean;
+  emitFinal?: boolean;
+  emitDelayMs?: number;
+  onChatSend?: (params: Record<string, unknown> | undefined) => void | Promise<void>;
+  callOverride?: (
+    method: string,
+    params?: Record<string, unknown>,
+  ) => Promise<unknown>;
+}): {
+  client: SendChatClient;
+  seenSends: Array<{ method: string; params: unknown }>;
+} {
+  const seenSends: Array<{ method: string; params: unknown }> = [];
+  const listeners = new Set<(payload: ChatEvent) => void>();
+  const isConnected = opts.isConnected ?? true;
+  const emitFinal = opts.emitFinal ?? true;
+  const emitDelayMs = opts.emitDelayMs ?? 0;
+  const client: SendChatClient = {
+    isConnected: () => isConnected,
+    call: async (method: string, params?: Record<string, unknown>) => {
+      seenSends.push({ method, params });
+      if (opts.callOverride) {
+        return opts.callOverride(method, params);
+      }
+      if (method === 'chat.send') {
+        await opts.onChatSend?.(params);
+        if (emitFinal) {
+          const sessionKey = (params as { sessionKey?: string } | undefined)
+            ?.sessionKey;
+          const fire = () => {
+            for (const l of listeners) {
+              try {
+                l({ sessionKey, state: 'final' });
+              } catch {
+                // ignore listener errors
+              }
+            }
+          };
+          if (emitDelayMs > 0) setTimeout(fire, emitDelayMs);
+          else fire();
+        }
+      }
+      return undefined;
+    },
+    on: (event, listener) => {
+      if (event === 'chat_event') listeners.add(listener);
+      return client;
+    },
+    off: (event, listener) => {
+      if (event === 'chat_event') listeners.delete(listener);
+      return client;
+    },
+  };
+  return { client, seenSends };
+}
 import {
   ensurePmAgent,
   PM_GATEWAY_AGENT_ID,
@@ -202,26 +270,21 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
 
   // The named agent would call propose_changes via MCP. Our mock client
   // simulates that side effect: when chat.send is invoked, it inserts a
-  // pm_proposals row with rich impact_md and a structured change. The
-  // dispatch poller should pick it up and return it.
-  const seenSends: Array<{ method: string; params: unknown }> = [];
-  const fakeClient = {
-    isConnected: () => true,
-    call: async (method: string, params?: Record<string, unknown>) => {
-      seenSends.push({ method, params });
-      if (method === 'chat.send') {
-        // Simulate the agent calling propose_changes via MCP.
-        createProposal({
-          workspace_id: ws,
-          trigger_text: 'named-agent dispatch',
-          trigger_kind: 'manual',
-          impact_md: '### Named-agent verdict\n\n- richer than synth',
-          proposed_changes: [],
-        });
-      }
-      return undefined;
+  // pm_proposals row with rich impact_md, then auto-emits a final
+  // chat_event so `sendChatAndAwaitReply` resolves immediately. The
+  // dispatch handler then queries pm_proposals and returns the row.
+  const { client: fakeClient, seenSends } = makeFakeClient({
+    onChatSend: () => {
+      // Simulate the agent calling propose_changes via MCP.
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'named-agent dispatch',
+        trigger_kind: 'manual',
+        impact_md: '### Named-agent verdict\n\n- richer than synth',
+        proposed_changes: [],
+      });
     },
-  };
+  });
   __setOpenClawClientForTests(fakeClient);
   __setNamedAgentTimeoutForTests(2_000);
 
@@ -249,12 +312,8 @@ test('dispatchPm: falls back to synth when openclaw client is offline', async ()
   ensurePmAgent(ws);
   seedNamedAgent(ws, 'Sarah');
 
-  __setOpenClawClientForTests({
-    isConnected: () => false,
-    call: async () => {
-      throw new Error('should not be called when not connected');
-    },
-  });
+  const { client } = makeFakeClient({ isConnected: false });
+  __setOpenClawClientForTests(client);
 
   try {
     const result = await dispatchPm({
@@ -276,12 +335,12 @@ test('dispatchPm: falls back to synth when named-agent send throws', async () =>
   ensurePmAgent(ws);
   seedNamedAgent(ws, 'Sarah');
 
-  __setOpenClawClientForTests({
-    isConnected: () => true,
-    call: async () => {
+  const { client } = makeFakeClient({
+    callOverride: async () => {
       throw new Error('gateway boom');
     },
   });
+  __setOpenClawClientForTests(client);
   __setNamedAgentTimeoutForTests(500);
 
   try {
@@ -302,13 +361,9 @@ test('dispatchPm: falls back to synth when named agent times out without writing
   const ws = freshWorkspace();
   ensurePmAgent(ws);
 
-  __setOpenClawClientForTests({
-    isConnected: () => true,
-    call: async () => {
-      // No-op — agent never calls propose_changes.
-      return undefined;
-    },
-  });
+  // emitFinal: false → no chat_event arrives, await primitive will time out.
+  const { client } = makeFakeClient({ emitFinal: false });
+  __setOpenClawClientForTests(client);
   __setNamedAgentTimeoutForTests(500);
 
   try {

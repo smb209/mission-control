@@ -90,7 +90,12 @@ export async function POST(request: NextRequest) {
     });
     const proposal = dispatch.proposal;
 
-    // Best-effort chat echo for audit visibility in /pm.
+    // Best-effort chat echo for audit visibility in /pm. Use the
+    // PROPOSAL's impact_md — when the named PM agent answered, that's
+    // its (potentially richer) summary; on synth fallback the proposal
+    // carries the same synth impact_md so the result is identical.
+    // Posting `synth.impact_md` directly (the old behaviour) discarded
+    // the named agent's reasoning whenever the gateway path was used.
     try {
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,
@@ -100,7 +105,7 @@ export async function POST(request: NextRequest) {
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,
         role: 'assistant',
-        content: synth.impact_md,
+        content: proposal.impact_md,
         proposal_id: proposal.id,
       });
     } catch (err) {

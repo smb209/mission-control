@@ -90,6 +90,9 @@ export async function POST(request: NextRequest) {
     });
     const proposal = dispatch.proposal;
 
+    // Use the PROPOSAL's impact_md so the named-agent path's richer
+    // analysis isn't overwritten by synth's. On synth fallback the two
+    // are identical (proposal was created from synth.impact_md).
     try {
       postPmChatMessage({
         workspace_id: parent.workspace_id,
@@ -99,7 +102,7 @@ export async function POST(request: NextRequest) {
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'assistant',
-        content: synth.impact_md,
+        content: proposal.impact_md,
         proposal_id: proposal.id,
       });
     } catch (err) {
