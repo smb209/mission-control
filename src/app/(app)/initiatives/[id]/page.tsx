@@ -11,18 +11,25 @@ import {
   History,
   Link2,
   Sparkles,
-  Pencil,
   MoveRight,
   Shuffle,
   CornerUpLeft,
   Trash2,
 } from 'lucide-react';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
-// Reuse the modal components defined alongside the list page so the detail
-// page exposes the same action surface — but as visible buttons rather than
-// behind a dropdown, since the operator already drilled into one initiative.
+import PlanWithPmPanel, {
+  type PlanInitiativeSuggestions,
+} from '@/components/PlanWithPmPanel';
 import {
-  EditDrawer,
+  InlineText,
+  InlineTextarea,
+  InlineSelect,
+  InlineDate,
+} from '@/components/inline/InlineEdit';
+// Reuse the action modals defined alongside the list page — Move / Convert /
+// AddDep / History still make sense as focused dialogs since they have
+// non-trivial side effects beyond a simple field write.
+import {
   MoveModal,
   ConvertModal,
   AddDependencyModal,
@@ -92,6 +99,36 @@ interface DepEdges {
   incoming: DepRow[];
 }
 
+// Minimal agent shape for the owner inline-select. Mirrors the AgentLite
+// declared next to EditDrawer in ../page.tsx; kept local to avoid churning
+// that file's public exports.
+interface AgentLite {
+  id: string;
+  name: string;
+  role: string;
+  avatar_emoji: string;
+  workspace_id: string;
+}
+
+type Complexity = 'S' | 'M' | 'L' | 'XL';
+
+const STATUS_OPTIONS: { value: Status; label: string }[] = [
+  { value: 'planned', label: 'planned' },
+  { value: 'in_progress', label: 'in_progress' },
+  { value: 'at_risk', label: 'at_risk' },
+  { value: 'blocked', label: 'blocked' },
+  { value: 'done', label: 'done' },
+  { value: 'cancelled', label: 'cancelled' },
+];
+
+const COMPLEXITY_OPTIONS: { value: Complexity | ''; label: string }[] = [
+  { value: '', label: '(unset)' },
+  { value: 'S', label: 'S' },
+  { value: 'M', label: 'M' },
+  { value: 'L', label: 'L' },
+  { value: 'XL', label: 'XL' },
+];
+
 const KIND_BADGE: Record<Kind, string> = {
   theme: 'bg-purple-500/20 text-purple-300',
   milestone: 'bg-amber-500/20 text-amber-300',
@@ -137,13 +174,14 @@ export default function InitiativeDetailPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [agents, setAgents] = useState<AgentLite[]>([]);
   const [showPromoteModal, setShowPromoteModal] = useState(false);
   const [showDecomposeModal, setShowDecomposeModal] = useState(false);
-  const [showEditDrawer, setShowEditDrawer] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showAddDepModal, setShowAddDepModal] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+  const [showPlanPanel, setShowPlanPanel] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -172,6 +210,53 @@ export default function InitiativeDetailPage({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Load agents in this workspace for the owner inline-select. Mirrors the
+  // pattern used in EditDrawer.
+  useEffect(() => {
+    if (!initiative) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/agents?workspace_id=${encodeURIComponent(initiative.workspace_id)}`,
+        );
+        if (!r.ok) return;
+        const list = await r.json();
+        if (!cancelled && Array.isArray(list)) setAgents(list);
+      } catch {
+        // Non-fatal: the owner select just falls back to "Unassigned".
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initiative?.workspace_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // PATCH a partial update to this initiative and refresh on success. The
+  // route's Zod schema treats every field as optional, so callers can send
+  // exactly the slice they're editing.
+  const patch = useCallback(
+    async (body: Record<string, unknown>) => {
+      const res = await fetch(`/api/initiatives/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Update failed (${res.status})`);
+      }
+      // Optimistically merge so the field reflects the new value before the
+      // network round-trip completes; refresh() catches up everything else.
+      const next = await res.json().catch(() => null);
+      if (next) {
+        setInitiative(prev => (prev ? { ...prev, ...next } : prev));
+      }
+      refresh();
+    },
+    [id, refresh],
+  );
 
   const titleFor = useCallback(
     (initId: string | null) => {
@@ -287,19 +372,53 @@ export default function InitiativeDetailPage({
 
         <header className="mb-6 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
-                <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[initiative.kind]}`}>
+                {/*
+                  Kind badge is a click-target that opens the ConvertModal —
+                  changing kind has migration semantics (e.g. story-only
+                  promote) so it shouldn't be a flat inline select.
+                */}
+                <button
+                  onClick={() => setShowConvertModal(true)}
+                  title="Change kind (opens converter)"
+                  className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide hover:ring-1 hover:ring-mc-accent/40 ${KIND_BADGE[initiative.kind]}`}
+                >
                   {initiative.kind}
-                </span>
-                <span className="text-xs text-mc-text-secondary uppercase">{initiative.status}</span>
+                </button>
+                <InlineSelect<Status>
+                  value={initiative.status}
+                  options={STATUS_OPTIONS}
+                  onSave={next => patch({ status: next })}
+                  className="text-xs uppercase"
+                  renderDisplay={v => (
+                    <span className="text-mc-text-secondary uppercase">{v}</span>
+                  )}
+                  label="Edit status"
+                />
               </div>
-              <h1 className="text-2xl font-semibold text-mc-text">{initiative.title}</h1>
-              {initiative.description && (
-                <p className="text-mc-text-secondary mt-2 whitespace-pre-wrap">{initiative.description}</p>
-              )}
+              <InlineText
+                value={initiative.title}
+                onSave={next => patch({ title: next })}
+                className="text-2xl font-semibold text-mc-text block"
+                inputClassName="w-full px-2 py-1 rounded bg-mc-bg border border-mc-accent/60 text-mc-text outline-none text-2xl font-semibold"
+                placeholder="Untitled"
+                label="Edit title"
+              />
+              <div className="mt-2">
+                <InlineTextarea
+                  value={initiative.description ?? ''}
+                  onSave={next =>
+                    patch({ description: next.length > 0 ? next : null })
+                  }
+                  className="text-mc-text-secondary block"
+                  placeholder="Add a description…"
+                  minRows={6}
+                  label="Edit description"
+                />
+              </div>
             </div>
-            <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-col items-end gap-2 shrink-0">
               <PromoteButton
                 kind={initiative.kind}
                 onClick={() => setShowPromoteModal(true)}
@@ -317,15 +436,16 @@ export default function InitiativeDetailPage({
           </div>
 
           {/*
-            Secondary action toolbar — surfaces every action that lives in
-            the ⋮ overflow menu on the list page, but as visible buttons
-            since this is a dedicated detail page and the operator already
-            committed to one initiative. Destructive actions (Detach,
-            Delete) sit at the right with a divider and tinted styling.
+            Secondary action toolbar. The old "Edit" button is gone — every
+            field is now click-to-edit in place. We surface "Plan with PM"
+            here in its place so the PM-suggested fills stay one click away.
           */}
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
-            <ToolbarButton icon={<Pencil className="w-3.5 h-3.5" />} onClick={() => setShowEditDrawer(true)}>
-              Edit
+            <ToolbarButton
+              icon={<Sparkles className="w-3.5 h-3.5" />}
+              onClick={() => setShowPlanPanel(true)}
+            >
+              Plan with PM
             </ToolbarButton>
             <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
               Move
@@ -362,30 +482,120 @@ export default function InitiativeDetailPage({
           <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-xs text-mc-text-secondary">
             <div>
               <dt className="uppercase tracking-wide">Target start</dt>
-              <dd className="text-mc-text">{initiative.target_start ?? '—'}</dd>
+              <dd className="text-mc-text mt-0.5">
+                <InlineDate
+                  value={initiative.target_start ?? ''}
+                  onSave={next => patch({ target_start: next || null })}
+                  label="Edit target start"
+                />
+              </dd>
             </div>
             <div>
               <dt className="uppercase tracking-wide">Target end</dt>
-              <dd className="text-mc-text">{initiative.target_end ?? '—'}</dd>
+              <dd className="text-mc-text mt-0.5">
+                <InlineDate
+                  value={initiative.target_end ?? ''}
+                  onSave={next => patch({ target_end: next || null })}
+                  label="Edit target end"
+                />
+              </dd>
             </div>
             <div>
               <dt className="uppercase tracking-wide">Committed end</dt>
-              <dd className="text-mc-text">{initiative.committed_end ?? '—'}</dd>
+              <dd className="text-mc-text mt-0.5">
+                <InlineDate
+                  value={initiative.committed_end ?? ''}
+                  onSave={next => patch({ committed_end: next || null })}
+                  label="Edit committed end"
+                />
+              </dd>
             </div>
             <div>
               <dt className="uppercase tracking-wide">Owner</dt>
-              <dd className="text-mc-text">{initiative.owner_agent_id ?? '—'}</dd>
+              <dd className="text-mc-text mt-0.5">
+                <InlineSelect<string>
+                  value={initiative.owner_agent_id ?? ''}
+                  onSave={next =>
+                    patch({ owner_agent_id: next.length > 0 ? next : null })
+                  }
+                  options={[
+                    { value: '', label: 'Unassigned' },
+                    ...agents.map(a => ({
+                      value: a.id,
+                      label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
+                    })),
+                  ]}
+                  renderDisplay={v => {
+                    const a = agents.find(x => x.id === v);
+                    return a ? (
+                      <span>
+                        {a.avatar_emoji} {a.name}
+                      </span>
+                    ) : (
+                      <span className="text-mc-text-secondary">—</span>
+                    );
+                  }}
+                  label="Edit owner"
+                />
+              </dd>
             </div>
           </dl>
 
-          {initiative.status_check_md && (
-            <div className="mt-4 p-3 rounded border border-mc-border/60 bg-mc-bg text-sm text-mc-text-secondary whitespace-pre-wrap font-mono text-xs">
-              <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
-                Status check
-              </div>
-              {initiative.status_check_md}
+          <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs text-mc-text-secondary">
+            <div>
+              <dt className="uppercase tracking-wide">Complexity</dt>
+              <dd className="text-mc-text mt-0.5">
+                <InlineSelect<Complexity | ''>
+                  value={(initiative.complexity ?? '') as Complexity | ''}
+                  options={COMPLEXITY_OPTIONS}
+                  onSave={next => patch({ complexity: next || null })}
+                  renderDisplay={v =>
+                    v ? <span>{v}</span> : <span className="text-mc-text-secondary">—</span>
+                  }
+                  label="Edit complexity"
+                />
+              </dd>
             </div>
-          )}
+            <div>
+              <dt className="uppercase tracking-wide">Effort (hours)</dt>
+              <dd className="text-mc-text mt-0.5">
+                <InlineText
+                  value={
+                    initiative.estimated_effort_hours == null
+                      ? ''
+                      : String(initiative.estimated_effort_hours)
+                  }
+                  onSave={next =>
+                    patch({
+                      estimated_effort_hours: next === '' ? null : Number(next),
+                    })
+                  }
+                  type="number"
+                  step="0.5"
+                  placeholder="—"
+                  label="Edit effort hours"
+                />
+              </dd>
+            </div>
+          </dl>
+
+          <div className="mt-4">
+            <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
+              Status check
+            </div>
+            <div className="p-3 rounded border border-mc-border/60 bg-mc-bg">
+              <InlineTextarea
+                value={initiative.status_check_md ?? ''}
+                onSave={next =>
+                  patch({ status_check_md: next.length > 0 ? next : null })
+                }
+                placeholder="Linked PR / waiting on / customer demo / etc."
+                minRows={4}
+                mono
+                label="Edit status check"
+              />
+            </div>
+          </div>
         </header>
 
         {actionError && (
@@ -520,14 +730,43 @@ export default function InitiativeDetailPage({
           }}
         />
       )}
-      <EditDrawer
-        initiative={showEditDrawer ? (initiative as ListInitiative) : null}
-        onClose={() => setShowEditDrawer(false)}
-        onSaved={() => {
-          setShowEditDrawer(false);
-          refresh();
-        }}
-      />
+      {showPlanPanel && (
+        <PlanWithPmPanel
+          open={showPlanPanel}
+          workspaceId={initiative.workspace_id}
+          draft={{
+            title: initiative.title,
+            description: initiative.description ?? '',
+            kind: initiative.kind,
+            complexity: initiative.complexity,
+            parent_initiative_id: initiative.parent_initiative_id,
+            target_start: initiative.target_start,
+            target_end: initiative.target_end,
+          }}
+          onClose={() => setShowPlanPanel(false)}
+          onApply={async (s: PlanInitiativeSuggestions) => {
+            // Map every suggested field through patch() so the persistence
+            // path stays the same as inline edits.
+            const body: Record<string, unknown> = {};
+            if (s.refined_description) body.description = s.refined_description;
+            if (s.complexity) body.complexity = s.complexity;
+            if (s.target_start) body.target_start = s.target_start;
+            if (s.target_end) body.target_end = s.target_end;
+            if (s.status_check_md) body.status_check_md = s.status_check_md;
+            if (s.owner_agent_id) body.owner_agent_id = s.owner_agent_id;
+            if (Object.keys(body).length > 0) {
+              try {
+                await patch(body);
+              } catch (e) {
+                setActionError(
+                  e instanceof Error ? e.message : 'Failed to apply suggestions',
+                );
+              }
+            }
+            setShowPlanPanel(false);
+          }}
+        />
+      )}
       {showMoveModal && (
         <MoveModal
           initiative={initiative as ListInitiative}
