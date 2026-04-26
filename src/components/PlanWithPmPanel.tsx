@@ -83,8 +83,17 @@ export default function PlanWithPmPanel({
   draft: PlanInitiativeDraft;
   knownInitiatives?: KnownInitiative[];
   onClose: () => void;
-  /** Operator clicked Apply — receive the suggestions to populate the form. */
-  onApply: (suggestions: PlanInitiativeSuggestions) => void;
+  /**
+   * Operator clicked Apply. Receives the parsed suggestions plus the
+   * server-side proposal id (so callers that route through
+   * `POST /api/pm/proposals/:id/accept` with `target_initiative_id` can
+   * apply atomically server-side instead of doing the PATCH dance
+   * client-side).
+   */
+  onApply: (
+    suggestions: PlanInitiativeSuggestions,
+    ctx: { proposalId: string },
+  ) => void;
 }) {
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
@@ -166,7 +175,7 @@ export default function PlanWithPmPanel({
   };
 
   const apply = () => {
-    if (suggestions) onApply(suggestions);
+    if (suggestions && proposalId) onApply(suggestions, { proposalId });
   };
 
   if (!open) return null;
@@ -236,7 +245,9 @@ export default function PlanWithPmPanel({
             </div>
             {suggestions.dependencies.length > 0 && (
               <div>
-                <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">Possible dependencies</div>
+                <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">
+                  Will create on Apply ({suggestions.dependencies.length} dependenc{suggestions.dependencies.length === 1 ? 'y' : 'ies'})
+                </div>
                 <ul className="text-mc-text mt-1 space-y-1">
                   {suggestions.dependencies.map(d => (
                     <li key={d.depends_on_initiative_id}>

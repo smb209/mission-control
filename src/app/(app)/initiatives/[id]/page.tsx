@@ -653,24 +653,31 @@ export default function InitiativeDetailPage({
                 target_end: initiative.target_end,
               }}
               onClose={() => setShowPlanPanel(false)}
-              onApply={async (s: PlanInitiativeSuggestions) => {
-                // Map every suggested field through patch() so the
-                // persistence path stays the same as inline edits.
-                const body: Record<string, unknown> = {};
-                if (s.refined_description) body.description = s.refined_description;
-                if (s.complexity) body.complexity = s.complexity;
-                if (s.target_start) body.target_start = s.target_start;
-                if (s.target_end) body.target_end = s.target_end;
-                if (s.status_check_md) body.status_check_md = s.status_check_md;
-                if (s.owner_agent_id) body.owner_agent_id = s.owner_agent_id;
-                if (Object.keys(body).length > 0) {
-                  try {
-                    await patch(body);
-                  } catch (e) {
-                    setActionError(
-                      e instanceof Error ? e.message : 'Failed to apply suggestions',
-                    );
+              onApply={async (_s, ctx) => {
+                // Route through the proposal-accept endpoint with our
+                // initiative id as the target. The server applies the
+                // field updates *and* the suggested dependencies in one
+                // transaction, flips the proposal to accepted, and
+                // posts a real "Applied — N updated, M deps added"
+                // banner instead of the old misleading "0 changes".
+                try {
+                  const res = await fetch(
+                    `/api/pm/proposals/${ctx.proposalId}/accept`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ target_initiative_id: id }),
+                    },
+                  );
+                  if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `Apply failed (${res.status})`);
                   }
+                  refresh();
+                } catch (e) {
+                  setActionError(
+                    e instanceof Error ? e.message : 'Failed to apply suggestions',
+                  );
                 }
                 setShowPlanPanel(false);
               }}
