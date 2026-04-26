@@ -429,14 +429,18 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
             />
           </div>
 
-          {/* Description */}
+          {/* Description — defaults to a roomier height so longer
+              briefs don't feel cramped, and resize-y so the operator
+              can grow it further. Full inline-edit on the rest of the
+              fields is a separate pass; here we only fix the most
+              common gripe (description squeezed into 3 rows). */}
           <div>
             <label className="block text-sm font-medium mb-1">Description</label>
             <textarea
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={3}
-              className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none"
+              rows={8}
+              className="w-full bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-y"
               placeholder="Add details..."
             />
           </div>

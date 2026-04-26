@@ -16,6 +16,8 @@ import {
   CornerUpLeft,
   Trash2,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 import PlanWithPmPanel, {
   type PlanInitiativeSuggestions,
@@ -605,6 +607,14 @@ export default function InitiativeDetailPage({
               placeholder="Add a description…"
               minRows={6}
               label="Edit description"
+              // Render the saved value as markdown so links, lists, and
+              // headings show up. Editing falls back to the raw textarea.
+              renderDisplay={v => (
+                <div className="mc-md text-mc-text">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{v}</ReactMarkdown>
+                </div>
+              )}
+              preWrap={false}
             />
           </div>
 
@@ -622,6 +632,12 @@ export default function InitiativeDetailPage({
                 minRows={4}
                 mono
                 label="Edit status check"
+                renderDisplay={v => (
+                  <div className="mc-md text-xs text-mc-text">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{v}</ReactMarkdown>
+                  </div>
+                )}
+                preWrap={false}
               />
             </div>
           </div>
