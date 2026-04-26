@@ -1,29 +1,33 @@
 /**
- * PM dispatch path (Phase 5).
+ * PM dispatch path.
  *
- * Translates an operator-supplied disruption text into a `pm_proposals`
- * row. Phase 5 ships the **synthesize fallback** — a deterministic parser
- * that does naive regex extraction (dates, owner names, initiative refs)
- * and produces a valid PmDiff[] from the snapshot.
+ * The PM is now a NAMED openclaw agent at
+ *   `~/.openclaw/workspaces/mc-project-manager/`
+ * (full SOUL.md/IDENTITY.md/AGENTS.md/etc. — same layout as
+ * mc-coordinator/mc-builder). Migration 049 + `ensurePmAgent` link the MC
+ * `agents` row to that gateway agent via `gateway_agent_id` and
+ * `session_key_prefix`.
  *
- * Why a fallback rather than an LLM call:
+ * Routing (single seam — `dispatchPm` and the plan/decompose helpers):
  *
- *   - MC has no Anthropic SDK wired today. Adding one is its own
- *     project (auth, model selection, cost cap integration, eval).
- *   - The lifecycle (disruption → proposal → accept → DB change) needs
- *     to be exercised end-to-end before we layer in LLM polish. A
- *     deterministic path is testable and cheap.
- *   - The MCP `propose_changes` tool is ALSO available, so an out-of-band
- *     PM session running through openclaw + sc-mission-control can
- *     produce richer proposals; the synthesize path is the "operator
- *     hits enter, gets something useful back instantly" floor.
+ *   1. Look up the PM agent for the workspace.
+ *   2. If it has a `gateway_agent_id` AND the openclaw client is connected,
+ *      send the trigger + snapshot context (with a correlation_id) to
+ *      `agent:mc-project-manager:main` via `chat.send`. Wait for the agent
+ *      to call `propose_changes` (its SOUL.md instructs it to). The
+ *      proposal lands in `pm_proposals` via the MCP path; we look it up
+ *      by recency and return it.
+ *   3. On timeout / no gateway / send failure, fall back to
+ *      `synthesizeImpactAnalysis` — the deterministic parser preserved
+ *      from Phase 5 so MC stays useful with or without the gateway running.
  *
- * The contract: given a workspace snapshot and a free-text trigger,
- * return a draft proposal whose changes only reference real ids in the
- * snapshot. Hallucinated ids are a bug (tests cover this).
+ * The synthesize fallback is intentionally kept forever: it's the
+ * "operator hits enter, gets something useful instantly" floor and the
+ * only path that works offline. Never delete it.
  *
- * Phase 6 may swap this implementation for an LLM-driven one — the
- * caller surface (`synthesizeImpactAnalysis`) stays stable.
+ * Hallucinated ids are a bug — `createProposal` validates every diff
+ * against the workspace snapshot, so even the gateway path can't slip
+ * through bad references.
  */
 
 import { getRoadmapSnapshot, type RoadmapSnapshot } from '@/lib/db/roadmap';
@@ -32,10 +36,14 @@ import { queryAll, queryOne, run } from '@/lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import {
   createProposal,
+  listProposals,
   type PmDiff,
   type PmProposal,
   type PmProposalTriggerKind,
 } from '@/lib/db/pm-proposals';
+import { getOpenClawClient } from '@/lib/openclaw/client';
+import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -48,19 +56,95 @@ export interface DispatchPmInput {
 
 export interface DispatchPmResult {
   proposal: PmProposal;
-  used_synthesize_fallback: true;
+  used_synthesize_fallback: boolean;
+  used_named_agent?: boolean;
 }
 
 /**
- * Top-level dispatch entry. Today it always uses the synthesize fallback;
- * Phase 6 may add a route to an LLM. Persists the proposal as a side
- * effect and posts a chat message on the PM agent's chat thread referencing
- * the proposal_id (so the /pm UI's card renderer fires).
+ * Default time we wait for the named PM agent to respond (i.e. land a
+ * row via `propose_changes`) before falling back to the synth path.
  */
-export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
-  const snapshot = getRoadmapSnapshot({ workspace_id: input.workspace_id });
-  const synth = synthesizeImpactAnalysis(snapshot, input.trigger_text);
+const NAMED_AGENT_TIMEOUT_MS = 60_000;
 
+/** Dependency seam for tests — see `__setOpenClawClientForTests`. */
+type GatewayClient = {
+  isConnected: () => boolean;
+  call: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+};
+let openclawClientOverride: GatewayClient | null = null;
+export function __setOpenClawClientForTests(c: GatewayClient | null): void {
+  openclawClientOverride = c;
+}
+function gatewayClient(): GatewayClient {
+  return openclawClientOverride ?? (getOpenClawClient() as unknown as GatewayClient);
+}
+
+/** Likewise — tests override the timeout to keep the suite fast. */
+let namedAgentTimeoutOverride: number | null = null;
+export function __setNamedAgentTimeoutForTests(ms: number | null): void {
+  namedAgentTimeoutOverride = ms;
+}
+function namedAgentTimeoutMs(): number {
+  return namedAgentTimeoutOverride ?? NAMED_AGENT_TIMEOUT_MS;
+}
+
+/**
+ * Top-level dispatch entry. Routes through the named openclaw agent when
+ * available; falls back to `synthesizeImpactAnalysis` otherwise. Always
+ * persists a proposal + posts the operator/PM messages into the PM
+ * agent's chat thread so the /pm UI's card renderer fires.
+ */
+export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResult> {
+  const snapshot = getRoadmapSnapshot({ workspace_id: input.workspace_id });
+  const pm = lookupPmAgent(input.workspace_id);
+
+  // Always echo the operator's trigger as a user message regardless of
+  // path so the /pm chat reflects the conversation faithfully.
+  try {
+    postPmChatMessage({
+      workspace_id: input.workspace_id,
+      content: input.trigger_text,
+      role: 'user',
+    });
+  } catch (err) {
+    console.warn('[pm-dispatch] user chat insert failed:', (err as Error).message);
+  }
+
+  // ── 1. Try the named-agent path ────────────────────────────────────
+  if (pm && pm.gateway_agent_id) {
+    const gw = gatewayClient();
+    if (gw.isConnected()) {
+      try {
+        const proposal = await dispatchViaNamedAgent({
+          input,
+          snapshot,
+          pm,
+          client: gw,
+        });
+        if (proposal) {
+          try {
+            postPmChatMessage({
+              workspace_id: input.workspace_id,
+              content: proposal.impact_md,
+              proposal_id: proposal.id,
+              role: 'assistant',
+            });
+          } catch (err) {
+            console.warn('[pm-dispatch] assistant chat insert failed:', (err as Error).message);
+          }
+          return { proposal, used_synthesize_fallback: false, used_named_agent: true };
+        }
+      } catch (err) {
+        console.warn(
+          '[pm-dispatch] named-agent dispatch failed; falling back to synth:',
+          (err as Error).message,
+        );
+      }
+    }
+  }
+
+  // ── 2. Synthesize fallback ────────────────────────────────────────
+  const synth = synthesizeImpactAnalysis(snapshot, input.trigger_text);
   const proposal = createProposal({
     workspace_id: input.workspace_id,
     trigger_text: input.trigger_text,
@@ -69,10 +153,6 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
     proposed_changes: synth.changes,
     parent_proposal_id: input.parent_proposal_id ?? null,
   });
-
-  // Best-effort: post the impact summary into the PM agent's chat with
-  // a metadata.proposal_id so the /pm UI renders it as a card. Fails
-  // silently (the proposal still exists; the chat is a UX nicety).
   try {
     postPmChatMessage({
       workspace_id: input.workspace_id,
@@ -80,20 +160,205 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
       proposal_id: proposal.id,
       role: 'assistant',
     });
-    // Also echo the operator's trigger as a 'user' message so the chat
-    // shows the conversation. Safe to add here because this dispatch is
-    // currently the only entry point — when Phase 6 adds a real chat
-    // input pipe we'll move this to that route.
-    postPmChatMessage({
-      workspace_id: input.workspace_id,
-      content: input.trigger_text,
-      role: 'user',
-    });
   } catch (err) {
     console.warn('[pm-dispatch] chat insert failed:', (err as Error).message);
   }
+  return { proposal, used_synthesize_fallback: true, used_named_agent: false };
+}
 
-  return { proposal, used_synthesize_fallback: true };
+// ─── Named-agent dispatch ───────────────────────────────────────────
+
+/**
+ * Build a compact roadmap snapshot summary so the PM agent doesn't have
+ * to round-trip MCP for `get_roadmap_snapshot` on every dispatch. Only
+ * fields the PM needs to reason about disruptions: ids, titles, owners,
+ * status, target dates. Capped at 50 initiatives so the prompt stays
+ * sane on busy workspaces.
+ */
+function buildSnapshotSummary(snapshot: RoadmapSnapshot): string {
+  const lines: string[] = [`Workspace: ${snapshot.workspace_id}`];
+  const initiatives = snapshot.initiatives.slice(0, 50);
+  if (initiatives.length > 0) {
+    lines.push('', 'Initiatives:');
+    for (const i of initiatives) {
+      lines.push(
+        `- ${i.id} | ${i.kind} | "${i.title}" | status=${i.status}` +
+          (i.target_end ? ` | target_end=${i.target_end}` : '') +
+          (i.owner_agent_id ? ` | owner=${i.owner_agent_id}` : ''),
+      );
+    }
+    if (snapshot.initiatives.length > 50) {
+      lines.push(
+        `(... ${snapshot.initiatives.length - 50} more not shown — call get_roadmap_snapshot via MCP for full list)`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+interface DispatchNamedAgentParams {
+  input: DispatchPmInput;
+  snapshot: RoadmapSnapshot;
+  pm: Pick<Agent, 'id' | 'name' | 'session_key_prefix' | 'gateway_agent_id' | 'workspace_id'>;
+  client: GatewayClient;
+}
+
+/**
+ * Send the trigger to the gateway-hosted PM session, wait until a new
+ * proposal lands in `pm_proposals` via the MCP `propose_changes` tool,
+ * then return it.
+ *
+ * Correlation: we record `since` (ISO time at the moment of send) and
+ * include a `correlation_id` in the message body. After the round-trip
+ * we look up the most recent draft proposal for the workspace whose
+ * created_at >= since. This is sufficient because:
+ *   - dispatch is single-flight from the operator's perspective,
+ *   - we only land here on a successful `chat.send`, so synth hasn't
+ *     written yet.
+ * If the agent ever lands two proposals from one trigger, we return the
+ * newest — refine() can chain the rest.
+ */
+async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<PmProposal | null> {
+  const { input, snapshot, pm, client } = params;
+  const correlationId = uuidv4();
+  const sinceIso = new Date().toISOString();
+
+  const sessionKey = buildPmSessionKey(pm);
+
+  const summary = buildSnapshotSummary(snapshot);
+  const message =
+    `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
+    `Operator-reported event:\n> ${input.trigger_text}\n\n` +
+    `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
+    `${summary}\n\n` +
+    `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
+    `with a structured PmDiff[] and impact_md. Reference only ids that ` +
+    `appear in the snapshot.`;
+
+  await client.call('chat.send', {
+    sessionKey,
+    message,
+    idempotencyKey: `pm-dispatch-${correlationId}`,
+  });
+
+  const deadline = Date.now() + namedAgentTimeoutMs();
+  while (Date.now() < deadline) {
+    const proposal = findProposalCreatedSince(input.workspace_id, sinceIso);
+    if (proposal) return proposal;
+    await sleep(500);
+  }
+  return null;
+}
+
+/**
+ * Build the chat sessionKey for the PM. resolveAgentSessionKeyPrefix
+ * returns either the explicit session_key_prefix (already including any
+ * suffix) or `agent:<gateway_agent_id>:`. We always want a single ":main"
+ * channel for the PM, so collapse trailing duplicates that arise when
+ * session_key_prefix is set to `agent:mc-project-manager:main`.
+ */
+function buildPmSessionKey(
+  pm: Pick<Agent, 'session_key_prefix' | 'gateway_agent_id' | 'name'>,
+): string {
+  const prefix = resolveAgentSessionKeyPrefix(pm);
+  // prefix always ends with ':' (the helper guarantees that). Tack on
+  // 'main' unless the prefix already ends with ':main:' (i.e. the
+  // operator/migration set session_key_prefix='agent:...:main').
+  if (/:main:$/.test(prefix)) {
+    return prefix.replace(/:$/, '');
+  }
+  return `${prefix}main`;
+}
+
+function findProposalCreatedSince(workspaceId: string, sinceIso: string): PmProposal | null {
+  const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
+  // listProposals returns DESC by created_at — pick the newest.
+  return drafts[0] ?? null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────
+
+function lookupPmAgent(workspaceId: string): Agent | null {
+  const row = queryOne<Agent>(
+    `SELECT * FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
+    [workspaceId],
+  );
+  return row ?? null;
+}
+
+/**
+ * Same routing as `dispatchPm` but for already-synthesized proposals
+ * (plan-initiative + decompose-initiative paths). Tries the named PM
+ * session first; falls back to persisting the caller's synth output
+ * when the gateway is unreachable.
+ *
+ * The plan/decompose synthesizers produce ADVISORY proposals (no diffs
+ * to apply for plan_initiative; pre-wired children for decompose), so
+ * the round-trip semantics are slightly different than dispatchPm: we
+ * still poll for any new draft proposal in the workspace, but on
+ * timeout we persist the synthesized proposal we were given so the
+ * operator always sees something. Returns whichever proposal landed
+ * plus fallback flags.
+ */
+export interface DispatchSynthesizedInput {
+  workspace_id: string;
+  trigger_text: string;
+  trigger_kind: PmProposalTriggerKind;
+  /** Synth output ready to persist as a fallback. */
+  synth: { impact_md: string; changes: PmDiff[] };
+  /** Free-text prompt sent to the named agent. */
+  agent_prompt: string;
+  parent_proposal_id?: string | null;
+}
+
+export async function dispatchPmSynthesized(
+  input: DispatchSynthesizedInput,
+): Promise<{ proposal: PmProposal; used_synthesize_fallback: boolean; used_named_agent: boolean }> {
+  const pm = lookupPmAgent(input.workspace_id);
+  if (pm && pm.gateway_agent_id) {
+    const gw = gatewayClient();
+    if (gw.isConnected()) {
+      try {
+        const correlationId = uuidv4();
+        const sinceIso = new Date().toISOString();
+        const sessionKey = buildPmSessionKey(pm);
+        await gw.call('chat.send', {
+          sessionKey,
+          message:
+            `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
+            input.agent_prompt,
+          idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
+        });
+        const deadline = Date.now() + namedAgentTimeoutMs();
+        while (Date.now() < deadline) {
+          const found = findProposalCreatedSince(input.workspace_id, sinceIso);
+          if (found) {
+            return { proposal: found, used_synthesize_fallback: false, used_named_agent: true };
+          }
+          await sleep(500);
+        }
+      } catch (err) {
+        console.warn(
+          '[pm-dispatch] synthesized named-agent dispatch failed; falling back:',
+          (err as Error).message,
+        );
+      }
+    }
+  }
+  // Fallback — persist the synthesized proposal exactly like before.
+  const proposal = createProposal({
+    workspace_id: input.workspace_id,
+    trigger_text: input.trigger_text,
+    trigger_kind: input.trigger_kind,
+    impact_md: input.synth.impact_md,
+    proposed_changes: input.synth.changes,
+    parent_proposal_id: input.parent_proposal_id ?? null,
+  });
+  return { proposal, used_synthesize_fallback: true, used_named_agent: false };
 }
 
 // ─── Synthesize fallback ────────────────────────────────────────────

@@ -111,7 +111,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // Default disruption-analysis path. We borrow dispatchPm's
       // synthesizer and patch the result onto the pre-allocated child
       // row, then delete the side-effect row dispatchPm created.
-      const synthesized = dispatchPm({
+      const synthesized = await dispatchPm({
         workspace_id: parent.workspace_id,
         trigger_text: child.trigger_text,
         trigger_kind: parent.trigger_kind,

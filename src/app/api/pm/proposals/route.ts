@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    const result = dispatchPm(parsed.data);
+    const result = await dispatchPm(parsed.data);
     return NextResponse.json(
       {
         proposal: result.proposal,

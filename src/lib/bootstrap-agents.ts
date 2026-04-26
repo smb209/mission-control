@@ -234,9 +234,26 @@ export function bootstrapCoreAgentsRaw(
  * soul_md from the .md file next to the pm-agent module so operators can
  * tweak the prompt without redeploying. Safe to call from API routes.
  *
- * Migration 045 also seeds PMs at startup; this function exists so freshly
- * created workspaces (after migrations have run) get one too.
+ * The PM is now seeded as a NAMED gateway agent (source='gateway') linked
+ * to the openclaw workspace at `~/.openclaw/workspaces/mc-project-manager/`.
+ * That workspace ships with full agent files (SOUL.md, IDENTITY.md, etc.)
+ * — same pattern as mc-coordinator/mc-builder/etc. The `gateway_agent_id`
+ * + `session_key_prefix` are what let `resolveAgentSessionKeyPrefix` route
+ * real chat.send traffic to the gateway-hosted PM session.
+ *
+ * Migration 045 originally seeded PMs as ephemeral source='local' rows
+ * with no gateway link; migration 049 backfills those rows so they pick
+ * up the new routing.
+ *
+ * If a PM row already exists for the workspace this function does NOT
+ * mutate it — operators may have customised it, and migration 049 owns
+ * the backfill for older rows.
  */
+export const PM_GATEWAY_AGENT_ID = 'mc-project-manager';
+export const PM_SESSION_KEY_PREFIX = `agent:${PM_GATEWAY_AGENT_ID}:main`;
+export const PM_NAMED_AGENT_NAME = 'Margaret "Maps" Hamilton';
+export const PM_NAMED_AGENT_AVATAR = '🗺️';
+
 export function ensurePmAgent(workspaceId: string): { id: string; created: boolean } {
   const db = getDb();
   const existing = db.prepare(
@@ -251,12 +268,26 @@ export function ensurePmAgent(workspaceId: string): { id: string; created: boole
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  // source='gateway' matches the convention used by agent-catalog-sync
+  // for every gateway-hosted named agent (mc-coordinator, mc-builder, …).
   db.prepare(`
     INSERT INTO agents (
       id, name, role, description, avatar_emoji, status, is_master,
-      workspace_id, soul_md, source, is_active, created_at, updated_at
-    ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 0, ?, ?, 'local', 1, ?, ?)
-  `).run(id, PM_AGENT_DESCRIPTION, workspaceId, getPmSoulMd(), now, now);
+      workspace_id, soul_md, source, gateway_agent_id, session_key_prefix,
+      is_active, created_at, updated_at
+    ) VALUES (?, ?, 'pm', ?, ?, 'standby', 0, ?, ?, 'gateway', ?, ?, 1, ?, ?)
+  `).run(
+    id,
+    PM_NAMED_AGENT_NAME,
+    PM_AGENT_DESCRIPTION,
+    PM_NAMED_AGENT_AVATAR,
+    workspaceId,
+    getPmSoulMd(),
+    PM_GATEWAY_AGENT_ID,
+    PM_SESSION_KEY_PREFIX,
+    now,
+    now,
+  );
   return { id, created: true };
 }
 
