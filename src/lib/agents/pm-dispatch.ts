@@ -255,6 +255,9 @@ async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<
     message,
     idempotencyKey: `pm-dispatch-${correlationId}`,
     timeoutMs: namedAgentTimeoutMs(),
+    // Fresh session per disruption — prevents context from one disruption
+    // analysis bleeding into the next independent request.
+    sessionSuffix: `dispatch-${correlationId}`,
   });
 
   // Send failed — caller falls back to synth.
