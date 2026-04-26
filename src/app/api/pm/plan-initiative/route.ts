@@ -39,6 +39,11 @@ const Body = z.object({
   // page. Persisted on the proposal so the panel can resume the same
   // draft on re-open instead of starting over.
   target_initiative_id: z.string().optional().nullable(),
+  // Free-text steering from the operator — what to focus on, what to
+  // avoid, constraints not visible in the draft. Threaded into the
+  // PM agent prompt so the produced suggestions reflect the operator's
+  // intent. Keep modest length; this isn't a place to dump specs.
+  guidance: z.string().max(2000).optional().nullable(),
   draft: z.object({
     title: z.string().min(1).max(500),
     description: z.string().max(20000).optional().nullable(),
@@ -71,10 +76,12 @@ export async function POST(request: NextRequest) {
 
     // Persist the suggestions inside trigger_text so refine() can
     // re-synthesize from the same draft without losing the planning
-    // context.
+    // context. Guidance lives on trigger_text too so refine chains and
+    // resume look-ups can see what the operator originally asked for.
     const triggerText = JSON.stringify({
       mode: 'plan_initiative',
       draft: parsed.data.draft,
+      ...(parsed.data.guidance ? { guidance: parsed.data.guidance } : {}),
     });
 
     // Dedupe identical requests fired in quick succession. React
@@ -127,6 +134,9 @@ export async function POST(request: NextRequest) {
       agent_prompt:
         `Plan an initiative draft titled "${parsed.data.draft.title}". ` +
         `Operator-provided draft: ${JSON.stringify(parsed.data.draft)}. ` +
+        (parsed.data.guidance
+          ? `Operator guidance — focus the plan on this: ${parsed.data.guidance}\n\n`
+          : '') +
         `Call \`propose_changes\` (trigger_kind='plan_initiative') with an impact_md that ` +
         `includes a "<!--pm-plan-suggestions ...-->" sidecar so the form can apply your ` +
         `suggestions. proposed_changes should be [] (advisory). See your SOUL.md.`,

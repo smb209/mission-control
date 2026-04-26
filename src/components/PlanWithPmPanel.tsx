@@ -76,6 +76,7 @@ export default function PlanWithPmPanel({
   draft,
   knownInitiatives,
   targetInitiativeId,
+  initialGuidance,
   onClose,
   onApply,
 }: {
@@ -91,6 +92,14 @@ export default function PlanWithPmPanel({
    * with concurrent plans of unrelated drafts.
    */
   targetInitiativeId?: string | null;
+  /**
+   * Free-text operator steering threaded into the agent prompt for
+   * the initial dispatch. Captured by the host before opening the
+   * panel (e.g. via the "With guidance…" split-button option). Ignored
+   * when resuming an existing draft — the resumed proposal already
+   * incorporated whatever guidance the original dispatch carried.
+   */
+  initialGuidance?: string | null;
   onClose: () => void;
   /**
    * Operator clicked Apply. Receives the parsed suggestions plus the
@@ -168,6 +177,7 @@ export default function PlanWithPmPanel({
           body: JSON.stringify({
             workspace_id: workspaceId,
             target_initiative_id: targetInitiativeId ?? null,
+            guidance: initialGuidance ?? null,
             draft: draftRef.current,
           }),
         });
@@ -187,7 +197,7 @@ export default function PlanWithPmPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, workspaceId, targetInitiativeId]);
+  }, [open, workspaceId, targetInitiativeId, initialGuidance]);
 
   const refine = async () => {
     if (!proposalId || !refineText.trim()) return;
