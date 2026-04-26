@@ -36,9 +36,13 @@ Include specific, actionable findings — not generic observations. Every findin
 
 IMPORTANT: Respond with ONLY the JSON object. No markdown, no code blocks, no explanation text before or after. Just the raw JSON.
 
+## Product
+
+**Name:** ${product.name}
+${product.description ? `\n**Description:** ${product.description}\n` : ''}
 ## Product Program
 
-${product.product_program || 'No product program defined yet.'}
+${product.product_program || '_No detailed product program — treat the **Product** section above as the source of truth for what this product is and who it serves. Research within that domain, not generic SaaS / Mission Control features._'}
 
 ${product.repo_url ? `## Repository\n${product.repo_url}` : ''}
 ${product.live_url ? `## Live URL\n${product.live_url}` : ''}

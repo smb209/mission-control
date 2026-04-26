@@ -16,6 +16,34 @@ function isValidUrl(str: string): boolean {
   }
 }
 
+// Starter Product Program. Used both as the textarea placeholder and as
+// the auto-seed value when the operator transitions to Step 2 with no
+// program defined. Echoes the basics they already typed so they don't
+// have to repeat themselves and so a "Skip for now" with an empty Step 1
+// description doesn't leave the LLM with zero context.
+function buildProgramTemplate(name: string, description: string): string {
+  const safeName = name.trim() || 'this product';
+  const purposeLine = description.trim()
+    ? description.trim()
+    : `What this product does and who it's for.`;
+  return `# Product Program: ${safeName}
+
+## Purpose
+${purposeLine}
+
+## Target Users
+Who uses this and what problems they have.
+
+## Priorities
+What matters most — growth, stability, features, UX, performance, etc.
+
+## Research Directives
+Specific areas to focus research on.
+
+## Exclusions
+Things you do NOT want suggested.`;
+}
+
 export default function NewProductPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>('basics');
@@ -155,6 +183,19 @@ export default function NewProductPage() {
       if (res.ok) {
         const product = await res.json();
         setProductId(product.id);
+        // Seed the Product Program textarea from name + description so the
+        // operator entering Step 2 sees real, editable starter content
+        // instead of grey placeholder text. If they "Skip for now" the
+        // seeded value is never persisted (handleSaveProgram isn't called),
+        // so this never injects unwanted content into the saved program.
+        // It just removes a foot-gun where users wrote a great
+        // name/description, skipped Step 2, and got Mission-Control-themed
+        // ideation results because the LLM had no product context.
+        setForm(f =>
+          f.product_program.trim().length > 0
+            ? f
+            : { ...f, product_program: buildProgramTemplate(f.name, f.description) },
+        );
         setStep('program');
       }
     } catch (error) {
@@ -381,7 +422,7 @@ export default function NewProductPage() {
                 onChange={e => setForm(f => ({ ...f, product_program: e.target.value }))}
                 className="w-full bg-mc-bg-tertiary border border-mc-border rounded-lg px-4 py-3 text-mc-text font-mono text-sm focus:outline-hidden focus:border-mc-accent resize-none"
                 rows={20}
-                placeholder={`# Product Program: ${form.name}\n\n## Purpose\nWhat this product does and who it's for.\n\n## Target Users\nWho uses this and what problems they have.\n\n## Priorities\nWhat matters most — growth, stability, features, UX, performance, etc.\n\n## Research Directives\nSpecific areas to focus research on.\n\n## Exclusions\nThings you do NOT want suggested.`}
+                placeholder={buildProgramTemplate(form.name, form.description)}
               />
             </div>
             <div className="flex gap-3">
