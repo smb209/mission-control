@@ -102,22 +102,33 @@ export default function PlanWithPmPanel({
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const submittedRef = useRef(false);
+  // Snapshot the draft at open-time so React-driven re-renders of the
+  // host (which construct a fresh `draft` object every render) don't
+  // retrigger this effect and cancel the in-flight fetch.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
-  // Kick off the initial plan request when the panel opens.
+  // The previous implementation guarded against a duplicate fetch with
+  // `submittedRef.current = true` set BEFORE the await. Combined with
+  // React StrictMode's mount-cleanup-mount sequence in dev, that meant:
+  //   1. effect run #1: ref→true, kicks off fetch A
+  //   2. cleanup of #1: cancelled1 = true
+  //   3. effect run #2 (StrictMode): ref is true → bail without fetching
+  //   4. fetch A resolves → cancelled1=true → state never set
+  //   → "Thinking…" forever, even though the network log shows a 201.
+  // Drop the ref-guard. Each effect run owns its own `cancelled` flag,
+  // so even if dev StrictMode fires two requests, exactly one of them
+  // wins the state-setter race. In production this runs once.
   useEffect(() => {
     if (!open) {
-      // Reset on close so the next open re-runs.
+      // Reset on close so the next open re-runs cleanly.
       setProposalId(null);
       setImpactMd('');
       setSuggestions(null);
       setErr(null);
       setRefineText('');
-      submittedRef.current = false;
       return;
     }
-    if (submittedRef.current) return;
-    submittedRef.current = true;
 
     let cancelled = false;
     (async () => {
@@ -129,7 +140,7 @@ export default function PlanWithPmPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspace_id: workspaceId,
-            draft,
+            draft: draftRef.current,
           }),
         });
         const body = await res.json();
@@ -147,7 +158,8 @@ export default function PlanWithPmPanel({
     return () => {
       cancelled = true;
     };
-  }, [open, workspaceId, draft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, workspaceId]);
 
   const refine = async () => {
     if (!proposalId || !refineText.trim()) return;
