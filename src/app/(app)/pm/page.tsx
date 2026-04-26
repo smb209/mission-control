@@ -13,7 +13,12 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info } from 'lucide-react';
+import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles } from 'lucide-react';
+import {
+  parseSuggestionsFromImpactMd,
+  stripSuggestionsSidecar,
+  type PlanInitiativeSuggestionsBlob,
+} from '@/lib/pm/planSuggestionsSidecar';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -831,9 +836,34 @@ function ChatMessageRow({
             {proposal.status}
           </span>
         </div>
-        <div className="p-3">
-          <ChatMarkdown content={message.content} />
-        </div>
+        {/*
+          For plan_initiative proposals, render a structured summary
+          card at the top so the operator can read the suggestions at
+          a glance without hunting through prose. The freeform
+          narrative still renders below (with the JSON sidecar
+          stripped) for callers who want the agent's reasoning.
+          For other proposal kinds, just strip any leaked sidecar JSON
+          (some emit em-dash variants that markdown doesn't recognize
+          as HTML comments) and render normally.
+        */}
+        {(() => {
+          const suggestions = proposal.trigger_kind === 'plan_initiative'
+            ? parseSuggestionsFromImpactMd(proposal.impact_md)
+            : null;
+          const cleanContent = stripSuggestionsSidecar(message.content);
+          return (
+            <>
+              {suggestions && (
+                <div className="border-b border-amber-500/20">
+                  <PlanSuggestionsSummary suggestions={suggestions} />
+                </div>
+              )}
+              <div className="p-3">
+                <ChatMarkdown content={cleanContent} />
+              </div>
+            </>
+          );
+        })()}
         {proposal.proposed_changes.length > 0 && (
           <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
             {proposal.proposed_changes.slice(0, 6).map((c, idx) => (
@@ -982,7 +1012,7 @@ function PinnedStandupCard({
         <span className="ml-auto text-[11px] text-mc-text-secondary/80">{created}</span>
       </div>
       <div className="p-3">
-        <ChatMarkdown content={proposal.impact_md} />
+        <ChatMarkdown content={stripSuggestionsSidecar(proposal.impact_md)} />
       </div>
       {proposal.proposed_changes.length > 0 && (
         <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
@@ -1032,6 +1062,110 @@ function ChatMarkdown({ content }: { content: string }) {
   return (
     <div className="mc-md text-sm">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
+
+/**
+ * Structured at-a-glance summary of a plan_initiative proposal's
+ * suggestions blob. Replaces the JSON-soup users used to see when the
+ * PM agent's sidecar leaked through markdown rendering. Renders the
+ * fields the operator actually cares about (description, complexity,
+ * window, status check, dependencies) as labeled rows; the freeform
+ * narrative still renders below for callers who want the full text.
+ */
+function PlanSuggestionsSummary({
+  suggestions,
+}: {
+  suggestions: PlanInitiativeSuggestionsBlob;
+}) {
+  const rows: Array<{ label: string; node: React.ReactNode }> = [];
+
+  if (suggestions.refined_description) {
+    rows.push({
+      label: 'Description',
+      node: (
+        <div className="mc-md text-xs text-mc-text-secondary line-clamp-6">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {suggestions.refined_description}
+          </ReactMarkdown>
+        </div>
+      ),
+    });
+  }
+
+  const sizingBits: string[] = [];
+  if (suggestions.complexity) sizingBits.push(`Complexity ${suggestions.complexity}`);
+  const windowBits: string[] = [];
+  if (suggestions.target_start) windowBits.push(suggestions.target_start);
+  if (suggestions.target_end) windowBits.push(suggestions.target_end);
+  if (sizingBits.length > 0 || windowBits.length > 0) {
+    rows.push({
+      label: 'Sizing',
+      node: (
+        <div className="text-xs text-mc-text">
+          {sizingBits.join(' · ')}
+          {windowBits.length > 0 && (
+            <span className="text-mc-text-secondary">
+              {sizingBits.length > 0 ? ' · ' : ''}
+              Window {windowBits.join(' → ')}
+            </span>
+          )}
+        </div>
+      ),
+    });
+  }
+
+  if (suggestions.status_check_md) {
+    rows.push({
+      label: 'Status check',
+      node: (
+        <pre className="text-[11px] text-mc-text-secondary whitespace-pre-wrap font-mono line-clamp-4">
+          {suggestions.status_check_md}
+        </pre>
+      ),
+    });
+  }
+
+  if (suggestions.dependencies && suggestions.dependencies.length > 0) {
+    rows.push({
+      label: `Deps (${suggestions.dependencies.length})`,
+      node: (
+        <ul className="text-xs text-mc-text-secondary space-y-0.5">
+          {suggestions.dependencies.slice(0, 5).map((d, i) => (
+            <li key={i}>
+              → <span className="text-mc-text">{shortId(d.depends_on_initiative_id)}</span>
+              {d.note ? <span className="italic"> — {d.note}</span> : null}
+            </li>
+          ))}
+          {suggestions.dependencies.length > 5 && (
+            <li className="text-mc-text-secondary/70">
+              …and {suggestions.dependencies.length - 5} more
+            </li>
+          )}
+        </ul>
+      ),
+    });
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="px-3 py-3 bg-mc-bg-secondary/40">
+      <div className="flex items-center gap-2 mb-2 text-[10px] uppercase tracking-wide text-mc-accent">
+        <Sparkles className="w-3 h-3" />
+        PM suggests
+      </div>
+      <div className="space-y-2">
+        {rows.map((r, i) => (
+          <div key={i} className="grid grid-cols-[88px_1fr] gap-2">
+            <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 pt-0.5">
+              {r.label}
+            </div>
+            <div className="min-w-0">{r.node}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

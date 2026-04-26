@@ -13,38 +13,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, queryOne, run } from '@/lib/db';
 
-export interface PlanInitiativeSuggestionsBlob {
-  refined_description?: string | null;
-  complexity?: 'S' | 'M' | 'L' | 'XL' | null;
-  target_start?: string | null;
-  target_end?: string | null;
-  status_check_md?: string | null;
-  owner_agent_id?: string | null;
-  dependencies?: Array<{
-    depends_on_initiative_id: string;
-    kind?: 'finish_to_start' | 'start_to_start' | 'blocking' | 'informational';
-    note?: string | null;
-  }>;
-}
-
-/**
- * Pull the suggestions blob out of an impact_md string. The PM agent
- * embeds it as `<!--pm-plan-suggestions {json} -->` so the markdown
- * stays human-readable but a client can parse the structured form.
- */
-export function parseSuggestionsFromImpactMd(
-  md: string,
-): PlanInitiativeSuggestionsBlob | null {
-  // [\s\S] matches anything including newlines without needing the `s`
-  // flag, which keeps this compatible with older lib targets.
-  const m = md.match(/<!--pm-plan-suggestions\s+([\s\S]*?)\s*-->/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[1]) as PlanInitiativeSuggestionsBlob;
-  } catch {
-    return null;
-  }
-}
+// Re-export from the client-safe module so server callers can keep
+// importing parser/stripper from this file without changing.
+export {
+  parseSuggestionsFromImpactMd,
+  stripSuggestionsSidecar,
+  type PlanInitiativeSuggestionsBlob,
+} from './planSuggestionsSidecar';
+import type { PlanInitiativeSuggestionsBlob } from './planSuggestionsSidecar';
 
 export interface ApplyPlanResult {
   fields_updated: number;
