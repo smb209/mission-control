@@ -4,6 +4,7 @@ import {
   deleteWorkspaceCascade,
   getWorkspaceCascadeCounts,
 } from '@/lib/db/workspaces';
+import { resolveWorkspacePath } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 // GET /api/workspaces/[id] - Get a single workspace
@@ -21,18 +22,25 @@ export async function GET(
     // Try to find by ID or slug
     const workspace = db.prepare(
       'SELECT * FROM workspaces WHERE id = ? OR slug = ?'
-    ).get(id, id) as { id: string } | undefined;
+    ).get(id, id) as
+      | { id: string; slug: string; workspace_path?: string | null }
+      | undefined;
 
     if (!workspace) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
 
+    // Resolved-default companion field. The settings UI uses it as the
+    // input placeholder so the operator can see what the system would
+    // pick if they leave the override blank.
+    const default_workspace_path = resolveWorkspacePath(workspace.slug, null);
+
     if (wantCounts) {
       const cascadeCounts = getWorkspaceCascadeCounts(workspace.id);
-      return NextResponse.json({ ...workspace, cascadeCounts });
+      return NextResponse.json({ ...workspace, cascadeCounts, default_workspace_path });
     }
 
-    return NextResponse.json(workspace);
+    return NextResponse.json({ ...workspace, default_workspace_path });
   } catch (error) {
     console.error('Failed to fetch workspace:', error);
     return NextResponse.json({ error: 'Failed to fetch workspace' }, { status: 500 });
@@ -48,7 +56,7 @@ export async function PATCH(
 
   try {
     const body = await request.json();
-    const { name, description, icon } = body;
+    const { name, description, icon, workspace_path } = body;
 
     const db = getDb();
 
@@ -73,6 +81,13 @@ export async function PATCH(
     if (icon !== undefined) {
       updates.push('icon = ?');
       values.push(icon);
+    }
+    if (workspace_path !== undefined) {
+      // Empty-string clears the override and reverts to the env default;
+      // any other value persists as the explicit path.
+      updates.push('workspace_path = ?');
+      const trimmed = typeof workspace_path === 'string' ? workspace_path.trim() : null;
+      values.push(trimmed && trimmed.length > 0 ? trimmed : null);
     }
 
     if (updates.length === 0) {

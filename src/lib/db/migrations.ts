@@ -3244,6 +3244,22 @@ const migrations: Migration[] = [
       console.log('[Migration 050] pm_proposals.target_initiative_id added.');
     },
   },
+  {
+    id: '051',
+    name: 'workspaces_workspace_path',
+    up: (db) => {
+      // Per-workspace project/deliverables root. Defaults to the env-
+      // derived path (MC_DELIVERABLES_HOST_PATH on host, *_CONTAINER_PATH
+      // inside docker, falling back to ~/Documents/Shared/projects)
+      // when a workspace is created without an explicit override. The
+      // per-workspace setting page lets the operator change it later.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'workspace_path')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN workspace_path TEXT`);
+      }
+      console.log('[Migration 051] workspaces.workspace_path added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

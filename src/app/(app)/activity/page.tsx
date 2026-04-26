@@ -8,16 +8,15 @@
  * — making the operator click again here was a wasted step.
  *
  * Edge cases:
- *   - No workspaces yet → render an empty state with a link to
- *     /settings/workspaces. (Previously the picker rendered the same
- *     empty state.)
+ *   - No workspaces yet → render an empty state pointing to the
+ *     workspace switcher at the top of the left nav (which has the
+ *     "+ New Workspace" entry).
  *   - Workspaces still loading → render a small spinner so we don't
  *     flash "no workspaces" before the fetch returns.
  */
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { Activity } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Workspace } from '@/lib/types';
@@ -76,14 +75,10 @@ export default function ActivityRedirectPage() {
         <Activity className="w-12 h-12 text-mc-text-secondary mx-auto mb-4" />
         <h2 className="text-xl font-bold text-mc-text mb-2">No workspaces</h2>
         <p className="text-mc-text-secondary text-sm mb-4">
-          Create a workspace to see agent activity.
+          Create a workspace from the workspace switcher at the top of
+          the left nav (use the <strong className="text-mc-text">+ New
+          workspace</strong> entry).
         </p>
-        <Link
-          href="/settings/workspaces"
-          className="inline-flex items-center px-4 py-2 rounded-lg border border-mc-accent/40 text-mc-accent hover:bg-mc-accent/10 text-sm"
-        >
-          Open workspace settings
-        </Link>
       </div>
     </div>
   );

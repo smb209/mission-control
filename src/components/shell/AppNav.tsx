@@ -64,7 +64,7 @@ interface NavSection {
   items: NavItem[];
 }
 
-function buildSections(taskBoardHref: string): NavSection[] {
+function buildSections(taskBoardHref: string, workspaceSettingsHref: string): NavSection[] {
   return [
     {
       title: 'Project',
@@ -98,7 +98,11 @@ function buildSections(taskBoardHref: string): NavSection[] {
         // workspace-scoped configuration, so they belong here too.
         { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
         { href: '/agents', label: 'Agents', icon: Users, prefix: true },
-        { href: '/settings', label: 'Settings', icon: SettingsIcon },
+        // Settings here is scoped to the current workspace
+        // (/workspace/<slug>/settings). Global / cross-workspace
+        // settings (API URL, default paths, backups, environment)
+        // live behind the gear icon in the top bar at /settings.
+        { href: workspaceSettingsHref, label: 'Settings', icon: SettingsIcon, prefix: workspaceSettingsHref !== '/settings' },
         { href: '/debug', label: 'Debug', icon: Bug, prefix: true },
       ],
     },
@@ -139,7 +143,13 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
   const activeWorkspace =
     workspaces.find(w => w.id === currentWorkspaceId) ?? workspaces[0];
   const taskBoardHref = activeWorkspace ? `/workspace/${activeWorkspace.slug}` : '/';
-  const sections = buildSections(taskBoardHref);
+  // When no workspace is selected yet (e.g. zero workspaces), fall
+  // back to the global settings page — it's the closest meaningful
+  // surface and avoids dead nav links during onboarding.
+  const workspaceSettingsHref = activeWorkspace
+    ? `/workspace/${activeWorkspace.slug}/settings`
+    : '/settings';
+  const sections = buildSections(taskBoardHref, workspaceSettingsHref);
 
   return (
     <>
