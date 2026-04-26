@@ -62,10 +62,19 @@ interface ProposalRow {
 
 export default function DecomposeWithPmModal({
   initiative,
+  initialHint,
   onClose,
   onAccepted,
 }: {
   initiative: InitiativeLite;
+  /**
+   * Operator steering for the initial decompose dispatch — what to
+   * focus on, slice along, or avoid. The route already accepts a
+   * `hint` field; this just lets the host (e.g. the toolbar's split
+   * "With guidance…" option) prefill it for the first request.
+   * Refine flow keeps using the in-modal `hint` input as before.
+   */
+  initialHint?: string | null;
   onClose: () => void;
   onAccepted: () => void;
 }) {
@@ -88,7 +97,10 @@ export default function DecomposeWithPmModal({
         const res = await fetch('/api/pm/decompose-initiative', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initiative_id: initiative.id }),
+          body: JSON.stringify({
+            initiative_id: initiative.id,
+            ...(initialHint ? { hint: initialHint } : {}),
+          }),
         });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error || `Decompose failed (${res.status})`);
@@ -106,7 +118,7 @@ export default function DecomposeWithPmModal({
     return () => {
       cancelled = true;
     };
-  }, [initiative.id]);
+  }, [initiative.id, initialHint]);
 
   // Esc to close.
   useEffect(() => {

@@ -28,6 +28,7 @@ import {
   InlineSelect,
   InlineDate,
 } from '@/components/inline/InlineEdit';
+import { SplitToolbarButton } from '@/components/inline/SplitToolbarButton';
 // Reuse the action modals defined alongside the list page — Move / Convert /
 // AddDep / History still make sense as focused dialogs since they have
 // non-trivial side effects beyond a simple field write.
@@ -184,11 +185,19 @@ export default function InitiativeDetailPage({
   const [showAddDepModal, setShowAddDepModal] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
+  // Operator guidance captured via the "Plan with PM ▾ → With guidance"
+  // option in the toolbar split-button. Threaded into the initial PM
+  // dispatch (POST body's `guidance` field). Cleared on panel close
+  // so the next default click runs without stale guidance.
+  const [planGuidance, setPlanGuidance] = useState<string | null>(null);
   // Brief accent-ring on the plan panel right after it opens, so the
   // operator notices it appearing inline under the header instead of
   // wondering whether the click did anything.
   const [planPanelHighlight, setPlanPanelHighlight] = useState(false);
   const planPanelRef = useRef<HTMLDivElement>(null);
+  // Operator guidance for the initial Decompose dispatch. Same idea
+  // as planGuidance but persists for the lifetime of the modal.
+  const [decomposeHint, setDecomposeHint] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -244,14 +253,29 @@ export default function InitiativeDetailPage({
   // mounts directly under the header card, but a long header can still
   // push it below the fold on smaller viewports — scrollIntoView + a
   // brief accent ring gives the operator unambiguous feedback that the
-  // click landed.
-  const openPlanPanel = useCallback(() => {
+  // click landed. `guidance` is the optional steering text from the
+  // toolbar split-button's "With guidance" popover.
+  const openPlanPanel = useCallback((guidance?: string) => {
+    setPlanGuidance(guidance && guidance.length > 0 ? guidance : null);
     setShowPlanPanel(true);
     setPlanPanelHighlight(true);
     requestAnimationFrame(() => {
       planPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     window.setTimeout(() => setPlanPanelHighlight(false), 1800);
+  }, []);
+
+  const openDecompose = useCallback((hint?: string) => {
+    setDecomposeHint(hint && hint.length > 0 ? hint : null);
+    setShowDecomposeModal(true);
+  }, []);
+
+  // Closes the plan panel AND clears any guidance so the next default
+  // "Plan with PM" click runs from a clean baseline. Used by both
+  // onClose and the post-Apply path inside the panel's onApply.
+  const closePlanPanel = useCallback(() => {
+    setShowPlanPanel(false);
+    setPlanGuidance(null);
   }, []);
 
   // PATCH a partial update to this initiative and refresh on success. The
@@ -456,23 +480,31 @@ export default function InitiativeDetailPage({
               · Destructive (Detach / Delete) — pushed to the far right
           */}
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
-            <ToolbarButton
+            <SplitToolbarButton
               icon={<Sparkles className="w-3.5 h-3.5" />}
-              onClick={openPlanPanel}
-              accent
+              onClick={() => openPlanPanel()}
+              onClickWithGuidance={(g) => openPlanPanel(g)}
+              guidanceLabel="What should the PM focus the plan on?"
+              guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
+or "treat memory + checklist as MVP, exclude dashboard widgets"`}
+              guidanceCta="Plan with guidance"
               title="PM proposes refined description / sizing / window"
             >
               Plan with PM
-            </ToolbarButton>
+            </SplitToolbarButton>
             {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
-              <ToolbarButton
+              <SplitToolbarButton
                 icon={<Sparkles className="w-3.5 h-3.5" />}
-                onClick={() => setShowDecomposeModal(true)}
-                accent
+                onClick={() => openDecompose()}
+                onClickWithGuidance={(g) => openDecompose(g)}
+                guidanceLabel="How should the PM slice this?"
+                guidancePlaceholder={`e.g. "split by frontend / backend / data"
+or "carve out the onboarding flow as its own story first"`}
+                guidanceCta="Decompose with guidance"
                 title="Ask the PM to propose 3-7 child initiatives"
               >
                 Decompose with PM
-              </ToolbarButton>
+              </SplitToolbarButton>
             )}
             <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
@@ -660,6 +692,7 @@ export default function InitiativeDetailPage({
               open={showPlanPanel}
               workspaceId={initiative.workspace_id}
               targetInitiativeId={initiative.id}
+              initialGuidance={planGuidance}
               draft={{
                 title: initiative.title,
                 description: initiative.description ?? '',
@@ -669,7 +702,7 @@ export default function InitiativeDetailPage({
                 target_start: initiative.target_start,
                 target_end: initiative.target_end,
               }}
-              onClose={() => setShowPlanPanel(false)}
+              onClose={() => closePlanPanel()}
               onApply={async (_s, ctx) => {
                 // Route through the proposal-accept endpoint with our
                 // initiative id as the target. The server applies the
@@ -696,7 +729,7 @@ export default function InitiativeDetailPage({
                     e instanceof Error ? e.message : 'Failed to apply suggestions',
                   );
                 }
-                setShowPlanPanel(false);
+                closePlanPanel();
               }}
             />
           </div>
@@ -827,9 +860,11 @@ export default function InitiativeDetailPage({
             kind: initiative.kind,
             workspace_id: initiative.workspace_id,
           }}
-          onClose={() => setShowDecomposeModal(false)}
+          initialHint={decomposeHint}
+          onClose={() => { setShowDecomposeModal(false); setDecomposeHint(null); }}
           onAccepted={() => {
             setShowDecomposeModal(false);
+            setDecomposeHint(null);
             refresh();
           }}
         />
