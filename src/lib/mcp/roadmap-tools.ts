@@ -92,10 +92,18 @@ function errorResult(message: string, code: string, extra: Record<string, unknow
   };
 }
 
+// MCP structuredContent must be a record (object), never an array.
+// Arrays are wrapped as { data: [...] } so the protocol contract holds.
+function toStructured(result: unknown): Record<string, unknown> {
+  if (Array.isArray(result)) return { data: result };
+  if (result !== null && typeof result === 'object') return result as Record<string, unknown>;
+  return { value: result };
+}
+
 function safeWrap<T>(fn: () => T): CallToolResult {
   try {
     const result = fn();
-    return textResult(JSON.stringify(result, null, 2), result as Record<string, unknown>);
+    return textResult(JSON.stringify(result, null, 2), toStructured(result));
   } catch (err) {
     if (err instanceof PmProposalValidationError) {
       return errorResult(err.message, 'validation_failed', { hints: err.hints });
@@ -108,7 +116,7 @@ function safeWrap<T>(fn: () => T): CallToolResult {
 async function safeWrapAsync<T>(fn: () => Promise<T>): Promise<CallToolResult> {
   try {
     const result = await fn();
-    return textResult(JSON.stringify(result, null, 2), result as Record<string, unknown>);
+    return textResult(JSON.stringify(result, null, 2), toStructured(result));
   } catch (err) {
     if (err instanceof PmProposalValidationError) {
       return errorResult(err.message, 'validation_failed', { hints: err.hints });

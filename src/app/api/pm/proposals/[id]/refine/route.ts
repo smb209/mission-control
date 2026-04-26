@@ -12,10 +12,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getProposal, refineProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
-import { dispatchPm } from '@/lib/agents/pm-dispatch';
+import { dispatchPm, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { synthesizePlanInitiative, synthesizeDecompose } from '@/lib/agents/pm-agent';
 import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import { getInitiative } from '@/lib/db/initiatives';
+import { parseSuggestionsFromImpactMd } from '@/lib/pm/planSuggestionsSidecar';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,19 +77,58 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     let newChanges: unknown[];
 
     if (parent.trigger_kind === 'plan_initiative') {
-      // Re-run synthesizePlanInitiative with the operator's draft + the
-      // additional constraint folded into the description.
       const ctx = parseTriggerContext(parent.trigger_text);
       const draft = (ctx?.draft as Record<string, unknown> | undefined) ?? { title: 'Untitled' };
-      const refinedDraft = {
+      const draftTitle = (draft.title as string | undefined) ?? 'Untitled';
+
+      // Build a synth baseline (deterministic fallback) incorporating the
+      // constraint — used both as the synth-path output and as the sidecar
+      // source when the PM agent's impact_md is missing one.
+      const snapshot = getRoadmapSnapshot({ workspace_id: parent.workspace_id });
+      const synthDraft = {
         ...draft,
         description:
           (draft.description ? `${draft.description as string}\n\n` : '') +
           `Refine: ${parsed.data.additional_constraint}`,
       } as Parameters<typeof synthesizePlanInitiative>[1];
-      const snapshot = getRoadmapSnapshot({ workspace_id: parent.workspace_id });
-      const synth = synthesizePlanInitiative(snapshot, refinedDraft);
-      newImpactMd = synth.impact_md;
+      const synth = synthesizePlanInitiative(snapshot, synthDraft);
+
+      // Route through the PM gateway agent (same as the initial plan
+      // dispatch) so the refinement gets an LLM-based response instead of
+      // the deterministic heuristic that just capitalises the first letter.
+      const dispatch = await dispatchPmSynthesized({
+        workspace_id: parent.workspace_id,
+        trigger_text: child.trigger_text,
+        trigger_kind: 'plan_initiative',
+        synth: { impact_md: synth.impact_md, changes: synth.changes },
+        agent_prompt:
+          `Refine the plan for initiative titled "${draftTitle}". ` +
+          `Original draft: ${JSON.stringify(draft)}. ` +
+          `Operator refinement request: "${parsed.data.additional_constraint}"\n\n` +
+          `Produce an updated refined_description that addresses the operator's request. ` +
+          `Call \`propose_changes\` (trigger_kind='plan_initiative') with an impact_md that ` +
+          `includes a "<!--pm-plan-suggestions ...-->" sidecar. proposed_changes should be [] (advisory). ` +
+          `See your SOUL.md.`,
+      });
+
+      let agentImpactMd = dispatch.proposal.impact_md;
+
+      // Guarantee the sidecar is present — LLMs sometimes omit it even
+      // when instructed. The synth suggestions are always available here.
+      if (!parseSuggestionsFromImpactMd(agentImpactMd)) {
+        agentImpactMd =
+          agentImpactMd +
+          `\n\n<!--pm-plan-suggestions ${JSON.stringify(synth.suggestions)} -->`;
+      }
+
+      // dispatchPmSynthesized created its own proposal row — delete it
+      // since we already have the pre-allocated child from refineProposal().
+      if (dispatch.proposal.id !== child.id) {
+        const { run: del } = await import('@/lib/db');
+        del('DELETE FROM pm_proposals WHERE id = ?', [dispatch.proposal.id]);
+      }
+
+      newImpactMd = agentImpactMd;
       newChanges = synth.changes;
     } else if (parent.trigger_kind === 'decompose_initiative') {
       const ctx = parseTriggerContext(parent.trigger_text);
