@@ -4,16 +4,19 @@
  * Left navigation column rendered by the unified app shell. Replaces the
  * grab-bag of per-page header buttons with a single static taxonomy:
  *
- *   EXECUTE → task board, activity
- *   PLAN    → roadmap, initiatives, pm
+ *   PROJECT   → pm, initiatives, roadmap, task board
  *   AUTOPILOT → products
- *   WORKSPACE → settings
+ *   WORKSPACE → activity, agents, settings, debug
+ *
+ * EXECUTE / PLAN used to be separate sections; consolidated into
+ * PROJECT because they share an operator mental model (planning →
+ * shipping the same project). Activity + Agents moved into WORKSPACE
+ * because they're workspace-scoped views/configuration, not project-
+ * scoped action surfaces.
  *
  * The workspace switcher at the top is the single source of "which
  * workspace are we operating against?" — selecting one routes to that
- * workspace's task board (`/workspace/[slug]`). After Polish D the task
- * board lives inside the shell, so the nav stays visible while the
- * operator is queueing up work.
+ * workspace's task board (`/workspace/[slug]`).
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -63,19 +66,14 @@ interface NavSection {
 function buildSections(taskBoardHref: string): NavSection[] {
   return [
     {
-      title: 'Execute',
+      title: 'Project',
       items: [
-        { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
-        { href: '/agents', label: 'Agents', icon: Users, prefix: true },
-        { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
-      ],
-    },
-    {
-      title: 'Plan',
-      items: [
-        { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
-        { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
+        // Order is project-lifecycle: ideate (PM) → plan (Initiatives) →
+        // schedule (Roadmap) → ship (Task Board).
         { href: '/pm', label: 'PM', icon: Bot },
+        { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
+        { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
+        { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
       ],
     },
     {
@@ -87,6 +85,13 @@ function buildSections(taskBoardHref: string): NavSection[] {
     {
       title: 'Workspace',
       items: [
+        // Workspace-scoped views + configuration. Activity used to be
+        // a top-level "EXECUTE" entry that landed on a workspace
+        // picker; it now redirects to the current workspace's activity
+        // dashboard so this entry skips the extra click. Agents are
+        // workspace-scoped configuration, so they belong here too.
+        { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
+        { href: '/agents', label: 'Agents', icon: Users, prefix: true },
         { href: '/settings', label: 'Settings', icon: SettingsIcon },
         { href: '/debug', label: 'Debug', icon: Bug, prefix: true },
       ],
