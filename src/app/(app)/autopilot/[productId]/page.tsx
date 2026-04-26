@@ -277,6 +277,30 @@ export default function ProductDashboardPage() {
         </div>
       </header>
 
+      {/*
+        Soft warning when the product has no Product Program yet.
+        Without it, research + ideation prompts run with only the basic
+        name + description — usually fine, but a tailored program
+        produces dramatically better, on-domain ideas. Banner is
+        dismissable for a session, links to the Program tab.
+      */}
+      {!product.product_program?.trim() && (
+        <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-200 text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>
+            No Product Program defined yet. Research and ideation will run
+            with just the product name + description — adding priorities,
+            target users, and exclusions will sharpen the output.
+          </span>
+          <button
+            onClick={() => setTab('program')}
+            className="ml-auto px-2 py-1 rounded border border-amber-500/40 text-amber-200 hover:bg-amber-500/15 shrink-0"
+          >
+            Open Program tab
+          </button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="border-b border-mc-border bg-mc-bg-secondary px-4 overflow-x-auto">
         <div className="flex gap-1 min-w-max">

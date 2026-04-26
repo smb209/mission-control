@@ -29,7 +29,7 @@ import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { parseSuggestionsFromImpactMd } from '@/lib/pm/applyPlanInitiativeProposal';
-import { run } from '@/lib/db';
+import { run, queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,6 +72,42 @@ export async function POST(request: NextRequest) {
       mode: 'plan_initiative',
       draft: parsed.data.draft,
     });
+
+    // Dedupe identical requests fired in quick succession. React
+    // StrictMode in dev double-invokes effects on mount, so the
+    // PlanWithPmPanel posts twice per open. Without this, every dev
+    // open creates two pm_proposals rows (and hits the gateway twice).
+    // Treat any draft-identical proposal created in the last ~2s as
+    // the same logical request.
+    const recent = queryOne<{ id: string; impact_md: string; trigger_text: string; created_at: string }>(
+      `SELECT id, impact_md, trigger_text, created_at FROM pm_proposals
+       WHERE workspace_id = ?
+         AND trigger_kind = 'plan_initiative'
+         AND trigger_text = ?
+         AND status = 'draft'
+         AND created_at >= datetime('now', '-2 seconds')
+       ORDER BY created_at DESC LIMIT 1`,
+      [parsed.data.workspace_id, triggerText],
+    );
+    if (recent) {
+      // Re-fetch full row to match the shape the rest of the route uses.
+      const full = queryOne<{
+        id: string; workspace_id: string; trigger_text: string; trigger_kind: string;
+        impact_md: string; proposed_changes: string; status: string; applied_at: string | null;
+        applied_by_agent_id: string | null; parent_proposal_id: string | null; created_at: string;
+      }>('SELECT * FROM pm_proposals WHERE id = ?', [recent.id]);
+      if (full) {
+        return NextResponse.json(
+          {
+            proposal_id: full.id,
+            proposal: { ...full, proposed_changes: JSON.parse(full.proposed_changes) },
+            suggestions: synth.suggestions,
+            deduped: true,
+          },
+          { status: 201 },
+        );
+      }
+    }
 
     // Try the named-agent path first (PM gateway agent at
     // ~/.openclaw/workspaces/mc-project-manager). On timeout or no
