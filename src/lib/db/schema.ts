@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS agents (
   avatar_emoji TEXT DEFAULT '🤖',
   status TEXT DEFAULT 'standby' CHECK (status IN ('standby', 'working', 'offline')),
   is_master INTEGER DEFAULT 0,
-  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
   soul_md TEXT,
   user_md TEXT,
   agents_md TEXT,
@@ -52,12 +52,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT,
   status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'draft', 'assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification', 'done', 'cancelled', 'needs_user_input')),
   priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
-  assigned_agent_id TEXT REFERENCES agents(id),
-  created_by_agent_id TEXT REFERENCES agents(id),
-  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+  assigned_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  created_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
   business_id TEXT DEFAULT 'default',
   due_date TEXT,
-  workflow_template_id TEXT REFERENCES workflow_templates(id),
+  workflow_template_id TEXT REFERENCES workflow_templates(id) ON DELETE SET NULL,
   planning_session_key TEXT,
   planning_messages TEXT,
   planning_complete INTEGER DEFAULT 0,
@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   images TEXT,
   convoy_id TEXT,
   is_subtask INTEGER DEFAULT 0,
-  product_id TEXT REFERENCES products(id),
-  idea_id TEXT REFERENCES ideas(id),
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  idea_id TEXT REFERENCES ideas(id) ON DELETE SET NULL,
   estimated_cost_usd REAL,
   actual_cost_usd REAL DEFAULT 0,
   repo_url TEXT,
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   is_archived INTEGER DEFAULT 0,
   archived_at TEXT,
   include_knowledge INTEGER DEFAULT 0,
-  initiative_id TEXT REFERENCES initiatives(id),
+  initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
   status_check_md TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- Workspace port allocations for parallel build isolation
 CREATE TABLE IF NOT EXISTS workspace_ports (
   id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   port INTEGER NOT NULL UNIQUE,
   product_id TEXT,
   status TEXT NOT NULL DEFAULT 'active',
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS workspace_ports (
 -- Workspace merge history
 CREATE TABLE IF NOT EXISTS workspace_merges (
   id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL REFERENCES tasks(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   workspace_path TEXT NOT NULL,
   strategy TEXT NOT NULL,
   base_commit TEXT,
@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   title TEXT,
   type TEXT DEFAULT 'direct' CHECK (type IN ('direct', 'group', 'task')),
-  task_id TEXT REFERENCES tasks(id),
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS conversation_participants (
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE,
-  sender_agent_id TEXT REFERENCES agents(id),
+  sender_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   content TEXT NOT NULL,
   message_type TEXT DEFAULT 'text' CHECK (message_type IN ('text', 'system', 'task_update', 'file')),
   metadata TEXT,
@@ -175,8 +175,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
-  agent_id TEXT REFERENCES agents(id),
-  task_id TEXT REFERENCES tasks(id),
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   message TEXT NOT NULL,
   metadata TEXT,
   created_at TEXT DEFAULT (datetime('now'))
@@ -193,12 +193,12 @@ CREATE TABLE IF NOT EXISTS businesses (
 -- OpenClaw session mapping
 CREATE TABLE IF NOT EXISTS openclaw_sessions (
   id TEXT PRIMARY KEY,
-  agent_id TEXT REFERENCES agents(id),
+  agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
   openclaw_session_id TEXT NOT NULL,
   channel TEXT,
   status TEXT DEFAULT 'active',
   session_type TEXT DEFAULT 'persistent',
-  task_id TEXT REFERENCES tasks(id),
+  task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
   ended_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS openclaw_sessions (
 -- Workflow templates (per-workspace workflow definitions)
 CREATE TABLE IF NOT EXISTS workflow_templates (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   stages TEXT NOT NULL,
@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS task_roles (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   role TEXT NOT NULL,
-  agent_id TEXT NOT NULL REFERENCES agents(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(task_id, role)
 );
@@ -230,14 +230,14 @@ CREATE TABLE IF NOT EXISTS task_roles (
 -- Knowledge entries (learner knowledge base)
 CREATE TABLE IF NOT EXISTS knowledge_entries (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
-  task_id TEXT REFERENCES tasks(id),
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   category TEXT NOT NULL,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
   tags TEXT,
   confidence REAL DEFAULT 0.5,
-  created_by_agent_id TEXT REFERENCES agents(id),
+  created_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -245,7 +245,7 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
 CREATE TABLE IF NOT EXISTS task_activities (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  agent_id TEXT REFERENCES agents(id),
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   activity_type TEXT NOT NULL,
   message TEXT NOT NULL,
   metadata TEXT,
@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS convoy_subtasks (
 CREATE TABLE IF NOT EXISTS agent_health (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  task_id TEXT REFERENCES tasks(id),
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   health_state TEXT DEFAULT 'idle' CHECK (health_state IN ('idle', 'working', 'stalled', 'stuck', 'zombie', 'offline')),
   last_activity_at TEXT,
   last_checkpoint_at TEXT,
@@ -328,7 +328,7 @@ CREATE TABLE IF NOT EXISTS agent_health (
 CREATE TABLE IF NOT EXISTS work_checkpoints (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  agent_id TEXT NOT NULL REFERENCES agents(id),
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   checkpoint_type TEXT DEFAULT 'auto' CHECK (checkpoint_type IN ('auto', 'manual', 'crash_recovery')),
   state_summary TEXT NOT NULL,
   files_snapshot TEXT,
@@ -343,8 +343,8 @@ CREATE TABLE IF NOT EXISTS agent_mailbox (
   id TEXT PRIMARY KEY,
   convoy_id TEXT REFERENCES convoys(id) ON DELETE CASCADE,
   task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
-  from_agent_id TEXT NOT NULL REFERENCES agents(id),
-  to_agent_id TEXT NOT NULL REFERENCES agents(id),
+  from_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  to_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   subject TEXT,
   body TEXT NOT NULL,
   read_at TEXT,
@@ -359,8 +359,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_mailbox_task ON agent_mailbox(task_id) WHER
 -- surface two distinct failure modes (couldn't deliver vs. agent silent).
 CREATE TABLE IF NOT EXISTS rollcall_sessions (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  initiator_agent_id TEXT NOT NULL REFERENCES agents(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  initiator_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('direct', 'coordinator')),
   timeout_seconds INTEGER NOT NULL DEFAULT 30,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -369,7 +369,7 @@ CREATE TABLE IF NOT EXISTS rollcall_sessions (
 CREATE TABLE IF NOT EXISTS rollcall_entries (
   id TEXT PRIMARY KEY,
   rollcall_id TEXT NOT NULL REFERENCES rollcall_sessions(id) ON DELETE CASCADE,
-  target_agent_id TEXT NOT NULL REFERENCES agents(id),
+  target_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   delivery_status TEXT NOT NULL DEFAULT 'pending' CHECK (delivery_status IN ('pending', 'sent', 'failed', 'skipped')),
   delivery_error TEXT,
   delivered_at TEXT,
@@ -384,7 +384,7 @@ CREATE INDEX IF NOT EXISTS idx_rollcall_entries_target ON rollcall_entries(targe
 -- Products table (Product Autopilot)
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   repo_url TEXT,
@@ -412,7 +412,7 @@ CREATE TABLE IF NOT EXISTS research_cycles (
   ideas_generated INTEGER DEFAULT 0,
   cost_usd REAL DEFAULT 0,
   tokens_used INTEGER DEFAULT 0,
-  agent_id TEXT REFERENCES agents(id),
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   current_phase TEXT DEFAULT 'init',
   phase_data TEXT,
   session_key TEXT,
@@ -426,8 +426,8 @@ CREATE TABLE IF NOT EXISTS research_cycles (
 -- Ideation cycles: AI ideation runs per product
 CREATE TABLE IF NOT EXISTS ideation_cycles (
   id TEXT PRIMARY KEY,
-  product_id TEXT NOT NULL REFERENCES products(id),
-  research_cycle_id TEXT REFERENCES research_cycles(id),
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  research_cycle_id TEXT REFERENCES research_cycles(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
   current_phase TEXT DEFAULT 'init',
   phase_data TEXT,
@@ -443,7 +443,7 @@ CREATE TABLE IF NOT EXISTS ideation_cycles (
 -- Autopilot activity log: real-time activity tracking
 CREATE TABLE IF NOT EXISTS autopilot_activity_log (
   id TEXT PRIMARY KEY,
-  product_id TEXT NOT NULL REFERENCES products(id),
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   cycle_id TEXT NOT NULL,
   cycle_type TEXT NOT NULL CHECK(cycle_type IN ('research', 'ideation')),
   event_type TEXT NOT NULL,
@@ -458,7 +458,7 @@ CREATE TABLE IF NOT EXISTS autopilot_activity_log (
 CREATE TABLE IF NOT EXISTS ideas (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  cycle_id TEXT REFERENCES research_cycles(id),
+  cycle_id TEXT REFERENCES research_cycles(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   description TEXT NOT NULL,
   category TEXT NOT NULL CHECK (category IN (
@@ -482,15 +482,15 @@ CREATE TABLE IF NOT EXISTS ideas (
     'pending', 'approved', 'rejected', 'maybe', 'building', 'built', 'shipped'
   )),
   swiped_at TEXT,
-  task_id TEXT REFERENCES tasks(id),
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   user_notes TEXT,
-  resurfaced_from TEXT REFERENCES ideas(id),
+  resurfaced_from TEXT REFERENCES ideas(id) ON DELETE SET NULL,
   resurfaced_reason TEXT,
   similarity_flag TEXT,
   auto_suppressed INTEGER DEFAULT 0,
   suppress_reason TEXT,
-  variant_id TEXT REFERENCES product_program_variants(id),
-  initiative_id TEXT REFERENCES initiatives(id),
+  variant_id TEXT REFERENCES product_program_variants(id) ON DELETE SET NULL,
+  initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -512,7 +512,7 @@ CREATE TABLE IF NOT EXISTS idea_suppressions (
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   suppressed_title TEXT NOT NULL,
   suppressed_description TEXT NOT NULL,
-  similar_to_idea_id TEXT NOT NULL REFERENCES ideas(id),
+  similar_to_idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
   similarity_score REAL NOT NULL,
   reason TEXT NOT NULL,
   ideation_cycle_id TEXT,
@@ -572,18 +572,18 @@ CREATE TABLE IF NOT EXISTS product_feedback (
   category TEXT,
   sentiment TEXT CHECK (sentiment IN ('positive', 'negative', 'neutral', 'mixed')),
   processed INTEGER DEFAULT 0,
-  idea_id TEXT REFERENCES ideas(id),
+  idea_id TEXT REFERENCES ideas(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
 -- Cost events: granular cost tracking per operation
 CREATE TABLE IF NOT EXISTS cost_events (
   id TEXT PRIMARY KEY,
-  product_id TEXT REFERENCES products(id),
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  task_id TEXT REFERENCES tasks(id),
-  cycle_id TEXT REFERENCES research_cycles(id),
-  agent_id TEXT REFERENCES agents(id),
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  cycle_id TEXT REFERENCES research_cycles(id) ON DELETE SET NULL,
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   event_type TEXT NOT NULL CHECK (event_type IN (
     'agent_dispatch', 'research_cycle', 'ideation_cycle', 'build_task',
     'content_generation', 'seo_analysis', 'web_search', 'external_api'
@@ -600,8 +600,8 @@ CREATE TABLE IF NOT EXISTS cost_events (
 -- Cost caps: spending limits per workspace/product
 CREATE TABLE IF NOT EXISTS cost_caps (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  product_id TEXT REFERENCES products(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
   cap_type TEXT NOT NULL CHECK (cap_type IN ('per_cycle', 'per_task', 'daily', 'monthly', 'per_product_monthly')),
   limit_usd REAL NOT NULL,
   current_spend_usd REAL DEFAULT 0,
@@ -644,7 +644,7 @@ CREATE TABLE IF NOT EXISTS operations_log (
   summary TEXT,
   details TEXT,
   cost_usd REAL DEFAULT 0,
-  agent_id TEXT REFERENCES agents(id),
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -662,8 +662,8 @@ CREATE TABLE IF NOT EXISTS content_inventory (
   target_keywords TEXT,
   performance TEXT,
   last_refreshed_at TEXT,
-  idea_id TEXT REFERENCES ideas(id),
-  task_id TEXT REFERENCES tasks(id),
+  idea_id TEXT REFERENCES ideas(id) ON DELETE SET NULL,
+  task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -679,7 +679,7 @@ CREATE TABLE IF NOT EXISTS social_queue (
   status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'posted', 'failed')),
   posted_at TEXT,
   performance TEXT,
-  idea_id TEXT REFERENCES ideas(id),
+  idea_id TEXT REFERENCES ideas(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -766,13 +766,13 @@ CREATE TABLE IF NOT EXISTS product_program_variants (
 CREATE TABLE IF NOT EXISTS product_ab_tests (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  variant_a_id TEXT NOT NULL REFERENCES product_program_variants(id),
-  variant_b_id TEXT NOT NULL REFERENCES product_program_variants(id),
+  variant_a_id TEXT NOT NULL REFERENCES product_program_variants(id) ON DELETE CASCADE,
+  variant_b_id TEXT NOT NULL REFERENCES product_program_variants(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'concluded', 'cancelled')),
   split_mode TEXT NOT NULL DEFAULT 'concurrent' CHECK (split_mode IN ('concurrent', 'alternating')),
   min_swipes INTEGER NOT NULL DEFAULT 50,
   last_variant_used TEXT,
-  winner_variant_id TEXT REFERENCES product_program_variants(id),
+  winner_variant_id TEXT REFERENCES product_program_variants(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   concluded_at TEXT
 );
@@ -791,9 +791,9 @@ CREATE TABLE IF NOT EXISTS product_skills (
   times_used INTEGER DEFAULT 0,
   times_succeeded INTEGER DEFAULT 0,
   last_used_at TEXT,
-  created_by_task_id TEXT REFERENCES tasks(id),
-  created_by_agent_id TEXT REFERENCES agents(id),
-  supersedes_skill_id TEXT REFERENCES product_skills(id),
+  created_by_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  created_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  supersedes_skill_id TEXT REFERENCES product_skills(id) ON DELETE SET NULL,
   status TEXT DEFAULT 'draft' CHECK (status IN ('active', 'deprecated', 'draft')),
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -803,7 +803,7 @@ CREATE TABLE IF NOT EXISTS product_skills (
 CREATE TABLE IF NOT EXISTS skill_reports (
   id TEXT PRIMARY KEY,
   skill_id TEXT NOT NULL REFERENCES product_skills(id) ON DELETE CASCADE,
-  task_id TEXT NOT NULL REFERENCES tasks(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   used INTEGER NOT NULL DEFAULT 1,
   succeeded INTEGER NOT NULL DEFAULT 0,
   deviation TEXT,
@@ -839,15 +839,15 @@ CREATE TABLE IF NOT EXISTS debug_config (
 -- nullable so a backlog item can be a one-line title with no other detail.
 CREATE TABLE IF NOT EXISTS initiatives (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-  product_id TEXT REFERENCES products(id),
-  parent_initiative_id TEXT REFERENCES initiatives(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  parent_initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
   kind TEXT NOT NULL CHECK (kind IN ('theme','milestone','epic','story')),
   title TEXT NOT NULL,
   description TEXT,
   status TEXT NOT NULL DEFAULT 'planned'
     CHECK (status IN ('planned','in_progress','at_risk','blocked','done','cancelled')),
-  owner_agent_id TEXT REFERENCES agents(id),
+  owner_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   estimated_effort_hours REAL,
   complexity TEXT CHECK (complexity IN ('S','M','L','XL')),
   target_start TEXT,
@@ -857,7 +857,7 @@ CREATE TABLE IF NOT EXISTS initiatives (
   committed_end TEXT,
   status_check_md TEXT,
   sort_order INTEGER DEFAULT 0,
-  source_idea_id TEXT REFERENCES ideas(id),
+  source_idea_id TEXT REFERENCES ideas(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -878,9 +878,9 @@ CREATE TABLE IF NOT EXISTS initiative_dependencies (
 CREATE TABLE IF NOT EXISTS initiative_parent_history (
   id TEXT PRIMARY KEY,
   initiative_id TEXT NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
-  from_parent_id TEXT REFERENCES initiatives(id),
-  to_parent_id TEXT REFERENCES initiatives(id),
-  moved_by_agent_id TEXT REFERENCES agents(id),
+  from_parent_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
+  to_parent_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
+  moved_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -889,9 +889,9 @@ CREATE TABLE IF NOT EXISTS initiative_parent_history (
 CREATE TABLE IF NOT EXISTS task_initiative_history (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  from_initiative_id TEXT REFERENCES initiatives(id),
-  to_initiative_id TEXT REFERENCES initiatives(id),
-  moved_by_agent_id TEXT REFERENCES agents(id),
+  from_initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
+  to_initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
+  moved_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -909,7 +909,7 @@ CREATE TABLE IF NOT EXISTS owner_availability (
 -- PM proposal artifacts (Phase 5 will populate these).
 CREATE TABLE IF NOT EXISTS pm_proposals (
   id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   trigger_text TEXT NOT NULL,
   trigger_kind TEXT NOT NULL DEFAULT 'manual'
     CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative')),
@@ -918,8 +918,8 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   status TEXT NOT NULL DEFAULT 'draft'
     CHECK (status IN ('draft','accepted','rejected','superseded')),
   applied_at TEXT,
-  applied_by_agent_id TEXT REFERENCES agents(id),
-  parent_proposal_id TEXT REFERENCES pm_proposals(id),
+  applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

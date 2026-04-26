@@ -118,13 +118,17 @@ test('deleteWorkspaceCascade cascades through task dependents (task_deliverables
   assert.equal(orphan, undefined);
 });
 
-test('deleteWorkspaceCascade cleans non-cascading task refs (events.task_id)', () => {
+test('deleteWorkspaceCascade preserves audit trail in events (SET NULL on task_id)', () => {
   const ws = seedWorkspace('NonCascading');
   const taskId = seedTask(ws.id);
 
-  // events.task_id is a plain reference (no ON DELETE CASCADE). If our
-  // helper doesn't snipe it, deleting tasks would either fail (FK on)
-  // or leave orphans (FK off, naive).
+  // events.task_id is `ON DELETE SET NULL` — the audit trail survives
+  // task deletion (the event still happened). Pre-cascade-safety this
+  // FK was a plain reference and the workspace helper had to manually
+  // delete events; under migration 048 the FK does the right thing.
+  // The point of this test is twofold:
+  //   1. Cascade succeeds without FK constraint errors (the ws is gone).
+  //   2. The event row survives with task_id nulled out.
   const eventId = uuidv4();
   run(
     `INSERT INTO events (id, type, task_id, message, created_at)
@@ -134,13 +138,22 @@ test('deleteWorkspaceCascade cleans non-cascading task refs (events.task_id)', (
 
   deleteWorkspaceCascade(ws.id);
 
-  // Workspace is gone — and re-enabling FKs at the end shouldn't have
-  // tripped on a stale event row.
+  // Workspace is gone, task is gone.
   const wsRow = queryOne<{ id: string }>('SELECT id FROM workspaces WHERE id = ?', [ws.id]);
   assert.equal(wsRow, undefined);
+  const taskRow = queryOne<{ id: string }>('SELECT id FROM tasks WHERE id = ?', [taskId]);
+  assert.equal(taskRow, undefined);
 
-  const evtRow = queryOne<{ id: string }>('SELECT id FROM events WHERE id = ?', [eventId]);
-  assert.equal(evtRow, undefined);
+  // Event row survives with task_id nulled.
+  const evtRow = queryOne<{ id: string; task_id: string | null }>(
+    'SELECT id, task_id FROM events WHERE id = ?',
+    [eventId],
+  );
+  assert.ok(evtRow, 'event row should survive task deletion (audit trail)');
+  assert.equal(evtRow.task_id, null);
+
+  // Cleanup the now-orphaned event so it doesn't leak into other tests.
+  run('DELETE FROM events WHERE id = ?', [eventId]);
 });
 
 test('deleteWorkspaceCascade refuses to delete the default workspace', () => {
