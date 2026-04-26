@@ -16,8 +16,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { run } from '@/lib/db';
+import { run, queryOne } from '@/lib/db';
 import { buildServer } from './server';
+import { createInitiative } from '@/lib/db/initiatives';
 
 async function makePair() {
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
@@ -419,4 +420,92 @@ test('request_knowledge scores title/tag/content hits and filters unrelated entr
   // Unrelated "Foreign entity" / "PEO" entries should not leak in — the
   // exact regression the old auto-injector produced.
   assert.ok(!payload.matches.some(m => /foreign entity|PEO/i.test(m.title)));
+});
+
+// ─── propose_changes (PM) ───────────────────────────────────────────
+
+test('propose_changes accepts decompose_initiative trigger + create_child_initiative diffs', async () => {
+  const { client } = await makePair();
+  const ws = `ws-${crypto.randomUUID().slice(0, 8)}`;
+  run(
+    `INSERT INTO workspaces (id, name, slug, icon) VALUES (?, ?, ?, '🧪')`,
+    [ws, ws, ws],
+  );
+  const me = seedAgent({ workspace: ws, role: 'pm' });
+  const parent = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Parent epic' });
+
+  const res = await client.callTool({
+    name: 'propose_changes',
+    arguments: {
+      agent_id: me,
+      workspace_id: ws,
+      trigger_text: 'decompose this epic into child stories',
+      trigger_kind: 'decompose_initiative',
+      impact_md: '- splits parent into 2 sequential children',
+      changes: [
+        {
+          kind: 'create_child_initiative',
+          parent_initiative_id: parent.id,
+          title: 'Foundation',
+          description: 'Foundation work',
+          child_kind: 'story',
+          complexity: 'M',
+          placeholder_id: '$0',
+        },
+        {
+          kind: 'create_child_initiative',
+          parent_initiative_id: parent.id,
+          title: 'Build on top',
+          child_kind: 'story',
+          complexity: 'M',
+          depends_on_initiative_ids: ['$0'],
+        },
+      ],
+    },
+  });
+  assert.equal(res.isError, undefined, 'schema must accept the documented PM decompose payload');
+  const proposal = parseStructured<{ id: string; trigger_kind: string; status: string; proposed_changes: unknown[] }>(res);
+  assert.equal(proposal.trigger_kind, 'decompose_initiative');
+  assert.equal(proposal.status, 'draft', 'apply happens at accept time, not at propose time');
+  assert.equal(proposal.proposed_changes.length, 2);
+  // Defence-in-depth: row is actually persisted with the right trigger_kind.
+  const row = queryOne<{ status: string; trigger_kind: string }>(
+    'SELECT status, trigger_kind FROM pm_proposals WHERE id = ?',
+    [proposal.id],
+  );
+  assert.equal(row?.status, 'draft');
+  assert.equal(row?.trigger_kind, 'decompose_initiative');
+});
+
+test('propose_changes rejects an unknown diff kind', async () => {
+  const { client } = await makePair();
+  const ws = `ws-${crypto.randomUUID().slice(0, 8)}`;
+  run(
+    `INSERT INTO workspaces (id, name, slug, icon) VALUES (?, ?, ?, '🧪')`,
+    [ws, ws, ws],
+  );
+  const me = seedAgent({ workspace: ws, role: 'pm' });
+
+  // The discriminated union should reject "nope" as a diff kind. Depending on
+  // the SDK transport, that surfaces either as a JSON-RPC rejection or as
+  // `isError: true` — accept either, just not silent success.
+  let rejected = false;
+  let isError = false;
+  try {
+    const res = await client.callTool({
+      name: 'propose_changes',
+      arguments: {
+        agent_id: me,
+        workspace_id: ws,
+        trigger_text: 'bad',
+        trigger_kind: 'manual',
+        impact_md: '-',
+        changes: [{ kind: 'nope', initiative_id: 'x' }],
+      },
+    });
+    isError = res.isError === true;
+  } catch {
+    rejected = true;
+  }
+  assert.ok(rejected || isError, 'unknown diff kind must not silently pass schema validation');
 });

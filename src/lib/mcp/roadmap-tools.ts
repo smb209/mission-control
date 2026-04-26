@@ -170,6 +170,22 @@ const DiffSchema = z.discriminatedUnion('kind', [
     initiative_id: z.string().min(1),
     status_check_md: z.string(),
   }),
+  z.object({
+    // Decompose flow: insert one child initiative under
+    // `parent_initiative_id` on accept. `depends_on_initiative_ids` may
+    // carry placeholder ids (`$0`, `$1`, …) that resolve post-insert
+    // against other create_child_initiative diffs in the same proposal.
+    kind: z.literal('create_child_initiative'),
+    parent_initiative_id: z.string().min(1),
+    title: z.string().min(1),
+    description: z.string().nullish(),
+    child_kind: z.enum(['epic', 'story']),
+    complexity: z.enum(['S', 'M', 'L', 'XL']).nullish(),
+    estimated_effort_hours: z.number().nullish(),
+    sort_order: z.number().optional(),
+    depends_on_initiative_ids: z.array(z.string().min(1)).optional(),
+    placeholder_id: z.string().optional(),
+  }),
 ]);
 
 export function registerRoadmapTools(server: McpServer): void {
@@ -566,6 +582,8 @@ export function registerRoadmapTools(server: McpServer): void {
             'scheduled_drift_scan',
             'disruption_event',
             'status_check_investigation',
+            'plan_initiative',
+            'decompose_initiative',
           ])
           .optional(),
         impact_md: z.string().min(1).max(20000),
