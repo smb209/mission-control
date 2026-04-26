@@ -5,6 +5,17 @@ node_modules
 .next
 coverage
 
+# Local development / agent state — never ship in the image
+.tmp
+.claude
+data
+db-backups
+openclaw-workspaces
+presentation
+.cursor
+.vscode
+.idea
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
