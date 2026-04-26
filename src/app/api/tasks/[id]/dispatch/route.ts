@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToAgent } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
 import { getTaskDeliverableDir } from '@/lib/deliverables/storage';
@@ -738,59 +739,50 @@ If you need help or clarification, ask the orchestrator.`;
     const { formatted: pendingNotes } = getPendingNotesForDispatch(id);
     const finalMessage = pendingNotes ? taskMessage + pendingNotes : taskMessage;
 
-    // Send message to agent's session using chat.send
+    // Send message to agent's session using chat.send.
+    // sessionKey resolution lives in `buildAgentSessionKey` (called by
+    // `sendChatToAgent`):
+    //   1. Explicit `agent.session_key_prefix` if set
+    //   2. `agent:<gateway_agent_id>:` for gateway-synced agents
+    //   3. `agent:<name-slug>:` as last resort
+    // The old hard-coded `agent:main:` catchall silently misrouted
+    // every MC→agent chat.send to the gateway's "main" agent.
     try {
-      // Use sessionKey for routing to the agent's session.
-      // Prefix defaults (via resolveAgentSessionKeyPrefix) are:
-      //   1. Explicit `agent.session_key_prefix` if set
-      //   2. `agent:<gateway_agent_id>:` for gateway-synced agents
-      //   3. `agent:<name-slug>:` as last resort
-      // The old hard-coded `agent:main:` catchall silently misrouted
-      // every MC→agent chat.send to the gateway's "main" agent.
-      const { resolveAgentSessionKeyPrefix } = await import('@/lib/openclaw/session-key');
-      const prefix = resolveAgentSessionKeyPrefix(agent);
-      const sessionKey = `${prefix}${session.openclaw_session_id}`;
       const idempotencyKey = `dispatch-${task.id}-${Date.now()}`;
       const chatSendStart = Date.now();
-      let chatSendResponse: unknown;
-      let chatSendError: string | null = null;
-      try {
-        // TODO(comms-cleanup): migrate to `sendChatToAgent`. Held back
-        // because this path needs the raw chat.send response (logged
-        // below as the canonical dispatch debug event) and a custom
-        // failure rethrow. The helper currently swallows transport
-        // errors; either widen its return shape or extract a thin
-        // `sendRaw` variant before migrating.
-        chatSendResponse = await client.call('chat.send', {
-          sessionKey,
-          message: finalMessage,
-          idempotencyKey,
-        });
-      } catch (err) {
-        chatSendError = (err as Error).message;
-        throw err; // preserve existing error-path behavior below
-      } finally {
-        // Debug console capture. No-op unless collection is enabled. Stores
-        // the full dispatch payload so operators can see exactly what the
-        // agent was asked to do — including injected knowledge, checkpoint
-        // context, and planning spec.
-        logDebugEvent({
-          type: 'chat.send',
-          direction: 'outbound',
-          taskId: task.id,
-          agentId: agent.id,
-          sessionKey,
-          durationMs: Date.now() - chatSendStart,
-          requestBody: { sessionKey, message: finalMessage, idempotencyKey },
-          responseBody: chatSendResponse,
-          error: chatSendError,
-          metadata: {
-            agent_name: agent.name,
-            agent_role: (agent as { role?: string }).role ?? null,
-            message_length: finalMessage.length,
-            task_status: task.status,
-          },
-        });
+      const sendResult = await sendChatToAgent({
+        agent,
+        message: finalMessage,
+        idempotencyKey,
+        sessionSuffix: session.openclaw_session_id,
+      });
+      const sessionKey = sendResult.sessionKey;
+      // Debug console capture. No-op unless collection is enabled. Stores
+      // the full dispatch payload so operators can see exactly what the
+      // agent was asked to do — including injected knowledge, checkpoint
+      // context, and planning spec.
+      logDebugEvent({
+        type: 'chat.send',
+        direction: 'outbound',
+        taskId: task.id,
+        agentId: agent.id,
+        sessionKey,
+        durationMs: Date.now() - chatSendStart,
+        requestBody: { sessionKey, message: finalMessage, idempotencyKey },
+        responseBody: sendResult.sent ? sendResult.response : undefined,
+        error: sendResult.sent ? null : (sendResult.error?.message ?? sendResult.reason ?? 'send_failed'),
+        metadata: {
+          agent_name: agent.name,
+          agent_role: (agent as { role?: string }).role ?? null,
+          message_length: finalMessage.length,
+          task_status: task.status,
+        },
+      });
+      if (!sendResult.sent) {
+        // Preserve existing error-path behavior — the outer catch
+        // updates task status, force-reconnects the client, and
+        // returns 503.
+        throw sendResult.error ?? new Error(sendResult.reason ?? 'chat.send failed');
       }
 
       // Only move to in_progress for builder dispatch (task is in 'assigned' status)

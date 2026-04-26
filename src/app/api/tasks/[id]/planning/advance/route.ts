@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
 import {
   buildResearchKickoffPrompt,
@@ -95,11 +96,14 @@ export async function POST(
     // planner emits next.
     const client = getOpenClawClient();
     if (!client.isConnected()) await client.connect();
-    await client.call('chat.send', {
+    const sendResult = await sendChatToSession({
       sessionKey: task.planning_session_key,
       message: prompt,
       idempotencyKey: `planning-advance-${to}-${taskId}-${Date.now()}`,
     });
+    if (!sendResult.sent) {
+      throw sendResult.error ?? new Error(sendResult.reason ?? 'chat.send failed');
+    }
 
     // Record the transition. We store the "target" phase optimistically so the
     // UI renders the right loader while the planner responds. The poll loop

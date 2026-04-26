@@ -1,7 +1,7 @@
 /**
  * Centralised `chat.send` helpers for MC → openclaw routing.
  *
- * Two surfaces:
+ * Three surfaces:
  *
  *   1. `sendChatToAgent(...)` — fire-and-forget chat send. Resolves the
  *      sessionKey from an Agent row via `resolveAgentSessionKeyPrefix`,
@@ -9,7 +9,12 @@
  *      than throwing. Replaces the 5+ hand-rolled
  *      `client.call('chat.send', ...)` call sites (PR #55 follow-up).
  *
- *   2. `sendChatAndAwaitReply(...)` — subscribe-then-send-then-await
+ *   2. `sendChatToSession(...)` — same shape as `sendChatToAgent` but
+ *      takes a pre-built `sessionKey` directly. Used by call sites that
+ *      have a stored session key (e.g. `task.planning_session_key`) and
+ *      no convenient agent row to resolve from.
+ *
+ *   3. `sendChatAndAwaitReply(...)` — subscribe-then-send-then-await
  *      primitive. Subscribes to the openclaw client's `chat_event` stream
  *      BEFORE sending so we never miss the first frame, then collects
  *      events until either the caller's `isDone` predicate fires or the
@@ -23,10 +28,21 @@
  *     `__setSendChatClientForTests`). It does NOT take a client param —
  *     that would make migration noisy at every call site.
  *
- *   - `sendChatToAgent` returns `{ sent: false, reason: 'no_session' }`
- *     when `client.isConnected()` is false. That mirrors the existing
- *     guard pattern (`if (client.isConnected()) ...`) used in every
- *     hand-rolled call site today.
+ *   - `sendChatToAgent` / `sendChatToSession` return
+ *     `{ sent: false, reason: 'no_session' }` when `client.isConnected()`
+ *     is false. That mirrors the existing guard pattern
+ *     (`if (client.isConnected()) ...`) used in every hand-rolled call
+ *     site today.
+ *
+ *   - When `timeoutMs` is set on a fire-and-forget send and the
+ *     underlying `chat.send` call doesn't resolve before the deadline,
+ *     the helper resolves with `{ sent: false, reason: 'timeout' }`.
+ *     The in-flight call is NOT aborted (the underlying client surface
+ *     here doesn't expose a cancellation handle — see
+ *     `OpenClawClient.call`); it completes in the background and its
+ *     resolution/rejection is discarded. Trade-off: callers can't get
+ *     surprised by a late-arriving response, at the cost of a small
+ *     wasted gateway round-trip when timeouts fire.
  *
  *   - `sendChatAndAwaitReply` does not subscribe when the underlying send
  *     fails or there's no session — it short-circuits with the
@@ -57,14 +73,39 @@ export interface SendChatInput {
   idempotencyKey?: string;
   /** Appended to the resolved prefix. Defaults to 'main'. */
   sessionSuffix?: string;
+  /**
+   * Optional per-call timeout for the underlying `chat.send`. When the
+   * deadline elapses before the call resolves, the helper resolves with
+   * `{ sent: false, reason: 'timeout' }`. The in-flight call is left to
+   * complete in the background (see file-level note). Default: no
+   * timeout — the helper waits as long as the gateway takes.
+   */
+  timeoutMs?: number;
+}
+
+export interface SendChatToSessionInput {
+  /** Pre-built full session key (NOT just the prefix). */
+  sessionKey: string;
+  message: string;
+  /** Defaults to a fresh uuid. */
+  idempotencyKey?: string;
+  /** See `SendChatInput.timeoutMs`. */
+  timeoutMs?: number;
 }
 
 export interface SendChatResult {
   sent: boolean;
   sessionKey: string;
   /** When `sent` is false, why. */
-  reason?: 'no_session' | 'send_failed';
+  reason?: 'no_session' | 'send_failed' | 'timeout';
   error?: Error;
+  /**
+   * Raw return value from the underlying `client.call('chat.send', ...)`
+   * when the call succeeded. Shape is gateway-defined and not narrowed
+   * here — callers that need structured fields should narrow via their
+   * own predicate. Absent on failure (no_session / send_failed / timeout).
+   */
+  response?: unknown;
 }
 
 /**
@@ -148,6 +189,70 @@ export function buildAgentSessionKey(
   return `${prefix}${sessionSuffix}`;
 }
 
+// ─── shared raw send ────────────────────────────────────────────────
+
+/**
+ * Sentinel returned from the timeout race so we can distinguish
+ * "deadline elapsed" from `undefined` payloads.
+ */
+const SEND_TIMEOUT_SENTINEL: unique symbol = Symbol('send-chat:timeout');
+
+/**
+ * Internal — shared by `sendChatToAgent` and `sendChatToSession`. Runs
+ * the connectivity guard, idempotency-key default, optional timeout
+ * race, and structured error mapping in one place so the two public
+ * wrappers stay thin.
+ */
+async function _sendChatRaw(params: {
+  sessionKey: string;
+  message: string;
+  idempotencyKey: string;
+  timeoutMs?: number;
+}): Promise<SendChatResult> {
+  const { sessionKey, message, idempotencyKey, timeoutMs } = params;
+  const client = getClient();
+
+  if (!client.isConnected()) {
+    return { sent: false, sessionKey, reason: 'no_session' };
+  }
+
+  const sendPromise = client.call('chat.send', {
+    sessionKey,
+    message,
+    idempotencyKey,
+  });
+
+  try {
+    let response: unknown;
+    if (timeoutMs && timeoutMs > 0) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const timeoutPromise = new Promise<typeof SEND_TIMEOUT_SENTINEL>(resolve => {
+        timer = setTimeout(() => resolve(SEND_TIMEOUT_SENTINEL), timeoutMs);
+      });
+      // Swallow late rejection so an unhandledRejection isn't thrown
+      // when the in-flight call eventually fails after we've already
+      // resolved with `timeout`.
+      sendPromise.catch(() => {});
+      const winner = await Promise.race([sendPromise, timeoutPromise]);
+      if (timer) clearTimeout(timer);
+      if (winner === SEND_TIMEOUT_SENTINEL) {
+        return { sent: false, sessionKey, reason: 'timeout' };
+      }
+      response = winner;
+    } else {
+      response = await sendPromise;
+    }
+    return { sent: true, sessionKey, response };
+  } catch (err) {
+    return {
+      sent: false,
+      sessionKey,
+      reason: 'send_failed',
+      error: err instanceof Error ? err : new Error(String(err)),
+    };
+  }
+}
+
 // ─── sendChatToAgent ────────────────────────────────────────────────
 
 /**
@@ -159,32 +264,37 @@ export function buildAgentSessionKey(
  * Returns `{ sent: false, reason: 'no_session' }` when the openclaw
  * client reports it isn't connected. Returns
  * `{ sent: false, reason: 'send_failed', error }` when the underlying
- * call rejects (e.g. gateway timeout).
+ * call rejects (e.g. gateway timeout). Returns
+ * `{ sent: false, reason: 'timeout' }` when `timeoutMs` is set and the
+ * call doesn't resolve in time (in-flight call is not aborted).
  */
 export async function sendChatToAgent(input: SendChatInput): Promise<SendChatResult> {
-  const sessionKey = buildAgentSessionKey(input.agent, input.sessionSuffix);
-  const idempotencyKey = input.idempotencyKey ?? uuidv4();
-  const client = getClient();
+  return _sendChatRaw({
+    sessionKey: buildAgentSessionKey(input.agent, input.sessionSuffix),
+    message: input.message,
+    idempotencyKey: input.idempotencyKey ?? uuidv4(),
+    timeoutMs: input.timeoutMs,
+  });
+}
 
-  if (!client.isConnected()) {
-    return { sent: false, sessionKey, reason: 'no_session' };
-  }
+// ─── sendChatToSession ──────────────────────────────────────────────
 
-  try {
-    await client.call('chat.send', {
-      sessionKey,
-      message: input.message,
-      idempotencyKey,
-    });
-    return { sent: true, sessionKey };
-  } catch (err) {
-    return {
-      sent: false,
-      sessionKey,
-      reason: 'send_failed',
-      error: err instanceof Error ? err : new Error(String(err)),
-    };
-  }
+/**
+ * Same shape as `sendChatToAgent` but takes a pre-built `sessionKey`
+ * directly. Use this when the caller has a stored full session key
+ * (e.g. `task.planning_session_key`, or a key returned by
+ * `getActiveSessionForTask`) and no convenient agent row to resolve
+ * from. Returns the same `SendChatResult` shape.
+ */
+export async function sendChatToSession(
+  input: SendChatToSessionInput,
+): Promise<SendChatResult> {
+  return _sendChatRaw({
+    sessionKey: input.sessionKey,
+    message: input.message,
+    idempotencyKey: input.idempotencyKey ?? uuidv4(),
+    timeoutMs: input.timeoutMs,
+  });
 }
 
 // ─── sendChatAndAwaitReply ──────────────────────────────────────────

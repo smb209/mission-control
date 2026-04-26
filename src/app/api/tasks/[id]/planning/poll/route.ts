@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
 import { getMessagesFromOpenClaw } from '@/lib/planning-utils';
 import { parsePlanningEnvelope, type PlanningEnvelope } from '@/lib/planning-envelope';
@@ -265,26 +266,26 @@ export async function GET(
 
         if (!alreadyReprompted) {
           const sessionKey = task.planning_session_key;
-          try {
-            const client = getOpenClawClient();
-            if (!client.isConnected()) {
-              await client.connect();
-            }
-            await client.call('chat.send', {
-              sessionKey,
-              message: buildReformatPrompt(reason || 'Not a recognized planning envelope'),
-              idempotencyKey: `planning-reprompt-${taskId}-${Date.now()}`,
-            });
-            console.log(`[Planning Poll] Sent reformat correction to planner for task ${taskId}`);
-          } catch (err) {
-            console.error(`[Planning Poll] Failed to send reformat correction:`, err);
+          const client = getOpenClawClient();
+          if (!client.isConnected()) {
+            await client.connect();
+          }
+          const sendResult = await sendChatToSession({
+            sessionKey,
+            message: buildReformatPrompt(reason || 'Not a recognized planning envelope'),
+            idempotencyKey: `planning-reprompt-${taskId}-${Date.now()}`,
+          });
+          if (!sendResult.sent) {
+            const errMsg = sendResult.error?.message ?? sendResult.reason ?? 'unknown';
+            console.error(`[Planning Poll] Failed to send reformat correction:`, errMsg);
             return NextResponse.json({
               hasUpdates: true,
-              parseError: `Planner returned invalid JSON and the reformat request also failed: ${(err as Error).message}`,
+              parseError: `Planner returned invalid JSON and the reformat request also failed: ${errMsg}`,
               rawContent: lastAssistantMsg.content.slice(0, 4000),
               messages,
             });
           }
+          console.log(`[Planning Poll] Sent reformat correction to planner for task ${taskId}`);
 
           const taggedMessages = messages.map((m: { role: string; content: string; timestamp: number; reprompted?: boolean }) =>
             m === lastAssistantMsg ? { ...m, reprompted: true } : m
