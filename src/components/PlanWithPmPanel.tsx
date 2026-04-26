@@ -204,8 +204,11 @@ export default function PlanWithPmPanel({
       const newProposal = body.proposal;
       setProposalId(newProposal.id);
       setImpactMd(newProposal.impact_md);
-      const parsed = parseSuggestionsFromImpactMd(newProposal.impact_md);
-      if (parsed) setSuggestions(parsed);
+      // Prefer structured plan_suggestions column; fall back to sidecar parsing.
+      const refined =
+        (newProposal.plan_suggestions as PlanInitiativeSuggestions | null) ??
+        parseSuggestionsFromImpactMd(newProposal.impact_md);
+      if (refined) setSuggestions(refined);
       setRefineText('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Refine failed');

@@ -75,6 +75,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     let newImpactMd: string;
     let newChanges: unknown[];
+    let newPlanSuggestions: unknown = null;
 
     if (parent.trigger_kind === 'plan_initiative') {
       const ctx = parseTriggerContext(parent.trigger_text);
@@ -117,20 +118,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `Original draft: ${JSON.stringify(draft)}. ` +
           `Operator refinement request: "${parsed.data.additional_constraint}"\n\n` +
           `Produce an updated refined_description that addresses the operator's request. ` +
-          `Call \`propose_changes\` (trigger_kind='plan_initiative') with an impact_md that ` +
-          `includes a "<!--pm-plan-suggestions ...-->" sidecar. proposed_changes should be [] (advisory). ` +
-          `See your SOUL.md.`,
+          `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
+          `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
+          `See your SOUL.md for the plan_suggestions shape.`,
       });
 
-      let agentImpactMd = dispatch.proposal.impact_md;
-
-      // Guarantee the sidecar is present — LLMs sometimes omit it even
-      // when instructed. The synth suggestions are always available here.
-      if (!parseSuggestionsFromImpactMd(agentImpactMd)) {
-        agentImpactMd =
-          agentImpactMd +
-          `\n\n<!--pm-plan-suggestions ${JSON.stringify(synth.suggestions)} -->`;
-      }
+      const agentImpactMd = dispatch.proposal.impact_md;
+      // Resolve structured suggestions: prefer what the agent wrote into
+      // plan_suggestions (via propose_changes MCP param), then sidecar,
+      // then the deterministic synth. This eliminates the sidecar-injection
+      // band-aid that was applied here before.
+      const refinedSuggestions =
+        (dispatch.proposal.plan_suggestions as typeof synth.suggestions | null) ??
+        parseSuggestionsFromImpactMd(agentImpactMd) ??
+        synth.suggestions;
 
       // dispatchPmSynthesized created its own proposal row — delete it
       // since we already have the pre-allocated child from refineProposal().
@@ -141,6 +142,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
       newImpactMd = agentImpactMd;
       newChanges = synth.changes;
+      newPlanSuggestions = refinedSuggestions;
     } else if (parent.trigger_kind === 'decompose_initiative') {
       const ctx = parseTriggerContext(parent.trigger_text);
       const initiativeId = ctx?.initiative_id as string | undefined;
@@ -175,8 +177,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const { run } = await import('@/lib/db');
     run(
-      `UPDATE pm_proposals SET impact_md = ?, proposed_changes = ? WHERE id = ?`,
-      [newImpactMd, JSON.stringify(newChanges), child.id],
+      `UPDATE pm_proposals SET impact_md = ?, proposed_changes = ?, plan_suggestions = ? WHERE id = ?`,
+      [newImpactMd, JSON.stringify(newChanges), newPlanSuggestions != null ? JSON.stringify(newPlanSuggestions) : null, child.id],
     );
 
     const refreshed = getProposal(child.id)!;

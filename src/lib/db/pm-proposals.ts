@@ -102,13 +102,13 @@ export interface PmProposal {
   trigger_kind: PmProposalTriggerKind;
   impact_md: string;
   proposed_changes: PmDiff[];
+  /** Structured plan suggestions stored as a proper field, bypassing the
+   *  fragile <!--pm-plan-suggestions {json} --> sidecar in impact_md. */
+  plan_suggestions: Record<string, unknown> | null;
   status: PmProposalStatus;
   applied_at: string | null;
   applied_by_agent_id: string | null;
   parent_proposal_id: string | null;
-  // Set when this proposal was generated FOR an existing initiative
-  // (e.g. operator clicked "Plan with PM" on the detail page). Lets the
-  // panel resume the draft on re-open instead of re-running the PM.
   target_initiative_id: string | null;
   created_at: string;
 }
@@ -120,6 +120,7 @@ interface PmProposalRow {
   trigger_kind: PmProposalTriggerKind;
   impact_md: string;
   proposed_changes: string;
+  plan_suggestions: string | null;
   status: PmProposalStatus;
   applied_at: string | null;
   applied_by_agent_id: string | null;
@@ -339,6 +340,10 @@ function rowToProposal(row: PmProposalRow): PmProposal {
   } catch {
     parsed = [];
   }
+  let planSuggestions: Record<string, unknown> | null = null;
+  if (row.plan_suggestions) {
+    try { planSuggestions = JSON.parse(row.plan_suggestions) as Record<string, unknown>; } catch { /* leave null */ }
+  }
   return {
     id: row.id,
     workspace_id: row.workspace_id,
@@ -346,6 +351,7 @@ function rowToProposal(row: PmProposalRow): PmProposal {
     trigger_kind: row.trigger_kind,
     impact_md: row.impact_md,
     proposed_changes: parsed,
+    plan_suggestions: planSuggestions,
     status: row.status,
     applied_at: row.applied_at,
     applied_by_agent_id: row.applied_by_agent_id,
@@ -363,6 +369,7 @@ export interface CreateProposalInput {
   trigger_kind?: PmProposalTriggerKind;
   impact_md: string;
   proposed_changes: PmDiff[];
+  plan_suggestions?: Record<string, unknown> | null;
   parent_proposal_id?: string | null;
   target_initiative_id?: string | null;
 }
@@ -387,8 +394,8 @@ export function createProposal(input: CreateProposalInput): PmProposal {
   run(
     `INSERT INTO pm_proposals (
        id, workspace_id, trigger_text, trigger_kind, impact_md,
-       proposed_changes, status, parent_proposal_id, target_initiative_id, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
+       proposed_changes, plan_suggestions, status, parent_proposal_id, target_initiative_id, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -396,6 +403,7 @@ export function createProposal(input: CreateProposalInput): PmProposal {
       input.trigger_kind ?? 'manual',
       input.impact_md,
       JSON.stringify(input.proposed_changes ?? []),
+      input.plan_suggestions != null ? JSON.stringify(input.plan_suggestions) : null,
       input.parent_proposal_id ?? null,
       input.target_initiative_id ?? null,
       now,

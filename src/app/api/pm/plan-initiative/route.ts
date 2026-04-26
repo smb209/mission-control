@@ -139,16 +139,16 @@ export async function POST(request: NextRequest) {
       trigger_kind: 'plan_initiative',
       target_initiative_id: parsed.data.target_initiative_id ?? null,
       planSessionKey,
-      synth: { impact_md: synth.impact_md, changes: synth.changes },
+      synth: { impact_md: synth.impact_md, changes: synth.changes, plan_suggestions: synth.suggestions as unknown as Record<string, unknown> },
       agent_prompt:
         `Plan an initiative draft titled "${parsed.data.draft.title}". ` +
         `Operator-provided draft: ${JSON.stringify(parsed.data.draft)}. ` +
         (parsed.data.guidance
           ? `Operator guidance — focus the plan on this: ${parsed.data.guidance}\n\n`
           : '') +
-        `Call \`propose_changes\` (trigger_kind='plan_initiative') with an impact_md that ` +
-        `includes a "<!--pm-plan-suggestions ...-->" sidecar so the form can apply your ` +
-        `suggestions. proposed_changes should be [] (advisory). See your SOUL.md.`,
+        `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
+        `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
+        `See your SOUL.md for the plan_suggestions shape.`,
     });
     let proposal = dispatch.proposal;
 
@@ -192,9 +192,13 @@ export async function POST(request: NextRequest) {
       console.warn('[pm-plan] chat insert failed:', (err as Error).message);
     }
 
-    // Prefer the agent's parsed suggestions when available; fall back to
-    // the deterministic synth only when the sidecar is absent or unparseable.
-    const responseSuggestions = parseSuggestionsFromImpactMd(proposal.impact_md) ?? synth.suggestions;
+    // Prefer structured plan_suggestions stored on the proposal (set by the
+    // agent via the propose_changes MCP tool, or by the synth fallback).
+    // Fall back to sidecar parsing for older proposals, then synth.
+    const responseSuggestions =
+      (proposal.plan_suggestions as typeof synth.suggestions | null) ??
+      parseSuggestionsFromImpactMd(proposal.impact_md) ??
+      synth.suggestions;
 
     return NextResponse.json(
       {
@@ -252,6 +256,7 @@ export async function GET(request: NextRequest) {
     trigger_kind: string;
     impact_md: string;
     proposed_changes: string;
+    plan_suggestions: string | null;
     status: string;
     applied_at: string | null;
     applied_by_agent_id: string | null;
@@ -272,11 +277,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ proposal: null });
   }
 
-  const suggestions = parseSuggestionsFromImpactMd(row.impact_md);
-  // Require refined_description — proposals without it are incomplete agent
-  // responses (e.g. only complexity/dates, no actual description rewrite).
-  // Treat them as non-resumable so a fresh dispatch runs and produces a
-  // complete set of suggestions rather than showing a blank description field.
+  // Prefer structured plan_suggestions; fall back to sidecar for older rows.
+  const parsedPlanSuggestions = row.plan_suggestions
+    ? (() => { try { return JSON.parse(row.plan_suggestions!) as { refined_description?: string }; } catch { return null; } })()
+    : null;
+  const suggestions = parsedPlanSuggestions ?? parseSuggestionsFromImpactMd(row.impact_md);
+  // Require refined_description — proposals without it are incomplete.
   if (!suggestions?.refined_description) {
     return NextResponse.json({ proposal: null });
   }
