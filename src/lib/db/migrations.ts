@@ -2849,7 +2849,331 @@ const migrations: Migration[] = [
       console.log('[Migration 047] Complete.');
     },
   },
+  {
+    id: '048',
+    name: 'fk_cascade_safety',
+    up: (db) => {
+      // Hardening pass: most FKs in earlier migrations were declared without
+      // an ON DELETE rule, so deleting a parent row failed (FK on) or left
+      // orphans (FK off). PR #53's deleteWorkspaceCascade worked around
+      // that by manually walking ~20 dependent tables with FKs disabled.
+      //
+      // Now that nothing is in production yet, fix it properly: add the
+      // right ON DELETE rule to every FK that targets workspaces, tasks,
+      // agents, initiatives, products, ideas, conversations, convoys,
+      // research_cycles, workflow_templates, rollcall_sessions,
+      // product_skills, product_program_variants, or pm_proposals.
+      //
+      // Decision rule:
+      //   - CASCADE  if a row has no meaning without its parent
+      //              (e.g. task_deliverables without a task)
+      //   - SET NULL if the row should survive but lose context
+      //              (e.g. events.task_id — the event still happened,
+      //              just orphaned from the task that triggered it)
+      //
+      // SET NULL choices worth flagging (audit-trail / durability):
+      //   tasks.assigned_agent_id, tasks.created_by_agent_id,
+      //   tasks.product_id, tasks.idea_id, tasks.initiative_id,
+      //   tasks.workflow_template_id            — task survives parent loss
+      //   events.agent_id, events.task_id       — audit trail survives
+      //   conversations.task_id                 — chat history survives
+      //   messages.sender_agent_id              — message survives
+      //   knowledge_entries.task_id, .created_by_agent_id
+      //                                         — knowledge is durable
+      //   task_activities.agent_id              — activity log survives
+      //   agent_health.task_id                  — agent's last health row
+      //                                            persists across task end
+      //   research_cycles.agent_id              — cycle audit survives
+      //   ideas.task_id, .resurfaced_from, .variant_id, .initiative_id
+      //                                         — idea is durable
+      //   product_feedback.idea_id              — feedback survives idea
+      //   cost_events.product_id, .task_id, .cycle_id, .agent_id
+      //                                         — billing rows survive
+      //   cost_caps.product_id                  — cap downgrades to ws-level
+      //   operations_log.agent_id               — audit survives
+      //   content_inventory.idea_id, .task_id   — content is durable
+      //   social_queue.idea_id                  — post survives
+      //   product_skills.created_by_task_id, .created_by_agent_id,
+      //     .supersedes_skill_id                — skill is durable
+      //   initiatives.product_id, .parent_initiative_id, .owner_agent_id,
+      //     .source_idea_id                     — initiative survives
+      //   initiative_parent_history.{from,to}_parent_id, .moved_by_agent_id
+      //                                         — audit row survives
+      //   task_initiative_history.{from,to}_initiative_id, .moved_by_agent_id
+      //                                         — audit row survives
+      //   pm_proposals.applied_by_agent_id, .parent_proposal_id
+      //                                         — proposal record survives
+      //   product_ab_tests.winner_variant_id    — test record survives
+      //
+      // CASCADE choices on NOT NULL audit-shaped FKs (we lose the row when
+      // the agent is deleted, but the alternative would be relaxing
+      // NOT NULL — kept simple here):
+      //   agent_mailbox.from_agent_id, .to_agent_id
+      //   rollcall_sessions.initiator_agent_id
+      //   rollcall_entries.target_agent_id
+      //
+      // The patch is mechanical: for each table, fetch its CREATE TABLE
+      // text via sqlite_master, run a per-FK string replace to append
+      // " ON DELETE CASCADE" or " ON DELETE SET NULL" to the bare
+      // REFERENCES clause, write back via writable_schema. This preserves
+      // row data — no rebuild required. Idempotent: skips FKs already
+      // carrying the desired clause (substring guard).
+      console.log('[Migration 048] Adding ON DELETE rules across FK graph...');
+
+      // Per-table list of [oldRefClause, newRefClause] replacements.
+      // The "old" string is the bare `REFERENCES table(col)` chunk we
+      // expect to see in the stored CREATE TABLE text (no ON DELETE).
+      // The "new" string is the same chunk with the chosen rule appended.
+      // Replacements are anchor-loose enough to handle migration-created
+      // tables that may have slight whitespace drift from schema.ts.
+      type FkPatch = { col: string; old: string; nw: string };
+      const patches: Record<string, FkPatch[]> = {
+        agents: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+        ],
+        tasks: [
+          { col: 'assigned_agent_id',    old: 'REFERENCES agents(id)',             nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'created_by_agent_id',  old: 'REFERENCES agents(id)',             nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'workspace_id',         old: 'REFERENCES workspaces(id)',         nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'workflow_template_id', old: 'REFERENCES workflow_templates(id)', nw: 'REFERENCES workflow_templates(id) ON DELETE SET NULL' },
+          { col: 'product_id',           old: 'REFERENCES products(id)',           nw: 'REFERENCES products(id) ON DELETE SET NULL' },
+          { col: 'idea_id',              old: 'REFERENCES ideas(id)',              nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+          { col: 'initiative_id',        old: 'REFERENCES initiatives(id)',        nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+        ],
+        workspace_ports: [
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE CASCADE' },
+        ],
+        workspace_merges: [
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE CASCADE' },
+        ],
+        conversations: [
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+        ],
+        messages: [
+          { col: 'sender_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        events: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+        ],
+        openclaw_sessions: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE CASCADE' },
+        ],
+        workflow_templates: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+        ],
+        task_roles: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+        ],
+        knowledge_entries: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+          { col: 'created_by_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        task_activities: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        agent_health: [
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+        ],
+        work_checkpoints: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+        ],
+        agent_mailbox: [
+          { col: 'from_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+          { col: 'to_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+        ],
+        rollcall_sessions: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'initiator_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+        ],
+        rollcall_entries: [
+          { col: 'target_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE CASCADE' },
+        ],
+        products: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+        ],
+        research_cycles: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        ideation_cycles: [
+          { col: 'product_id', old: 'REFERENCES products(id)', nw: 'REFERENCES products(id) ON DELETE CASCADE' },
+          { col: 'research_cycle_id', old: 'REFERENCES research_cycles(id)', nw: 'REFERENCES research_cycles(id) ON DELETE SET NULL' },
+        ],
+        autopilot_activity_log: [
+          { col: 'product_id', old: 'REFERENCES products(id)', nw: 'REFERENCES products(id) ON DELETE CASCADE' },
+        ],
+        ideas: [
+          { col: 'cycle_id', old: 'REFERENCES research_cycles(id)', nw: 'REFERENCES research_cycles(id) ON DELETE SET NULL' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+          { col: 'resurfaced_from', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+          { col: 'variant_id', old: 'REFERENCES product_program_variants(id)', nw: 'REFERENCES product_program_variants(id) ON DELETE SET NULL' },
+          { col: 'initiative_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+        ],
+        idea_suppressions: [
+          { col: 'similar_to_idea_id', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE CASCADE' },
+        ],
+        product_feedback: [
+          { col: 'idea_id', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+        ],
+        cost_events: [
+          { col: 'product_id', old: 'REFERENCES products(id)', nw: 'REFERENCES products(id) ON DELETE SET NULL' },
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+          { col: 'cycle_id', old: 'REFERENCES research_cycles(id)', nw: 'REFERENCES research_cycles(id) ON DELETE SET NULL' },
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        cost_caps: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'product_id', old: 'REFERENCES products(id)', nw: 'REFERENCES products(id) ON DELETE SET NULL' },
+        ],
+        operations_log: [
+          { col: 'agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        content_inventory: [
+          { col: 'idea_id', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+        ],
+        social_queue: [
+          { col: 'idea_id', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+        ],
+        product_ab_tests: [
+          { col: 'variant_a_id', old: 'REFERENCES product_program_variants(id)', nw: 'REFERENCES product_program_variants(id) ON DELETE CASCADE' },
+          { col: 'variant_b_id', old: 'REFERENCES product_program_variants(id)', nw: 'REFERENCES product_program_variants(id) ON DELETE CASCADE' },
+          { col: 'winner_variant_id', old: 'REFERENCES product_program_variants(id)', nw: 'REFERENCES product_program_variants(id) ON DELETE SET NULL' },
+        ],
+        product_skills: [
+          { col: 'created_by_task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE SET NULL' },
+          { col: 'created_by_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'supersedes_skill_id', old: 'REFERENCES product_skills(id)', nw: 'REFERENCES product_skills(id) ON DELETE SET NULL' },
+        ],
+        skill_reports: [
+          { col: 'task_id', old: 'REFERENCES tasks(id)', nw: 'REFERENCES tasks(id) ON DELETE CASCADE' },
+        ],
+        initiatives: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'product_id', old: 'REFERENCES products(id)', nw: 'REFERENCES products(id) ON DELETE SET NULL' },
+          { col: 'parent_initiative_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+          { col: 'owner_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'source_idea_id', old: 'REFERENCES ideas(id)', nw: 'REFERENCES ideas(id) ON DELETE SET NULL' },
+        ],
+        initiative_parent_history: [
+          { col: 'from_parent_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+          { col: 'to_parent_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+          { col: 'moved_by_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        task_initiative_history: [
+          { col: 'from_initiative_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+          { col: 'to_initiative_id', old: 'REFERENCES initiatives(id)', nw: 'REFERENCES initiatives(id) ON DELETE SET NULL' },
+          { col: 'moved_by_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+        ],
+        pm_proposals: [
+          { col: 'workspace_id', old: 'REFERENCES workspaces(id)', nw: 'REFERENCES workspaces(id) ON DELETE CASCADE' },
+          { col: 'applied_by_agent_id', old: 'REFERENCES agents(id)', nw: 'REFERENCES agents(id) ON DELETE SET NULL' },
+          { col: 'parent_proposal_id', old: 'REFERENCES pm_proposals(id)', nw: 'REFERENCES pm_proposals(id) ON DELETE SET NULL' },
+        ],
+      };
+
+      const tablesPatched: string[] = [];
+
+      for (const [tableName, fkList] of Object.entries(patches)) {
+        const row = db.prepare(
+          `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`,
+        ).get(tableName) as { sql: string } | undefined;
+
+        if (!row) {
+          console.log(`[Migration 048] table ${tableName} absent; skipping.`);
+          continue;
+        }
+
+        let sql = row.sql;
+        let mutated = false;
+
+        for (const fk of fkList) {
+          // Locate the FK by anchoring on the column name + the bare
+          // REFERENCES clause. We require the column name to appear in
+          // the same statement as the matching REFERENCES so we don't
+          // accidentally rewrite a sibling FK that targets the same
+          // table from a different column.
+          //
+          // SQLite stored CREATE TABLE preserves the original casing /
+          // whitespace from the CREATE call. We handle both single-line
+          // and the (rare) multi-line shape with a permissive regex.
+          //
+          // Pattern (anchored on column name):
+          //   <col_name> ... REFERENCES <table>(<col>)
+          // …and we replace the bare REFERENCES with the new clause.
+          const colRe = new RegExp(
+            `(\\b${fk.col}\\b[^,\\n]*?)` + escapeReg(fk.old) + `(?!\\s+ON\\s+DELETE)`,
+            'i',
+          );
+          const m = sql.match(colRe);
+          if (!m) {
+            // Either already patched (idempotent path), or column absent.
+            continue;
+          }
+          sql = sql.replace(colRe, `$1${fk.nw}`);
+          mutated = true;
+        }
+
+        if (!mutated) continue;
+
+        const escaped = sql.replace(/'/g, "''");
+        db.unsafeMode(true);
+        try {
+          db.pragma('writable_schema = ON');
+          db.exec(
+            `UPDATE sqlite_master SET sql = '${escaped}' WHERE type='table' AND name='${tableName}'`,
+          );
+          db.pragma('writable_schema = OFF');
+        } finally {
+          db.unsafeMode(false);
+        }
+        tablesPatched.push(tableName);
+      }
+
+      // After patching sqlite_master, force the schema parser to re-read
+      // so the new ON DELETE rules become active on this connection.
+      // Without this, FK actions remain whatever was cached at connect
+      // time — meaning DELETE on a parent still fails with the OLD
+      // (no-op) FK rule. Bumping schema_version is the standard SQLite
+      // trick: the next statement re-parses sqlite_master.
+      // (See https://www.sqlite.org/pragma.html#pragma_schema_version)
+      if (tablesPatched.length > 0) {
+        const cur = (db.pragma('schema_version', { simple: true }) as number) ?? 0;
+        db.unsafeMode(true);
+        try {
+          db.pragma(`schema_version = ${cur + 1}`);
+        } finally {
+          db.unsafeMode(false);
+        }
+      }
+
+      // Run a single integrity check across all tables once at the end.
+      // "Page X: never used" is a benign leaked-space warning — same
+      // filter migration 043 uses.
+      const integrity = db.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[];
+      const isBenign = (msg: string) =>
+        msg === 'ok' || /^Page \d+: never used$/.test(msg);
+      const realErrors = integrity.filter(r => !isBenign(r.integrity_check));
+      if (realErrors.length > 0) {
+        throw new Error('[Migration 048] integrity_check failed after writable_schema patch: ' + JSON.stringify(realErrors));
+      }
+      const orphans = integrity.filter(r => /^Page \d+: never used$/.test(r.integrity_check));
+      if (orphans.length > 0) {
+        console.warn(`[Migration 048] ${orphans.length} orphan page(s) detected (benign — run VACUUM to reclaim): ` + JSON.stringify(orphans));
+      }
+
+      console.log(`[Migration 048] Complete. Patched ${tablesPatched.length} tables: ${tablesPatched.join(', ')}`);
+    },
+  },
 ];
+
+/** Escape a string for inclusion as a literal in a RegExp source. */
+function escapeReg(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Inline PM soul_md reader for migration 045. The full module
 // (src/lib/agents/pm-agent.ts) does the same thing but we duplicate it
