@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   sendChatToAgent,
+  sendChatToSession,
   sendChatAndAwaitReply,
   buildAgentSessionKey,
   __setSendChatClientForTests,
@@ -348,5 +349,218 @@ test('sendChatAndAwaitReply: custom isDone predicate fires before default state=
     assert.equal(result.doneEvent!.message, 'STOP');
   } finally {
     __setSendChatClientForTests(null);
+  }
+});
+
+// ─── timeoutMs + response (sendChatToAgent) ─────────────────────────
+
+test('sendChatToAgent: timeoutMs triggers reason=timeout when send exceeds the budget', async () => {
+  const stub = makeStub({
+    callImpl: () =>
+      new Promise<unknown>(resolve => {
+        // Resolve well past the 50ms budget below — the helper should
+        // resolve with reason=timeout long before this fires.
+        setTimeout(() => resolve('eventually'), 500);
+      }),
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const t0 = Date.now();
+    const result = await sendChatToAgent({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 50,
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'timeout');
+    assert.equal(result.response, undefined);
+    assert.ok(elapsed < 400, `helper should resolve near the deadline (got ${elapsed}ms)`);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToAgent: timeoutMs does NOT false-positive when send completes well under budget', async () => {
+  const stub = makeStub({
+    callImpl: async () => 'ok',
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToAgent({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 1_000,
+    });
+    assert.equal(result.sent, true);
+    assert.equal(result.reason, undefined);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToAgent: response is populated on success', async () => {
+  const fakeResponse = { ok: true, deliveredAt: 'now' };
+  const stub = makeStub({
+    callImpl: async () => fakeResponse,
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToAgent({ agent: FAKE_AGENT, message: 'hi' });
+    assert.equal(result.sent, true);
+    assert.deepEqual(result.response, fakeResponse);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToAgent: response is absent on failure', async () => {
+  const stub = makeStub({
+    callImpl: async () => {
+      throw new Error('boom');
+    },
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToAgent({ agent: FAKE_AGENT, message: 'hi' });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'send_failed');
+    assert.equal(result.response, undefined);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+// ─── sendChatToSession ──────────────────────────────────────────────
+
+test('sendChatToSession: forwards the exact sessionKey without agent resolution', async () => {
+  const stub = makeStub();
+  __setSendChatClientForTests(stub.client);
+  try {
+    const sessionKey = 'planner:task-12345:planning';
+    const result = await sendChatToSession({ sessionKey, message: 'plan!' });
+    assert.equal(result.sent, true);
+    assert.equal(result.sessionKey, sessionKey);
+    const params = stub.sends[0].params as Record<string, unknown>;
+    // The pre-built key flows through verbatim — no `buildAgentSessionKey`
+    // suffix or prefix mangling.
+    assert.equal(params.sessionKey, sessionKey);
+    assert.equal(params.message, 'plan!');
+    assert.equal(typeof params.idempotencyKey, 'string');
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToSession: returns no_session when client is disconnected', async () => {
+  const stub = makeStub({ isConnected: false });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToSession({
+      sessionKey: 'planner:task-1:planning',
+      message: 'hi',
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'no_session');
+    assert.equal(stub.sends.length, 0);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToSession: returns send_failed when client throws', async () => {
+  const stub = makeStub({
+    callImpl: async () => {
+      throw new Error('gateway boom');
+    },
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToSession({
+      sessionKey: 'planner:task-1:planning',
+      message: 'hi',
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'send_failed');
+    assert.ok(result.error instanceof Error);
+    assert.match(result.error!.message, /gateway boom/);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToSession: timeoutMs triggers reason=timeout', async () => {
+  const stub = makeStub({
+    callImpl: () => new Promise<unknown>(resolve => setTimeout(() => resolve('late'), 500)),
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatToSession({
+      sessionKey: 'planner:task-1:planning',
+      message: 'hi',
+      timeoutMs: 50,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'timeout');
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatToSession: explicit idempotencyKey is forwarded', async () => {
+  const stub = makeStub();
+  __setSendChatClientForTests(stub.client);
+  try {
+    await sendChatToSession({
+      sessionKey: 'planner:task-1:planning',
+      message: 'hi',
+      idempotencyKey: 'session-key-1',
+    });
+    const k = (stub.sends[0].params as { idempotencyKey: string }).idempotencyKey;
+    assert.equal(k, 'session-key-1');
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+// ─── shared error path ─────────────────────────────────────────────
+
+test('shared error path: client throws → send_failed regardless of which wrapper', async () => {
+  const errors: Array<unknown> = [];
+  const makeThrowingStub = () =>
+    makeStub({
+      callImpl: async () => {
+        throw new Error('shared boom');
+      },
+    });
+
+  // sendChatToAgent path
+  let stub = makeThrowingStub();
+  __setSendChatClientForTests(stub.client);
+  try {
+    const r1 = await sendChatToAgent({ agent: FAKE_AGENT, message: 'a' });
+    errors.push(r1);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+
+  // sendChatToSession path
+  stub = makeThrowingStub();
+  __setSendChatClientForTests(stub.client);
+  try {
+    const r2 = await sendChatToSession({
+      sessionKey: 'planner:task-1:planning',
+      message: 'b',
+    });
+    errors.push(r2);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+
+  for (const r of errors as Array<{ sent: boolean; reason?: string; error?: Error }>) {
+    assert.equal(r.sent, false);
+    assert.equal(r.reason, 'send_failed');
+    assert.ok(r.error instanceof Error);
+    assert.match(r.error!.message, /shared boom/);
   }
 });

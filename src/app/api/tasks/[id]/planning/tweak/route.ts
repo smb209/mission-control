@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { buildTweakPrompt } from '@/lib/planner-prompt';
 import { broadcast } from '@/lib/events';
 import type { Task } from '@/lib/types';
@@ -61,11 +62,14 @@ export async function POST(
 
     const client = getOpenClawClient();
     if (!client.isConnected()) await client.connect();
-    await client.call('chat.send', {
+    const sendResult = await sendChatToSession({
       sessionKey: task.planning_session_key,
       message: buildTweakPrompt(message),
       idempotencyKey: `planning-tweak-${taskId}-${Date.now()}`,
     });
+    if (!sendResult.sent) {
+      throw sendResult.error ?? new Error(sendResult.reason ?? 'chat.send failed');
+    }
 
     // Append the tweak to the message log so the UI shows the conversation.
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];

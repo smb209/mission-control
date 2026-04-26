@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createNote, getTaskNotes, getActiveSessionForTask, markNotesDelivered } from '@/lib/task-notes';
-import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { attachChatListener, expectReply } from '@/lib/chat-listener';
 import { queryOne } from '@/lib/db';
@@ -63,33 +63,24 @@ export async function POST(
     const sessionInfo = getActiveSessionForTask(taskId);
 
     if (sessionInfo) {
-      try {
-        const client = getOpenClawClient();
-        if (client.isConnected()) {
-          // TODO(comms-cleanup): migrate to `sendChatToAgent`. Held back
-          // because `getActiveSessionForTask` returns a pre-built
-          // `sessionKey` rather than an Agent row; either teach it to
-          // surface the agent identity, or extend the helper to accept
-          // a raw sessionKey override before migrating.
-          //
-          // Try chat.send with a 5s timeout — if agent is mid-turn, this works quickly
-          const sendPromise = client.call('chat.send', {
-            sessionKey: sessionInfo.sessionKey,
-            message: message.trim(),
-            idempotencyKey: `chat-${note.id}`
-          });
-          const timeout = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 5000)
-          );
-
-          await Promise.race([sendPromise, timeout]);
-          delivered = true;
-          markNotesDelivered([note.id]);
-          expectReply(sessionInfo.sessionKey, taskId);
-          console.log(`[Chat] Message delivered via chat.send to ${sessionInfo.sessionKey}`);
-        }
-      } catch {
+      // Try chat.send with a 5s timeout — if agent is mid-turn this
+      // works quickly. The helper folds in the timeout race that used
+      // to live here.
+      const result = await sendChatToSession({
+        sessionKey: sessionInfo.sessionKey,
+        message: message.trim(),
+        idempotencyKey: `chat-${note.id}`,
+        timeoutMs: 5_000,
+      });
+      if (result.sent) {
+        delivered = true;
+        markNotesDelivered([note.id]);
+        expectReply(sessionInfo.sessionKey, taskId);
+        console.log(`[Chat] Message delivered via chat.send to ${sessionInfo.sessionKey}`);
+      } else if (result.reason === 'timeout') {
         console.log('[Chat] chat.send timed out — will try dispatch fallback');
+      } else if (result.reason === 'send_failed') {
+        console.log('[Chat] chat.send failed — will try dispatch fallback:', result.error?.message);
       }
     }
 

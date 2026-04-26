@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
 import { parsePlanningEnvelope } from '@/lib/planning-envelope';
 import { getAgentRoster, formatRosterForPrompt } from '@/lib/agent-resolver';
@@ -235,16 +236,14 @@ export async function POST(
       await client.connect();
     }
 
-    // TODO(comms-cleanup): migrate to `sendChatToAgent`. Planning
-    // routes use a stored `task.planning_session_key` (full sessionKey)
-    // rather than an agent row; the helper would need a raw-sessionKey
-    // overload before this migrates cleanly. Same applies to the other
-    // /planning/* routes (tweak, advance, answer, clarify-add, poll).
-    await client.call('chat.send', {
-      sessionKey: sessionKey,
+    const sendResult = await sendChatToSession({
+      sessionKey,
       message: planningPrompt,
       idempotencyKey: `planning-start-${taskId}-${Date.now()}`,
     });
+    if (!sendResult.sent) {
+      throw sendResult.error ?? new Error(sendResult.reason ?? 'chat.send failed');
+    }
 
     // Store the session key and initial message
     const messages = [{ role: 'user', content: planningPrompt, timestamp: Date.now() }];

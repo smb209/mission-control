@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { buildClarifyAnswerPrompt } from '@/lib/planner-prompt';
 
 export const dynamic = 'force-dynamic';
@@ -60,17 +61,19 @@ export async function POST(
     console.log('[Planning Answer] Sending answer to OpenClaw, session:', task.planning_session_key);
     console.log('[Planning Answer] Answer text:', answerText);
 
-    try {
-      const sendResult = await client.call('chat.send', {
-        sessionKey: task.planning_session_key,
-        message: answerPrompt,
-        idempotencyKey: `planning-answer-${taskId}-${Date.now()}`,
-      });
-      console.log('[Planning Answer] Send successful, result:', sendResult);
-    } catch (sendError) {
-      console.error('[Planning Answer] Failed to send to OpenClaw:', sendError);
-      return NextResponse.json({ error: 'Failed to send answer to orchestrator: ' + (sendError as Error).message }, { status: 500 });
+    const sendResult = await sendChatToSession({
+      sessionKey: task.planning_session_key,
+      message: answerPrompt,
+      idempotencyKey: `planning-answer-${taskId}-${Date.now()}`,
+    });
+    if (!sendResult.sent) {
+      console.error('[Planning Answer] Failed to send to OpenClaw:', sendResult.error ?? sendResult.reason);
+      return NextResponse.json(
+        { error: 'Failed to send answer to orchestrator: ' + (sendResult.error?.message ?? sendResult.reason ?? 'unknown') },
+        { status: 500 },
+      );
     }
+    console.log('[Planning Answer] Send successful, response:', sendResult.response);
 
     // Update messages in DB
     getDb().prepare(`

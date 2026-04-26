@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { sendChatToSession } from '@/lib/openclaw/send-chat';
 import { buildClarifyAddonPrompt } from '@/lib/planner-prompt';
 import { broadcast } from '@/lib/events';
 import type { Task } from '@/lib/types';
@@ -53,11 +54,14 @@ export async function POST(
 
     const client = getOpenClawClient();
     if (!client.isConnected()) await client.connect();
-    await client.call('chat.send', {
+    const sendResult = await sendChatToSession({
       sessionKey: task.planning_session_key,
       message: buildClarifyAddonPrompt(clarification),
       idempotencyKey: `planning-clarify-add-${taskId}-${Date.now()}`,
     });
+    if (!sendResult.sent) {
+      throw sendResult.error ?? new Error(sendResult.reason ?? 'chat.send failed');
+    }
 
     // Append the user's clarification to the visible conversation log.
     const messages = task.planning_messages ? JSON.parse(task.planning_messages) : [];
