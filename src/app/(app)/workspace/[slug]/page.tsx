@@ -15,7 +15,6 @@ import Link from 'next/link';
 import { ChevronLeft, ListTodo, Activity } from 'lucide-react';
 import { MissionQueue } from '@/components/MissionQueue';
 import { LiveFeed } from '@/components/LiveFeed';
-import { ReadyDeliverablesPanel } from '@/components/ReadyDeliverablesPanel';
 import { SSEDebugPanel } from '@/components/SSEDebugPanel';
 import { useMissionControl } from '@/lib/store';
 import { debug } from '@/lib/debug';
@@ -235,7 +234,7 @@ export default function WorkspacePage() {
           window made an agents panel pop in over the right side.
         */}
         <MissionQueue workspaceId={workspace.id} />
-        <LiveFeed topSlot={<ReadyDeliverablesPanel workspaceId={workspace.id} />} />
+        <LiveFeed />
       </div>
 
       <div

@@ -12,13 +12,9 @@ type FeedFilter = 'all' | 'tasks' | 'agents';
 interface LiveFeedProps {
   mobileMode?: boolean;
   isPortrait?: boolean;
-  // Optional content rendered at the top of the rail, above the filter tabs.
-  // Used by the desktop layout to stack the Ready Deliverables panel above
-  // the feed without creating a competing w-80 wrapper.
-  topSlot?: React.ReactNode;
 }
 
-export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: LiveFeedProps) {
+export function LiveFeed({ mobileMode = false, isPortrait = true }: LiveFeedProps) {
   const { events } = useMissionControl();
   const [filter, setFilter] = useState<FeedFilter>('all');
   const [isMinimized, setIsMinimized] = useState(false); // whole-rail collapse
@@ -73,10 +69,8 @@ export function LiveFeed({ mobileMode = false, isPortrait = true, topSlot }: Liv
         </div>
       )}
 
-      {topSlot && <div className="shrink-0">{topSlot}</div>}
-
-      {/* LIVE FEED section — the header itself is a button that collapses the
-          section independently of the deliverables panel and the whole rail. */}
+      {/* LIVE FEED section — the header itself is a button that collapses
+          the section, independent of the whole-rail minimize. */}
       <div className={`border-b border-mc-border shrink-0 ${feedCollapsed ? '' : ''}`}>
         <button
           onClick={toggleFeed}

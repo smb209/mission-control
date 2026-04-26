@@ -37,6 +37,7 @@ import {
   KanbanSquare,
   Bug,
   Users,
+  Package,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -69,11 +70,16 @@ function buildSections(taskBoardHref: string): NavSection[] {
       title: 'Project',
       items: [
         // Order is project-lifecycle: ideate (PM) → plan (Initiatives) →
-        // schedule (Roadmap) → ship (Task Board).
+        // schedule (Roadmap) → ship (Task Board) → ship-output
+        // (Deliverables). Deliverables used to live in the right rail
+        // of the workspace task board where it competed for vertical
+        // space; promoted to its own page so it stays reachable on
+        // small viewports too.
         { href: '/pm', label: 'PM', icon: Bot },
         { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
         { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
         { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
+        { href: '/deliverables', label: 'Deliverables', icon: Package, prefix: true },
       ],
     },
     {
