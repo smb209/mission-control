@@ -659,6 +659,7 @@ export default function InitiativeDetailPage({
             <PlanWithPmPanel
               open={showPlanPanel}
               workspaceId={initiative.workspace_id}
+              targetInitiativeId={initiative.id}
               draft={{
                 title: initiative.title,
                 description: initiative.description ?? '',

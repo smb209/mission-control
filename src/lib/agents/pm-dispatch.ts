@@ -306,6 +306,13 @@ export interface DispatchSynthesizedInput {
   /** Free-text prompt sent to the named agent. */
   agent_prompt: string;
   parent_proposal_id?: string | null;
+  /**
+   * Set when the proposal is being generated FOR a real initiative
+   * (e.g. the operator clicked Plan with PM on the detail page).
+   * Persisted on the proposal row so the panel can resume the draft on
+   * re-open instead of throwing away their refinements.
+   */
+  target_initiative_id?: string | null;
 }
 
 export async function dispatchPmSynthesized(
@@ -333,6 +340,26 @@ export async function dispatchPmSynthesized(
           // dispatchViaNamedAgent.
           const found = findProposalCreatedSince(input.workspace_id, sinceIso);
           if (found) {
+            // The MCP `propose_changes` tool doesn't accept
+            // target_initiative_id (chat-only callers don't have one),
+            // so when this dispatch carries one, stamp it onto the row
+            // post-hoc. Lets the panel resume the draft next time the
+            // operator opens it on the same initiative.
+            if (input.target_initiative_id) {
+              try {
+                run(
+                  'UPDATE pm_proposals SET target_initiative_id = ? WHERE id = ? AND target_initiative_id IS NULL',
+                  [input.target_initiative_id, found.id],
+                );
+                return {
+                  proposal: { ...found, target_initiative_id: input.target_initiative_id },
+                  used_synthesize_fallback: false,
+                  used_named_agent: true,
+                };
+              } catch (err) {
+                console.warn('[pm-dispatch] target stamp failed:', (err as Error).message);
+              }
+            }
             return { proposal: found, used_synthesize_fallback: false, used_named_agent: true };
           }
         }
@@ -352,6 +379,7 @@ export async function dispatchPmSynthesized(
     impact_md: input.synth.impact_md,
     proposed_changes: input.synth.changes,
     parent_proposal_id: input.parent_proposal_id ?? null,
+    target_initiative_id: input.target_initiative_id ?? null,
   });
   return { proposal, used_synthesize_fallback: true, used_named_agent: false };
 }

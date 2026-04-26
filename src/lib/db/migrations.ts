@@ -3224,6 +3224,26 @@ const migrations: Migration[] = [
       console.log(`[Migration 049] linked=${linked} renamed=${renamed}`);
     },
   },
+  {
+    id: '050',
+    name: 'pm_proposals_target_initiative',
+    up: (db) => {
+      // Add target_initiative_id so plan_initiative proposals dispatched
+      // FROM a real initiative can be linked back to it. Lets the panel
+      // resume an in-progress draft when the operator clicks away and
+      // returns later, instead of throwing away their refinements and
+      // re-prompting the PM agent (which often gets weirder results on
+      // repeated re-plans of the same draft).
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'target_initiative_id')) {
+        db.exec(`ALTER TABLE pm_proposals ADD COLUMN target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL`);
+      }
+      // Composite index optimised for the resume-lookup query:
+      //   "latest draft plan_initiative proposal for this initiative".
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_target_init ON pm_proposals(target_initiative_id, status, created_at DESC)`);
+      console.log('[Migration 050] pm_proposals.target_initiative_id added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
