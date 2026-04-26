@@ -29,7 +29,7 @@ function freshWorkspace(): string {
   return id;
 }
 
-test('PM lifecycle: dispatch → draft → accept → diff applied + event emitted', () => {
+test('PM lifecycle: dispatch → draft → accept → diff applied + event emitted', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
 
@@ -58,7 +58,7 @@ test('PM lifecycle: dispatch → draft → accept → diff applied + event emitt
   });
 
   // 1. Operator drops a disruption.
-  const dispatch = dispatchPm({
+  const dispatch = await dispatchPm({
     workspace_id: ws,
     trigger_text: 'Sarah out 2026-05-01 to 2026-05-08',
   });

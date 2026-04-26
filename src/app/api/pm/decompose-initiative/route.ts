@@ -21,8 +21,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getInitiative } from '@/lib/db/initiatives';
 import { synthesizeDecompose } from '@/lib/agents/pm-agent';
-import { createProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
-import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
+import { PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,13 +71,24 @@ export async function POST(request: NextRequest) {
       hint: parsed.data.hint ?? null,
     });
 
-    const proposal = createProposal({
+    // Try the named-agent path first (PM gateway agent at
+    // ~/.openclaw/workspaces/mc-project-manager). On timeout or no
+    // session, the synthesized proposal is persisted exactly like
+    // before so the operator always has something to react to.
+    const dispatch = await dispatchPmSynthesized({
       workspace_id: parent.workspace_id,
       trigger_text: triggerText,
       trigger_kind: 'decompose_initiative',
-      impact_md: synth.impact_md,
-      proposed_changes: synth.changes,
+      synth: { impact_md: synth.impact_md, changes: synth.changes },
+      agent_prompt:
+        `Decompose initiative ${parent.id} ("${parent.title}", kind=${parent.kind}) ` +
+        `into 3-7 child initiatives.` +
+        (parsed.data.hint ? ` Operator hint: ${parsed.data.hint}.` : '') +
+        ` Call \`propose_changes\` (trigger_kind='decompose_initiative') with one ` +
+        `\`create_child_initiative\` diff per child. Pre-wire each child to depend on the ` +
+        `prior sibling using placeholder ids \`$0\`, \`$1\`, etc. See your SOUL.md.`,
     });
+    const proposal = dispatch.proposal;
 
     try {
       postPmChatMessage({

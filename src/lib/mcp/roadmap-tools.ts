@@ -104,6 +104,19 @@ function safeWrap<T>(fn: () => T): CallToolResult {
   }
 }
 
+async function safeWrapAsync<T>(fn: () => Promise<T>): Promise<CallToolResult> {
+  try {
+    const result = await fn();
+    return textResult(JSON.stringify(result, null, 2), result as Record<string, unknown>);
+  } catch (err) {
+    if (err instanceof PmProposalValidationError) {
+      return errorResult(err.message, 'validation_failed', { hints: err.hints });
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return errorResult(msg, 'internal_error');
+  }
+}
+
 const KINDS = z.enum(['theme', 'milestone', 'epic', 'story']);
 const INIT_STATUSES = z.enum([
   'planned',
@@ -586,7 +599,7 @@ export function registerRoadmapTools(server: McpServer): void {
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
-    async (args) => safeWrap(() => {
+    async (args) => safeWrapAsync(async () => {
       // The DB helper creates an empty child slot; the dispatch path
       // fills it with a freshly-synthesized impact + changes.
       const parent = queryOne<{ workspace_id: string }>(
@@ -598,7 +611,7 @@ export function registerRoadmapTools(server: McpServer): void {
       // Re-dispatch so the new draft has impact_md + changes filled in.
       // We do this here (instead of relying on the API route refine
       // path) so MCP-driven refines also work.
-      const result = dispatchPm({
+      const result = await dispatchPm({
         workspace_id: parent.workspace_id,
         trigger_text: args.additional_constraint,
         trigger_kind: 'manual',

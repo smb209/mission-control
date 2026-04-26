@@ -26,8 +26,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
-import { createProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
-import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
+import { PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,18 +71,24 @@ export async function POST(request: NextRequest) {
       draft: parsed.data.draft,
     });
 
-    // Stash the suggestions in proposed_changes as a synthetic single-diff
-    // payload via update_status_check on a sentinel that we never apply
-    // (advisory accept short-circuits). We use a JSON sidecar block in
-    // impact_md instead so client can read suggestions without parsing
-    // diffs. proposed_changes stays an empty array = nothing to apply.
-    const proposal = createProposal({
+    // Try the named-agent path first (PM gateway agent at
+    // ~/.openclaw/workspaces/mc-project-manager). On timeout or no
+    // session, the synthesized advisory proposal is persisted exactly
+    // like before. proposed_changes stays an empty array for the
+    // advisory plan_initiative case = nothing to apply on accept.
+    const dispatch = await dispatchPmSynthesized({
       workspace_id: parsed.data.workspace_id,
       trigger_text: triggerText,
       trigger_kind: 'plan_initiative',
-      impact_md: synth.impact_md,
-      proposed_changes: synth.changes,
+      synth: { impact_md: synth.impact_md, changes: synth.changes },
+      agent_prompt:
+        `Plan an initiative draft titled "${parsed.data.draft.title}". ` +
+        `Operator-provided draft: ${JSON.stringify(parsed.data.draft)}. ` +
+        `Call \`propose_changes\` (trigger_kind='plan_initiative') with an impact_md that ` +
+        `includes a "<!--pm-plan-suggestions ...-->" sidecar so the form can apply your ` +
+        `suggestions. proposed_changes should be [] (advisory). See your SOUL.md.`,
     });
+    const proposal = dispatch.proposal;
 
     // Best-effort chat echo for audit visibility in /pm.
     try {

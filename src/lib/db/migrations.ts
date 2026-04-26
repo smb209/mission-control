@@ -3168,6 +3168,62 @@ const migrations: Migration[] = [
       console.log(`[Migration 048] Complete. Patched ${tablesPatched.length} tables: ${tablesPatched.join(', ')}`);
     },
   },
+  {
+    id: '049',
+    name: 'pm_named_agent_link',
+    up: (db) => {
+      // Phase 5/6 follow-up: link existing PM agents to the named openclaw
+      // workspace at `~/.openclaw/workspaces/mc-project-manager/`.
+      //
+      // Migration 045 seeded each workspace's PM as `source='local'` with no
+      // `gateway_agent_id` and no `session_key_prefix` — that meant MC had
+      // no way to route chat.send traffic to a real openclaw session for
+      // the PM, and the dispatch path silently fell through to the
+      // synthesize parser. The operator has now created a real openclaw
+      // workspace; this migration links every existing PM row to that
+      // gateway agent so the named-agent dispatch route can find a session.
+      //
+      // Idempotent — only updates rows that still have NULL gateway_agent_id.
+      // Operator-customised names ("PM Bob") are preserved; only rows still
+      // named the default 'PM' get renamed to the persona in IDENTITY.md.
+      const rows = db
+        .prepare(
+          `SELECT id, name FROM agents
+            WHERE role = 'pm' AND gateway_agent_id IS NULL`,
+        )
+        .all() as { id: string; name: string | null }[];
+
+      const updateLinked = db.prepare(
+        `UPDATE agents
+            SET gateway_agent_id = 'mc-project-manager',
+                session_key_prefix = 'agent:mc-project-manager:main',
+                source = 'gateway',
+                updated_at = ?
+          WHERE id = ?`,
+      );
+      const updateRenamed = db.prepare(
+        `UPDATE agents
+            SET name = 'Margaret "Maps" Hamilton',
+                avatar_emoji = '🗺️',
+                updated_at = ?
+          WHERE id = ?`,
+      );
+
+      const now = new Date().toISOString();
+      let linked = 0;
+      let renamed = 0;
+      for (const r of rows) {
+        updateLinked.run(now, r.id);
+        linked++;
+        if (r.name === 'PM') {
+          updateRenamed.run(now, r.id);
+          renamed++;
+        }
+      }
+      console.log('[Migration 049] PM linked to gateway agent at ~/.openclaw/workspaces/mc-project-manager');
+      console.log(`[Migration 049] linked=${linked} renamed=${renamed}`);
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
