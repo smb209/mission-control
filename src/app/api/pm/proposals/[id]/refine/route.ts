@@ -78,7 +78,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     if (parent.trigger_kind === 'plan_initiative') {
       const ctx = parseTriggerContext(parent.trigger_text);
-      const draft = (ctx?.draft as Record<string, unknown> | undefined) ?? { title: 'Untitled' };
+      // When trigger_text is old free-text format, extract the title from
+      // quoted strings as a best-effort fallback (e.g. `Plan initiative flow
+      // for "Smart Snappy" epic.` → "Smart Snappy").
+      let draft = (ctx?.draft as Record<string, unknown> | undefined);
+      if (!draft) {
+        const m = parent.trigger_text.match(/"([^"]+)"/);
+        draft = { title: m ? m[1] : parent.trigger_text.slice(0, 80) };
+      }
       const draftTitle = (draft.title as string | undefined) ?? 'Untitled';
       // Reuse the same session so multi-turn refinements share context with
       // the PM agent's prior turns in this planning conversation.
