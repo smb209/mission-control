@@ -288,9 +288,22 @@ function PmChatPageInner() {
     }
   };
 
-  const onAccept = async (proposalId: string) => {
+  // plan_initiative proposals are advisory at the database level — they
+  // carry the suggestions JSON inside impact_md but no link to a target
+  // initiative. Clicking Accept on one used to flip the proposal to
+  // "accepted" and report "Applied — 0 changes" because there was no
+  // target. Now we route to a picker modal that lets the operator pick
+  // an initiative; the modal POSTs to /accept with target_initiative_id
+  // and the server applies the suggestions atomically.
+  const [planAcceptProposal, setPlanAcceptProposal] = useState<PmProposal | null>(null);
+
+  const onAccept = async (proposal: PmProposal) => {
+    if (proposal.trigger_kind === 'plan_initiative') {
+      setPlanAcceptProposal(proposal);
+      return;
+    }
     try {
-      const res = await fetch(`/api/pm/proposals/${proposalId}/accept`, { method: 'POST' });
+      const res = await fetch(`/api/pm/proposals/${proposal.id}/accept`, { method: 'POST' });
       if (!res.ok) throw new Error('Accept failed');
       await loadMessages();
       await loadRecent();
@@ -581,6 +594,19 @@ function PmChatPageInner() {
           </ul>
         </aside>
       </div>
+
+      {planAcceptProposal && (
+        <ApplyPlanToInitiativeModal
+          proposal={planAcceptProposal}
+          workspaceId={workspaceId}
+          onClose={() => setPlanAcceptProposal(null)}
+          onApplied={async () => {
+            setPlanAcceptProposal(null);
+            await loadMessages();
+            await loadRecent();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -596,7 +622,9 @@ function parseProposalId(m: AgentChatMessage): string | null {
 interface ChatMessageRowProps {
   message: AgentChatMessage;
   proposal?: PmProposal;
-  onAccept: (id: string) => void;
+  // Pass the full proposal so the parent can branch on trigger_kind
+  // (e.g. plan_initiative routes to the Apply-to-initiative picker).
+  onAccept: (proposal: PmProposal) => void;
   onReject: (id: string) => void;
   refining: string | null;
   refineText: string;
@@ -722,7 +750,7 @@ function ChatMessageRow({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onAccept(proposal.id)}
+                  onClick={() => onAccept(proposal)}
                   className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1"
                 >
                   <Check className="w-3 h-3" /> Accept
@@ -771,7 +799,7 @@ function shortId(id: string | null | undefined): string {
 
 interface PinnedStandupCardProps {
   proposal: PmProposal;
-  onAccept: (id: string) => void;
+  onAccept: (proposal: PmProposal) => void;
   onReject: (id: string) => void;
   setRef: (el: HTMLDivElement | null) => void;
   highlighted: boolean;
@@ -839,7 +867,7 @@ function PinnedStandupCard({
       <div className="px-3 py-2 border-t border-violet-500/30 bg-violet-500/5 flex items-center gap-2">
         <button
           type="button"
-          onClick={() => onAccept(proposal.id)}
+          onClick={() => onAccept(proposal)}
           className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1"
         >
           <Check className="w-3 h-3" /> Accept
@@ -870,6 +898,280 @@ function ChatMarkdown({ content }: { content: string }) {
   return (
     <div className="mc-md text-sm">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
+
+interface InitiativeLite {
+  id: string;
+  title: string;
+  kind: string;
+  status: string;
+  workspace_id?: string;
+}
+
+interface PlanSuggestionsLite {
+  refined_description?: string | null;
+  complexity?: 'S' | 'M' | 'L' | 'XL' | null;
+  target_start?: string | null;
+  target_end?: string | null;
+  status_check_md?: string | null;
+  owner_agent_id?: string | null;
+  dependencies?: Array<{
+    depends_on_initiative_id: string;
+    note?: string | null;
+  }>;
+}
+
+/**
+ * Modal that lands when the operator clicks Accept on a plan_initiative
+ * proposal in the PM chat. Lets them pick which initiative to apply the
+ * suggestions to (best title-match preselected from the draft) and
+ * shows a preview of what will change before they hit Apply. The actual
+ * apply runs server-side via /api/pm/proposals/<id>/accept with
+ * target_initiative_id, so it's atomic and the chat banner accurately
+ * reports what landed.
+ */
+function ApplyPlanToInitiativeModal({
+  proposal,
+  workspaceId,
+  onClose,
+  onApplied,
+}: {
+  proposal: PmProposal;
+  workspaceId: string;
+  onClose: () => void;
+  onApplied: () => void | Promise<void>;
+}) {
+  const [initiatives, setInitiatives] = useState<InitiativeLite[]>([]);
+  const [chosenId, setChosenId] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Pull the structured suggestions out of the impact_md HTML comment —
+  // same parser shape as the inline detail-page panel.
+  const suggestions: PlanSuggestionsLite | null = (() => {
+    const m = proposal.impact_md.match(/<!--pm-plan-suggestions\s+([\s\S]*?)\s*-->/);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[1]) as PlanSuggestionsLite;
+    } catch {
+      return null;
+    }
+  })();
+
+  // Pull the draft title out of trigger_text so we can preselect the
+  // best-matching existing initiative.
+  const draftTitle: string = (() => {
+    try {
+      const t = JSON.parse(proposal.trigger_text);
+      return (t?.draft?.title as string) ?? '';
+    } catch {
+      return '';
+    }
+  })();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/initiatives?workspace_id=${encodeURIComponent(workspaceId)}`);
+        if (!res.ok) throw new Error(`Failed to load initiatives (${res.status})`);
+        const list = (await res.json()) as InitiativeLite[];
+        if (cancelled) return;
+        setInitiatives(list);
+        // Preselect by case-insensitive title equality first, then by
+        // longest substring overlap. If nothing matches, leave the
+        // dropdown unselected so the operator picks consciously.
+        if (draftTitle && list.length > 0) {
+          const exact = list.find(
+            i => i.title.trim().toLowerCase() === draftTitle.trim().toLowerCase(),
+          );
+          if (exact) {
+            setChosenId(exact.id);
+          } else {
+            const lower = draftTitle.toLowerCase();
+            const partial = list.find(i => i.title.toLowerCase().includes(lower) || lower.includes(i.title.toLowerCase()));
+            if (partial) setChosenId(partial.id);
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load initiatives');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, draftTitle]);
+
+  const handleApply = async () => {
+    if (!chosenId) {
+      setErr('Pick an initiative first.');
+      return;
+    }
+    setApplying(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/pm/proposals/${proposal.id}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_initiative_id: chosenId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Apply failed (${res.status})`);
+      }
+      await onApplied();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Apply failed');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const titleFor = (id: string) => initiatives.find(i => i.id === id)?.title ?? id.slice(0, 8);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div
+        className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col text-mc-text"
+        onClick={e => e.stopPropagation()}
+      >
+        <header className="p-4 border-b border-mc-border">
+          <h2 className="text-lg font-semibold">Apply PM suggestions to an initiative</h2>
+          <p className="text-xs text-mc-text-secondary mt-1">
+            Plan with PM produces an advisory proposal. Pick which initiative these suggestions
+            should land on — the server will patch its fields and create the suggested
+            dependencies in one go.
+          </p>
+        </header>
+
+        <div className="p-4 space-y-4 overflow-y-auto">
+          <div>
+            <label className="block">
+              <span className="text-xs text-mc-text-secondary uppercase tracking-wide">
+                Apply to initiative
+              </span>
+              <select
+                className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+                value={chosenId}
+                onChange={e => setChosenId(e.target.value)}
+                disabled={loading || applying}
+              >
+                <option value="">{loading ? 'Loading…' : '— pick one —'}</option>
+                {initiatives.map(i => (
+                  <option key={i.id} value={i.id}>
+                    [{i.kind}] {i.title} · {i.status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {draftTitle && (
+              <p className="text-[11px] text-mc-text-secondary mt-1">
+                PM drafted: <span className="text-mc-text">{draftTitle}</span>
+                {chosenId
+                  ? initiatives.find(i => i.id === chosenId)?.title.toLowerCase() ===
+                    draftTitle.toLowerCase()
+                    ? ' · exact match preselected'
+                    : ' · best match preselected — change if wrong'
+                  : ''}
+              </p>
+            )}
+          </div>
+
+          {suggestions ? (
+            <div className="rounded border border-mc-border bg-mc-bg p-3 text-xs space-y-2">
+              <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">
+                Will apply
+              </div>
+              {suggestions.refined_description && (
+                <Row label="Description">
+                  <span className="text-mc-text-secondary line-clamp-3">
+                    {suggestions.refined_description}
+                  </span>
+                </Row>
+              )}
+              {suggestions.complexity && (
+                <Row label="Complexity">{suggestions.complexity}</Row>
+              )}
+              {suggestions.target_start && (
+                <Row label="Target start">{suggestions.target_start}</Row>
+              )}
+              {suggestions.target_end && (
+                <Row label="Target end">{suggestions.target_end}</Row>
+              )}
+              {suggestions.status_check_md && (
+                <Row label="Status check">
+                  <span className="font-mono text-[11px] text-mc-text-secondary line-clamp-3">
+                    {suggestions.status_check_md}
+                  </span>
+                </Row>
+              )}
+              {suggestions.owner_agent_id && (
+                <Row label="Owner">{suggestions.owner_agent_id.slice(0, 8)}…</Row>
+              )}
+              {suggestions.dependencies && suggestions.dependencies.length > 0 && (
+                <Row label={`Dependencies (${suggestions.dependencies.length})`}>
+                  <ul className="space-y-0.5">
+                    {suggestions.dependencies.map(d => (
+                      <li key={d.depends_on_initiative_id}>
+                        → <span className="font-medium">{titleFor(d.depends_on_initiative_id)}</span>
+                        {d.note ? (
+                          <span className="text-mc-text-secondary italic"> — {d.note}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </Row>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2">
+              This proposal has no embedded suggestions to apply.
+            </div>
+          )}
+
+          {err && (
+            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2">
+              {err}
+            </div>
+          )}
+        </div>
+
+        <footer className="flex justify-end gap-2 p-4 border-t border-mc-border">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={applying}
+            className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={applying || !chosenId || !suggestions}
+            className="px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50"
+          >
+            {applying ? 'Applying…' : 'Apply suggestions'}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[110px_1fr] gap-2">
+      <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 pt-0.5">
+        {label}
+      </div>
+      <div className="text-mc-text">{children}</div>
     </div>
   );
 }

@@ -1172,9 +1172,13 @@ export function EditDrawer({
             workspaceId={initiative.workspace_id}
             draft={planDraft}
             onClose={() => setPlanOpen(false)}
-            onApply={(s: PlanInitiativeSuggestions) => {
-              // Populate the form fields with the PM's recommendations.
-              // The operator can still tweak before Save.
+            onApply={s => {
+              // EditDrawer is still a "fill-the-form, then Save" UX —
+              // we don't go through the proposal-accept path here
+              // because the operator may keep tweaking before clicking
+              // Save (which then PATCHes everything in one shot). The
+              // proposal-id is ignored on this path; the field-level
+              // population mirrors what the PM suggested.
               if (s.refined_description) setDescription(s.refined_description);
               if (s.complexity) setComplexity(s.complexity);
               if (s.target_start) setTargetStart(s.target_start);
