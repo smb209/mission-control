@@ -27,6 +27,29 @@ function agentChatSessionKey(agent: Pick<Agent, 'session_key_prefix' | 'gateway_
   return buildAgentSessionKey(agent, `chat-${agent.id.slice(0, 8)}`);
 }
 
+// DELETE /api/agents/[id]/chat — wipe this agent's chat thread.
+//
+// Only clears the rows in agent_chat_messages (the *visible* thread).
+// The agent's gateway session is NOT touched — the gateway still
+// remembers everything from this conversation. Pair with
+// `POST /api/agents/[id]/reset` for a true "start over". Two distinct
+// semantics gives the operator a choice between "I just want to clean
+// up the UI" and "I want the agent to forget too".
+export async function DELETE(_request: NextRequest, { params }: RouteParams) {
+  try {
+    const { id } = await params;
+    const result = run(
+      `DELETE FROM agent_chat_messages WHERE agent_id = ?`,
+      [id],
+    );
+    broadcast({ type: 'agent_chat_message', payload: { agentId: id, cleared: true } });
+    return NextResponse.json({ deleted: result.changes ?? 0 });
+  } catch (error) {
+    console.error('Failed to clear agent chat:', error);
+    return NextResponse.json({ error: 'Failed to clear chat' }, { status: 500 });
+  }
+}
+
 // GET /api/agents/[id]/chat — history, oldest first
 export async function GET(_request: NextRequest, { params }: RouteParams) {
   try {
