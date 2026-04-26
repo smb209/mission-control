@@ -33,6 +33,11 @@ const SIDECAR_PATTERN_GLOBAL =
 /**
  * Pull the suggestions blob out of an impact_md string. Returns null
  * when no sidecar matches or the JSON is malformed.
+ *
+ * Handles a malformed variant the PM agent sometimes produces:
+ *   <!--pm-plan-suggestions {JSON}'><!--pm-plan-suggestions end-->
+ * In that case the regex captures `{JSON}'>...end` — we fall back to
+ * extracting the leading balanced JSON object (`{...}`) from the capture.
  */
 export function parseSuggestionsFromImpactMd(
   md: string,
@@ -41,9 +46,19 @@ export function parseSuggestionsFromImpactMd(
   // shared global keeps state in `lastIndex`).
   const m = md.match(/<!(?:--|—|–)\s*pm-plan-suggestions\s+([\s\S]*?)\s*(?:--|—|–)>/);
   if (!m) return null;
+  const raw = m[1].trim();
   try {
-    return JSON.parse(m[1]) as PlanInitiativeSuggestionsBlob;
+    return JSON.parse(raw) as PlanInitiativeSuggestionsBlob;
   } catch {
+    // Malformed sidecar — try to extract just the leading JSON object.
+    // `\{[\s\S]*\}` is greedy so it backtracks to the LAST `}`, which is
+    // the closing brace of the JSON rather than any garbage that follows.
+    const objMatch = raw.match(/^(\{[\s\S]*\})/);
+    if (objMatch) {
+      try {
+        return JSON.parse(objMatch[1]) as PlanInitiativeSuggestionsBlob;
+      } catch { /* fall through */ }
+    }
     return null;
   }
 }

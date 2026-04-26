@@ -192,11 +192,15 @@ export async function POST(request: NextRequest) {
       console.warn('[pm-plan] chat insert failed:', (err as Error).message);
     }
 
+    // Prefer the agent's parsed suggestions when available; fall back to
+    // the deterministic synth only when the sidecar is absent or unparseable.
+    const responseSuggestions = parseSuggestionsFromImpactMd(proposal.impact_md) ?? synth.suggestions;
+
     return NextResponse.json(
       {
         proposal_id: proposal.id,
         proposal,
-        suggestions: synth.suggestions,
+        suggestions: responseSuggestions,
       },
       { status: 201 },
     );
