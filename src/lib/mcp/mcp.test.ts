@@ -106,6 +106,32 @@ test('whoami returns identity, assigned tasks, and peer roster', async () => {
   );
 });
 
+test('whoami resolves identity by gateway_agent_id (bootstrap path)', async () => {
+  const { client } = await makePair();
+  const gw = `mc-bootstrap-${crypto.randomUUID().slice(0, 8)}`;
+  const me = seedAgent({ role: 'builder', gateway: gw });
+  const task = seedTask({ assigned: me, status: 'in_progress' });
+
+  const res = await client.callTool({
+    name: 'whoami',
+    arguments: { agent_id: gw },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{
+    id: string;
+    gateway_agent_id: string;
+    assigned_task_ids: string[];
+    peers: Record<string, unknown>;
+  }>(res);
+  assert.equal(payload.id, me, 'returns the MC agent_id, not the gateway id');
+  assert.equal(payload.gateway_agent_id, gw);
+  assert.ok(payload.assigned_task_ids.includes(task), 'tasks resolved via me.id');
+  assert.ok(
+    !Object.keys(payload.peers).includes(gw),
+    'caller should not appear in their own peer list',
+  );
+});
+
 test('whoami returns an error for an unknown agent_id', async () => {
   const { client } = await makePair();
   const res = await client.callTool({
