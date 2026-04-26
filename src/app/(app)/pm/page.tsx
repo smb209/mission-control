@@ -13,7 +13,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown } from 'lucide-react';
+import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -312,6 +312,58 @@ function PmChatPageInner() {
     }
   };
 
+  // "New chat" controls. Two distinct semantics so the operator can
+  // choose between cleaning up the UI vs. actually making the agent
+  // forget. The menu surfaces both.
+  const [newChatMenuOpen, setNewChatMenuOpen] = useState(false);
+  const [newChatBusy, setNewChatBusy] = useState<'clear' | 'reset' | null>(null);
+
+  const clearChatThread = useCallback(async () => {
+    if (!pmAgent) return;
+    if (!confirm('Clear visible chat history? The PM agent will still remember everything from its session — only the displayed thread is wiped.')) return;
+    setNewChatBusy('clear');
+    setNewChatMenuOpen(false);
+    try {
+      const res = await fetch(`/api/agents/${pmAgent.id}/chat`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Clear failed (${res.status})`);
+      }
+      await loadMessages();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setNewChatBusy(null);
+    }
+  }, [pmAgent, loadMessages]);
+
+  const startFreshChat = useCallback(async () => {
+    if (!pmAgent) return;
+    if (!confirm('Start a fresh PM chat? This wipes the visible thread AND resets the PM agent\'s gateway session, so it forgets every prior message. In-progress proposal drafts are kept; only the chat history is cleared.')) return;
+    setNewChatBusy('reset');
+    setNewChatMenuOpen(false);
+    try {
+      // Order matters: reset the gateway session first, then clear the
+      // local thread. If the reset fails we leave the thread intact so
+      // the operator can try again rather than losing visibility.
+      const resetRes = await fetch(`/api/agents/${pmAgent.id}/reset`, { method: 'POST' });
+      if (!resetRes.ok) {
+        const data = await resetRes.json().catch(() => ({}));
+        throw new Error(data.error || `Reset failed (${resetRes.status})`);
+      }
+      const clearRes = await fetch(`/api/agents/${pmAgent.id}/chat`, { method: 'DELETE' });
+      if (!clearRes.ok) {
+        const data = await clearRes.json().catch(() => ({}));
+        throw new Error(data.error || `Clear failed (${clearRes.status})`);
+      }
+      await loadMessages();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setNewChatBusy(null);
+    }
+  }, [pmAgent, loadMessages]);
+
   const onReject = async (proposalId: string) => {
     try {
       const res = await fetch(`/api/pm/proposals/${proposalId}/reject`, { method: 'POST' });
@@ -436,7 +488,89 @@ function PmChatPageInner() {
           {runningStandup ? <Loader className="w-3 h-3 animate-spin" /> : <Sunrise className="w-3 h-3" />}
           Run standup
         </button>
+
+        {/*
+          New-chat menu. Two distinct semantics:
+            "Clear visible history" — wipes agent_chat_messages only.
+              Useful when the displayed thread is cluttered but the
+              operator wants the agent to keep its memory.
+            "Start fresh chat" — also resets the PM gateway session, so
+              the agent forgets and the next message starts a new
+              context window. Use this when refinements have started
+              going sideways or the agent is "annoyed".
+          Closes on outside click via a wrapper-level handler.
+        */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setNewChatMenuOpen(v => !v)}
+            disabled={!pmAgent || newChatBusy !== null}
+            title="Clear or reset the PM chat"
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 disabled:opacity-50"
+          >
+            {newChatBusy ? <Loader className="w-3 h-3 animate-spin" /> : <MessageSquarePlus className="w-3 h-3" />}
+            New chat
+          </button>
+          {newChatMenuOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setNewChatMenuOpen(false)}
+                aria-hidden
+              />
+              <div className="absolute right-0 mt-1 w-72 z-50 bg-mc-bg-secondary border border-mc-border rounded-md shadow-lg py-1">
+                <button
+                  type="button"
+                  onClick={clearChatThread}
+                  disabled={newChatBusy !== null}
+                  className="w-full text-left px-3 py-2 hover:bg-mc-bg/60 flex items-start gap-2 text-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mt-0.5 text-mc-text-secondary shrink-0" />
+                  <span>
+                    <span className="block font-medium text-mc-text">Clear visible history</span>
+                    <span className="block text-[11px] text-mc-text-secondary mt-0.5">
+                      Wipes the displayed thread. The PM agent still remembers everything from its session.
+                    </span>
+                  </span>
+                </button>
+                <div className="h-px bg-mc-border my-1" />
+                <button
+                  type="button"
+                  onClick={startFreshChat}
+                  disabled={newChatBusy !== null}
+                  className="w-full text-left px-3 py-2 hover:bg-mc-bg/60 flex items-start gap-2 text-xs"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 mt-0.5 text-mc-accent shrink-0" />
+                  <span>
+                    <span className="block font-medium text-mc-text">Start fresh chat</span>
+                    <span className="block text-[11px] text-mc-text-secondary mt-0.5">
+                      Wipes the thread <strong>and</strong> resets the PM agent's gateway session — agent forgets too.
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
+
+      {/*
+        Context indicator. Tells the operator how much history is in
+        the PM agent's context right now. Plain caption; no extra UI
+        chrome. Hidden when there is no PM agent (loading state).
+      */}
+      {pmAgent && (
+        <div className="px-4 py-1.5 border-b border-mc-border/60 text-[11px] text-mc-text-secondary flex items-center gap-2 shrink-0">
+          <Info className="w-3 h-3" />
+          {messages.length === 0 ? (
+            <span>Fresh chat — the PM agent's context window is empty.</span>
+          ) : (
+            <span>
+              <strong className="text-mc-text">{messages.length}</strong> message{messages.length === 1 ? '' : 's'} in the PM agent's context. New messages append; use <em>New chat</em> above to start over.
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {/* Chat thread */}
