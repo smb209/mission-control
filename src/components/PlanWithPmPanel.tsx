@@ -75,6 +75,7 @@ export default function PlanWithPmPanel({
   workspaceId,
   draft,
   knownInitiatives,
+  targetInitiativeId,
   onClose,
   onApply,
 }: {
@@ -82,6 +83,14 @@ export default function PlanWithPmPanel({
   workspaceId: string;
   draft: PlanInitiativeDraft;
   knownInitiatives?: KnownInitiative[];
+  /**
+   * When set, the panel resumes any in-progress draft proposal for
+   * this initiative on open (GET) instead of always running a fresh
+   * PM dispatch (POST). The server stamps target_initiative_id on the
+   * proposal so the resume lookup is initiative-scoped and won't fight
+   * with concurrent plans of unrelated drafts.
+   */
+  targetInitiativeId?: string | null;
   onClose: () => void;
   /**
    * Operator clicked Apply. Receives the parsed suggestions plus the
@@ -135,11 +144,30 @@ export default function PlanWithPmPanel({
       setLoading(true);
       setErr(null);
       try {
+        // Resume path: when we have a target initiative, ask the server
+        // for any existing draft first. This is what makes "click away
+        // and come back" preserve refinements instead of starting over.
+        if (targetInitiativeId) {
+          const resumeRes = await fetch(
+            `/api/pm/plan-initiative?workspace_id=${encodeURIComponent(workspaceId)}&target_initiative_id=${encodeURIComponent(targetInitiativeId)}`,
+          );
+          if (resumeRes.ok) {
+            const resumeBody = await resumeRes.json();
+            if (resumeBody?.proposal && resumeBody?.suggestions) {
+              if (cancelled) return;
+              setProposalId(resumeBody.proposal_id);
+              setImpactMd(resumeBody.proposal.impact_md ?? '');
+              setSuggestions(resumeBody.suggestions);
+              return; // Skip the POST — we resumed an existing draft.
+            }
+          }
+        }
         const res = await fetch('/api/pm/plan-initiative', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspace_id: workspaceId,
+            target_initiative_id: targetInitiativeId ?? null,
             draft: draftRef.current,
           }),
         });
@@ -159,7 +187,7 @@ export default function PlanWithPmPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, workspaceId]);
+  }, [open, workspaceId, targetInitiativeId]);
 
   const refine = async () => {
     if (!proposalId || !refineText.trim()) return;

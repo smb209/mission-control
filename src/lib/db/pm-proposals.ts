@@ -106,6 +106,10 @@ export interface PmProposal {
   applied_at: string | null;
   applied_by_agent_id: string | null;
   parent_proposal_id: string | null;
+  // Set when this proposal was generated FOR an existing initiative
+  // (e.g. operator clicked "Plan with PM" on the detail page). Lets the
+  // panel resume the draft on re-open instead of re-running the PM.
+  target_initiative_id: string | null;
   created_at: string;
 }
 
@@ -120,6 +124,7 @@ interface PmProposalRow {
   applied_at: string | null;
   applied_by_agent_id: string | null;
   parent_proposal_id: string | null;
+  target_initiative_id: string | null;
   created_at: string;
 }
 
@@ -345,6 +350,7 @@ function rowToProposal(row: PmProposalRow): PmProposal {
     applied_at: row.applied_at,
     applied_by_agent_id: row.applied_by_agent_id,
     parent_proposal_id: row.parent_proposal_id,
+    target_initiative_id: row.target_initiative_id ?? null,
     created_at: row.created_at,
   };
 }
@@ -358,6 +364,7 @@ export interface CreateProposalInput {
   impact_md: string;
   proposed_changes: PmDiff[];
   parent_proposal_id?: string | null;
+  target_initiative_id?: string | null;
 }
 
 export function createProposal(input: CreateProposalInput): PmProposal {
@@ -380,8 +387,8 @@ export function createProposal(input: CreateProposalInput): PmProposal {
   run(
     `INSERT INTO pm_proposals (
        id, workspace_id, trigger_text, trigger_kind, impact_md,
-       proposed_changes, status, parent_proposal_id, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+       proposed_changes, status, parent_proposal_id, target_initiative_id, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -390,6 +397,7 @@ export function createProposal(input: CreateProposalInput): PmProposal {
       input.impact_md,
       JSON.stringify(input.proposed_changes ?? []),
       input.parent_proposal_id ?? null,
+      input.target_initiative_id ?? null,
       now,
     ],
   );
@@ -774,8 +782,8 @@ export function refineProposal(
     run(
       `INSERT INTO pm_proposals (
          id, workspace_id, trigger_text, trigger_kind, impact_md,
-         proposed_changes, status, parent_proposal_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+         proposed_changes, status, parent_proposal_id, target_initiative_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
       [
         childId,
         parent.workspace_id,
@@ -784,6 +792,7 @@ export function refineProposal(
         '_(refining…)_',
         '[]',
         parentId,
+        parent.target_initiative_id,
         now,
       ],
     );
