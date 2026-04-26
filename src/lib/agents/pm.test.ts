@@ -300,7 +300,7 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
     const send = seenSends.find(s => s.method === 'chat.send');
     assert.ok(send);
     const sk = (send!.params as { sessionKey?: string }).sessionKey;
-    assert.equal(sk, `agent:${PM_GATEWAY_AGENT_ID}:main`);
+    assert.equal(sk, `agent:${PM_GATEWAY_AGENT_ID}:main:dispatch-main`);
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);

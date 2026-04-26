@@ -3245,6 +3245,17 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: '052',
+    name: 'pm_proposals_plan_suggestions',
+    up: (db) => {
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'plan_suggestions')) {
+        db.exec(`ALTER TABLE pm_proposals ADD COLUMN plan_suggestions TEXT`);
+      }
+      console.log('[Migration 052] pm_proposals.plan_suggestions added.');
+    },
+  },
+  {
     id: '051',
     name: 'workspaces_workspace_path',
     up: (db) => {
