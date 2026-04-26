@@ -68,16 +68,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }
-    if (proposal.trigger_kind !== 'plan_initiative') {
-      return NextResponse.json(
-        { error: `target_initiative_id is only valid for plan_initiative proposals (got ${proposal.trigger_kind})` },
-        { status: 400 },
-      );
-    }
+    // We used to gate on `trigger_kind === 'plan_initiative'`, but the
+    // PM agent's `propose_changes` MCP call can mislabel kind (defaults
+    // to 'manual' when omitted) even though the dispatch was a plan
+    // request — and proposals created before pm-dispatch started
+    // post-hoc-stamping the kind keep the wrong label forever. The
+    // stronger signal that this is really a plan proposal is the
+    // presence of the embedded `<!--pm-plan-suggestions ...-->` sidecar.
+    // If suggestions parse, accept the apply regardless of trigger_kind.
     const suggestions = parseSuggestionsFromImpactMd(proposal.impact_md);
     if (!suggestions) {
       return NextResponse.json(
-        { error: 'Proposal has no embedded suggestions to apply' },
+        {
+          error:
+            proposal.trigger_kind === 'plan_initiative'
+              ? 'Proposal has no embedded suggestions to apply'
+              : `target_initiative_id is only valid for plan_initiative proposals (got ${proposal.trigger_kind}); this one has no embedded suggestions either`,
+        },
         { status: 400 },
       );
     }

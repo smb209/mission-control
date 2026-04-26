@@ -217,6 +217,11 @@ export async function GET(request: NextRequest) {
   // Latest draft proposal for this initiative. Refines mark prior
   // proposals 'superseded', so the draft chain always has at most one
   // 'draft' row at a time. Order by created_at DESC for safety.
+  // Match on target_initiative_id alone (no trigger_kind filter): the
+  // target column is only ever set by plan dispatch, so any row with it
+  // populated is a plan proposal — even if the PM agent mislabeled
+  // trigger_kind via propose_changes (now reconciled in pm-dispatch,
+  // but historic rows may still be 'manual').
   const row = queryOne<{
     id: string;
     workspace_id: string;
@@ -234,7 +239,6 @@ export async function GET(request: NextRequest) {
     `SELECT * FROM pm_proposals
      WHERE workspace_id = ?
        AND target_initiative_id = ?
-       AND trigger_kind = 'plan_initiative'
        AND status = 'draft'
      ORDER BY created_at DESC
      LIMIT 1`,

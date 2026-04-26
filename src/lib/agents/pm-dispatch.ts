@@ -340,24 +340,43 @@ export async function dispatchPmSynthesized(
           // dispatchViaNamedAgent.
           const found = findProposalCreatedSince(input.workspace_id, sinceIso);
           if (found) {
-            // The MCP `propose_changes` tool doesn't accept
-            // target_initiative_id (chat-only callers don't have one),
-            // so when this dispatch carries one, stamp it onto the row
-            // post-hoc. Lets the panel resume the draft next time the
-            // operator opens it on the same initiative.
-            if (input.target_initiative_id) {
+            // Reconcile the row with this dispatch's intent. The PM
+            // agent's `propose_changes` call is freeform — it can pass
+            // a wrong trigger_kind (defaults to 'manual' if omitted)
+            // and doesn't accept target_initiative_id at all. We know
+            // what kind of dispatch this was and where it came from,
+            // so stamp both onto the row so the downstream Apply path
+            // (which validates trigger_kind === 'plan_initiative' when
+            // target_initiative_id is supplied) doesn't reject what is
+            // really a plan_initiative proposal.
+            const fixes: string[] = [];
+            const vals: unknown[] = [];
+            let nextTriggerKind = found.trigger_kind;
+            let nextTarget = found.target_initiative_id;
+            if (found.trigger_kind !== input.trigger_kind) {
+              fixes.push('trigger_kind = ?');
+              vals.push(input.trigger_kind);
+              nextTriggerKind = input.trigger_kind;
+            }
+            if (input.target_initiative_id && !found.target_initiative_id) {
+              fixes.push('target_initiative_id = ?');
+              vals.push(input.target_initiative_id);
+              nextTarget = input.target_initiative_id;
+            }
+            if (fixes.length > 0) {
               try {
-                run(
-                  'UPDATE pm_proposals SET target_initiative_id = ? WHERE id = ? AND target_initiative_id IS NULL',
-                  [input.target_initiative_id, found.id],
-                );
+                run(`UPDATE pm_proposals SET ${fixes.join(', ')} WHERE id = ?`, [...vals, found.id]);
                 return {
-                  proposal: { ...found, target_initiative_id: input.target_initiative_id },
+                  proposal: {
+                    ...found,
+                    trigger_kind: nextTriggerKind,
+                    target_initiative_id: nextTarget,
+                  },
                   used_synthesize_fallback: false,
                   used_named_agent: true,
                 };
               } catch (err) {
-                console.warn('[pm-dispatch] target stamp failed:', (err as Error).message);
+                console.warn('[pm-dispatch] post-hoc stamp failed:', (err as Error).message);
               }
             }
             return { proposal: found, used_synthesize_fallback: false, used_named_agent: true };
