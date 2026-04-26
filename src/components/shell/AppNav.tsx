@@ -32,6 +32,7 @@ import {
   X,
   Plus,
   KanbanSquare,
+  Bug,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -85,6 +86,7 @@ function buildSections(taskBoardHref: string): NavSection[] {
       title: 'Workspace',
       items: [
         { href: '/settings', label: 'Settings', icon: SettingsIcon },
+        { href: '/debug', label: 'Debug', icon: Bug, prefix: true },
       ],
     },
   ];

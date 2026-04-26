@@ -65,13 +65,7 @@ function trace<TArgs extends { agent_id?: string; task_id?: string }>(
         taskId: args.task_id ?? null,
         ok: !result.isError,
         durationMs: Date.now() - started,
-        error: result.isError
-          ? result.structuredContent &&
-            typeof result.structuredContent === 'object' &&
-            'message' in result.structuredContent
-            ? String((result.structuredContent as { message?: unknown }).message)
-            : 'tool returned isError'
-          : undefined,
+        error: result.isError ? extractErrorMessage(result) : undefined,
       });
       return result;
     } catch (err) {
@@ -100,6 +94,18 @@ function trace<TArgs extends { agent_id?: string; task_id?: string }>(
   };
 }
 
+function extractErrorMessage(result: CallToolResult): string {
+  const sc = result.structuredContent;
+  if (sc && typeof sc === 'object') {
+    const obj = sc as Record<string, unknown>;
+    if (typeof obj.message === 'string' && obj.message) return obj.message;
+    if (typeof obj.error === 'string' && obj.error) return obj.error;
+  }
+  const first = result.content?.[0];
+  if (first && first.type === 'text' && first.text) return first.text;
+  return 'tool returned isError';
+}
+
 function textResult(text: string, structured?: Record<string, unknown>): CallToolResult {
   return {
     content: [{ type: 'text', text }],
@@ -117,7 +123,14 @@ export function registerAllTools(server: McpServer): void {
       title: 'Identify the calling agent',
       description:
         "Returns the calling agent's identity, assigned task ids, and the peer roster (gateway_id → MC agent_id). Call this once at session start to learn your own agent_id and peers.",
-      inputSchema: { agent_id: agentIdArg },
+      inputSchema: {
+        agent_id: z
+          .string()
+          .min(1)
+          .describe(
+            "Your agent identity — accepts either MC agent_id (UUID) or gateway_agent_id (e.g. 'mc-project-manager'). whoami is the bootstrap call, so either form works; other tools require the MC agent_id this returns.",
+          ),
+      },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     trace('whoami', async ({ agent_id }) => {
@@ -130,13 +143,13 @@ export function registerAllTools(server: McpServer): void {
         is_active: number | null;
       }>(
         `SELECT id, name, role, workspace_id, gateway_agent_id, is_active
-           FROM agents WHERE id = ? LIMIT 1`,
-        [agent_id],
+           FROM agents WHERE id = ? OR gateway_agent_id = ? LIMIT 1`,
+        [agent_id, agent_id],
       );
       if (!me) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `agent ${agent_id} not found` }],
+          content: [{ type: 'text', text: `agent ${agent_id} not found (tried both id and gateway_agent_id)` }],
           structuredContent: { error: 'agent_not_found', agent_id },
         };
       }
@@ -148,7 +161,7 @@ export function registerAllTools(server: McpServer): void {
               OR id IN (SELECT task_id FROM task_roles WHERE agent_id = ?))
             AND status NOT IN ('done', 'cancelled')
           ORDER BY updated_at DESC`,
-        [me.workspace_id, agent_id, agent_id],
+        [me.workspace_id, me.id, me.id],
       );
 
       const peers = queryAll<{ id: string; gateway_agent_id: string; name: string; role: string }>(
@@ -156,7 +169,7 @@ export function registerAllTools(server: McpServer): void {
           WHERE workspace_id = ?
             AND gateway_agent_id IS NOT NULL AND gateway_agent_id != ''
             AND id != ?`,
-        [me.workspace_id, agent_id],
+        [me.workspace_id, me.id],
       );
       const peerMap: Record<string, { id: string; name: string; role: string }> = {};
       for (const p of peers) {
