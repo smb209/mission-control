@@ -273,12 +273,19 @@ export async function GET(request: NextRequest) {
   }
 
   const suggestions = parseSuggestionsFromImpactMd(row.impact_md);
+  // Require refined_description — proposals without it are incomplete agent
+  // responses (e.g. only complexity/dates, no actual description rewrite).
+  // Treat them as non-resumable so a fresh dispatch runs and produces a
+  // complete set of suggestions rather than showing a blank description field.
+  if (!suggestions?.refined_description) {
+    return NextResponse.json({ proposal: null });
+  }
   return NextResponse.json({
     proposal_id: row.id,
     proposal: {
       ...row,
       proposed_changes: JSON.parse(row.proposed_changes),
     },
-    suggestions: suggestions ?? null,
+    suggestions,
   });
 }
