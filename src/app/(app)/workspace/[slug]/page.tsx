@@ -19,7 +19,6 @@ import { LiveFeed } from '@/components/LiveFeed';
 import { ReadyDeliverablesPanel } from '@/components/ReadyDeliverablesPanel';
 import { SSEDebugPanel } from '@/components/SSEDebugPanel';
 import { useMissionControl } from '@/lib/store';
-import { useSSE } from '@/hooks/useSSE';
 import { debug } from '@/lib/debug';
 import { useSetCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Task, Workspace } from '@/lib/types';
@@ -38,7 +37,8 @@ export default function WorkspacePage() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('queue');
   const [isPortrait, setIsPortrait] = useState(true);
 
-  useSSE();
+  // useSSE() now lives in AppShell — every page in the app shell receives
+  // live updates without each page re-mounting its own EventSource.
 
   useEffect(() => {
     const media = window.matchMedia('(orientation: portrait)');
@@ -222,7 +222,12 @@ export default function WorkspacePage() {
   return (
     <div className="h-full flex flex-col bg-mc-bg overflow-hidden">
       <div className="hidden lg:flex flex-1 overflow-hidden">
-        <AgentsSidebar workspaceId={workspace.id} />
+        {/*
+          Agent roster moved to its own /agents page so the task board
+          isn't sharing horizontal real estate with status pills. Mobile
+          tabs below still expose AgentsSidebar — the compact list earns
+          its place on space-constrained screens.
+        */}
         <MissionQueue workspaceId={workspace.id} />
         <LiveFeed topSlot={<ReadyDeliverablesPanel workspaceId={workspace.id} />} />
       </div>

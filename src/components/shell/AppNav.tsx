@@ -33,6 +33,7 @@ import {
   Plus,
   KanbanSquare,
   Bug,
+  Users,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -65,6 +66,7 @@ function buildSections(taskBoardHref: string): NavSection[] {
       title: 'Execute',
       items: [
         { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
+        { href: '/agents', label: 'Agents', icon: Users, prefix: true },
         { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
       ],
     },

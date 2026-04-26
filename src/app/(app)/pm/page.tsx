@@ -13,7 +13,9 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin } from 'lucide-react';
+import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   useCurrentWorkspaceId,
   useSetCurrentWorkspaceId,
@@ -127,6 +129,13 @@ function PmChatPageInner() {
   const [standupBanner, setStandupBanner] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  // Sticky-bottom: only auto-scroll if the user is already near the
+  // bottom. The page polls /api/agents/<pm>/chat every 3s — without this
+  // gate the auto-scroll yanked the operator back every poll, even when
+  // they were trying to read older proposals. We refresh the flag on
+  // scroll events using a "within 80px of bottom" threshold so a small
+  // accidental nudge doesn't break stickiness.
+  const [stuckToBottom, setStuckToBottom] = useState(true);
 
   // Phase 6: support `?proposal=<id>` deep-links — scroll to and highlight
   // the matching proposal card on load. Cleared after first successful
@@ -226,11 +235,28 @@ function PmChatPageInner() {
     return () => clearInterval(id);
   }, [pmAgent, loadMessages, loadRecent]);
 
+  // Auto-scroll only when the operator is already at the bottom. This
+  // depends on `messages` AND the latest stuckToBottom value — including
+  // stuckToBottom in the deps list would re-scroll the moment they touch
+  // the bottom again, which is the desired behaviour.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
+    if (!stuckToBottom) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, stuckToBottom]);
+
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    setStuckToBottom(distanceFromBottom < 80);
+  }, []);
+
+  const jumpToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setStuckToBottom(true);
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim() || sending) return;
@@ -250,6 +276,9 @@ function PmChatPageInner() {
         throw new Error(data.error || `Failed to dispatch (${res.status})`);
       }
       setInput('');
+      // The operator just dispatched — they want to see the result. Re-stick
+      // to the bottom even if they had been scrolled up reading old cards.
+      setStuckToBottom(true);
       await loadMessages();
       await loadRecent();
     } catch (err) {
@@ -426,7 +455,12 @@ function PmChatPageInner() {
               highlighted={highlightedProposalId === pinnedStandup.id}
             />
           )}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="relative flex-1 min-h-0">
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="absolute inset-0 overflow-y-auto p-4 space-y-3"
+            >
             {messages.length === 0 && pmAgent && (
               <div className="text-center py-12 text-mc-text-secondary">
                 <Inbox className="w-8 h-8 mx-auto mb-3 opacity-50" />
@@ -463,6 +497,22 @@ function PmChatPageInner() {
                 />
               );
             })}
+            </div>
+            {/* Floating "jump to bottom" — only when the user has scrolled
+                up enough that auto-stick is disabled. New messages land
+                while they're scrolled up; this gives them a one-click way
+                to catch up without losing their reading position by
+                accident. */}
+            {!stuckToBottom && (
+              <button
+                type="button"
+                onClick={jumpToBottom}
+                className="absolute bottom-3 right-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-mc-accent text-mc-bg text-xs font-medium shadow-lg hover:bg-mc-accent/90"
+                title="Jump to latest"
+              >
+                <ArrowDown className="w-3.5 h-3.5" /> Jump to latest
+              </button>
+            )}
           </div>
 
           <div className="border-t border-mc-border p-3 space-y-2 shrink-0">
@@ -588,7 +638,7 @@ function ChatMessageRow({
           <div className="text-xs font-medium text-mc-text-secondary mb-1">
             {isUser ? 'You' : 'PM'}
           </div>
-          <div className="text-sm whitespace-pre-wrap">{message.content}</div>
+          <ChatMarkdown content={message.content} />
         </div>
       </div>
     );
@@ -619,8 +669,8 @@ function ChatMessageRow({
             {proposal.status}
           </span>
         </div>
-        <div className="p-3 text-sm whitespace-pre-wrap">
-          {message.content}
+        <div className="p-3">
+          <ChatMarkdown content={message.content} />
         </div>
         {proposal.proposed_changes.length > 0 && (
           <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
@@ -769,7 +819,9 @@ function PinnedStandupCard({
         </span>
         <span className="ml-auto text-[11px] text-mc-text-secondary/80">{created}</span>
       </div>
-      <div className="p-3 text-sm whitespace-pre-wrap">{proposal.impact_md}</div>
+      <div className="p-3">
+        <ChatMarkdown content={proposal.impact_md} />
+      </div>
       {proposal.proposed_changes.length > 0 && (
         <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
           {proposal.proposed_changes.slice(0, 6).map((c, idx) => (
@@ -803,6 +855,21 @@ function PinnedStandupCard({
           See thread below to refine.
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Render PM/operator chat content as markdown. Uses the global `.mc-md`
+ * stylesheet (defined in globals.css) tightened with `text-sm` so chat
+ * bubbles don't blow up to an article-style line-height. GFM enabled so
+ * tables, task-lists, and strikethrough render correctly — the PM's
+ * decompose / plan output frequently uses markdown tables.
+ */
+function ChatMarkdown({ content }: { content: string }) {
+  return (
+    <div className="mc-md text-sm">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   );
 }

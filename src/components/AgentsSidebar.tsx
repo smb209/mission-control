@@ -9,7 +9,7 @@ import { DiscoverAgentsModal } from './DiscoverAgentsModal';
 import { HealthIndicator } from './HealthIndicator';
 import { AgentPingIndicator } from './AgentPingIndicator';
 
-interface RollCallEntryView {
+export interface RollCallEntryView {
   id: string;
   target_agent_id: string;
   target_agent_name?: string;
@@ -20,7 +20,7 @@ interface RollCallEntryView {
   reply_body: string | null;
 }
 
-interface RollCallResultView {
+export interface RollCallResultView {
   rollcall_id: string;
   mode: 'direct' | 'coordinator';
   seconds_remaining: number;
@@ -604,7 +604,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
  * the sidebar context. Also surfaces alert-level errors (no master
  * orchestrator / multiple master orchestrators) in the same surface.
  */
-function RollCallResultsPanel({
+export function RollCallResultsPanel({
   result,
   onClose,
 }: {
