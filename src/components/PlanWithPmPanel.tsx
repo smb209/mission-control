@@ -228,6 +228,15 @@ export default function PlanWithPmPanel({
     if (suggestions && proposalId) onApply(suggestions, { proposalId });
   };
 
+  // Reject the current draft so the resume lookup skips it on next open.
+  // Fire-and-forget — the panel is closing regardless.
+  const rejectAndClose = () => {
+    if (proposalId) {
+      fetch(`/api/pm/proposals/${proposalId}/reject`, { method: 'POST' }).catch(() => {});
+    }
+    onClose();
+  };
+
   if (!open) return null;
 
   const titleFor = (id: string) =>
@@ -246,7 +255,7 @@ export default function PlanWithPmPanel({
         <Sparkles className="w-4 h-4 text-mc-accent" />
         <h3 className="font-semibold text-mc-text text-sm">PM suggestions</h3>
         <button
-          onClick={onClose}
+          onClick={rejectAndClose}
           aria-label="Close suggestions panel"
           className="ml-auto p-1 rounded hover:bg-mc-bg-secondary text-mc-text-secondary hover:text-mc-text"
         >
@@ -345,10 +354,10 @@ export default function PlanWithPmPanel({
 
           <div className="flex justify-end gap-2">
             <button
-              onClick={onClose}
+              onClick={rejectAndClose}
               className="px-3 py-1.5 rounded border border-mc-border text-mc-text-secondary text-xs"
             >
-              Save without applying
+              Discard
             </button>
             <button
               onClick={apply}
