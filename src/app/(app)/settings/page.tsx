@@ -10,7 +10,7 @@ import Link from 'next/link';
 import {
   Settings, Save, RotateCcw, Home, FolderOpen, Link as LinkIcon,
   HardDrive, Download, Upload, Trash2, RotateCw, ChevronDown, ChevronRight,
-  AlertTriangle, Check, Loader2, Cloud, CloudOff, Shield, Folder,
+  AlertTriangle, Check, Loader2, Cloud, CloudOff, Shield, Folder, Server,
 } from 'lucide-react';
 import { getConfig, updateConfig, resetConfig, type MissionControlConfig } from '@/lib/config';
 
@@ -60,11 +60,41 @@ function timeAgo(dateStr: string): string {
 // Settings Page Component
 // ---------------------------------------------------------------------------
 
+interface EnvSnapshot {
+  mission_control_url: string | null;
+  openclaw_gateway_url: string | null;
+  deliverables_host_path: string | null;
+  deliverables_container_path: string | null;
+  projects_path_env: string | null;
+  workspace_base_path_env: string | null;
+  resolved_default_workspace_root: string;
+  litellm_url: string | null;
+  allow_dynamic_agents: boolean;
+  planning_timeout_ms: string | null;
+  secrets_present: {
+    openclaw_gateway_token: boolean;
+    mc_api_token: boolean;
+    webhook_secret: boolean;
+    litellm_api_key: boolean;
+  };
+}
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<MissionControlConfig | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [envSnapshot, setEnvSnapshot] = useState<EnvSnapshot | null>(null);
+
+  useEffect(() => {
+    fetch('/api/admin/environment')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => setEnvSnapshot(data))
+      .catch(() => {
+        /* non-fatal — the section just renders a placeholder */
+      });
+  }, []);
 
   // Backup state
   const [backups, setBackups] = useState<BackupMetadata[]>([]);
@@ -273,35 +303,21 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {/* Workspaces management quick link */}
-        <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Folder className="w-5 h-5 text-mc-accent" />
-              <div>
-                <h2 className="text-xl font-semibold text-mc-text">Workspaces</h2>
-                <p className="text-sm text-mc-text-secondary">
-                  Create, rename, or delete workspaces. Each workspace owns its own tasks, agents, and initiatives.
-                </p>
-              </div>
-            </div>
-            <Link
-              href="/settings/workspaces"
-              className="px-3 py-1.5 text-sm rounded-sm bg-mc-accent text-mc-bg font-medium hover:bg-mc-accent/90 shrink-0"
-            >
-              Manage workspaces
-            </Link>
-          </div>
-        </section>
-
-        {/* Workspace Paths */}
+        {/* Default Paths for new workspaces */}
         <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
           <div className="flex items-center gap-2 mb-4">
             <FolderOpen className="w-5 h-5 text-mc-accent" />
-            <h2 className="text-xl font-semibold text-mc-text">Workspace Paths</h2>
+            <h2 className="text-xl font-semibold text-mc-text">Default paths for new workspaces</h2>
           </div>
           <p className="text-sm text-mc-text-secondary mb-4">
-            Configure where Mission Control stores projects and deliverables.
+            Defaults applied when a new workspace is created. Each workspace
+            can override its own project root from{' '}
+            <em>Workspace Settings → Project root</em>; these defaults are
+            the fallback when the override is empty. Server-side, the
+            resolved root also factors in the{' '}
+            <code className="text-mc-text">MC_DELIVERABLES_HOST_PATH</code> /
+            <code className="text-mc-text">MC_DELIVERABLES_CONTAINER_PATH</code>{' '}
+            env vars (see the Environment section below).
           </p>
 
           <div className="space-y-4">
@@ -382,6 +398,55 @@ export default function SettingsPage() {
               </p>
             </div>
           </div>
+        </section>
+
+        {/*
+          Environment — read-only diagnostic block. Server-side env
+          vars can't be changed at runtime; this section just lets
+          the operator see what the running process resolved them to.
+          Sensitive values (gateway tokens, API tokens) are reported
+          present/absent only — never echoed.
+        */}
+        <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
+          <div className="flex items-center gap-2 mb-4">
+            <Server className="w-5 h-5 text-mc-accent" />
+            <h2 className="text-xl font-semibold text-mc-text">Environment</h2>
+          </div>
+          <p className="text-sm text-mc-text-secondary mb-4">
+            Read-only snapshot of the server's resolved environment.
+            Update via your <code className="text-mc-text">.env</code> file
+            (or container env) and restart Mission Control to apply
+            changes.
+          </p>
+          {envSnapshot ? (
+            <div className="text-xs space-y-1 font-mono">
+              <EnvRow label="MISSION_CONTROL_URL" value={envSnapshot.mission_control_url} />
+              <EnvRow label="OPENCLAW_GATEWAY_URL" value={envSnapshot.openclaw_gateway_url} />
+              <EnvRow label="MC_DELIVERABLES_HOST_PATH" value={envSnapshot.deliverables_host_path} />
+              <EnvRow label="MC_DELIVERABLES_CONTAINER_PATH" value={envSnapshot.deliverables_container_path} />
+              <EnvRow label="PROJECTS_PATH" value={envSnapshot.projects_path_env} />
+              <EnvRow label="WORKSPACE_BASE_PATH" value={envSnapshot.workspace_base_path_env} />
+              <EnvRow
+                label="(resolved default workspace root)"
+                value={envSnapshot.resolved_default_workspace_root}
+                accent
+              />
+              <EnvRow label="LITELLM_URL" value={envSnapshot.litellm_url} />
+              <EnvRow label="ALLOW_DYNAMIC_AGENTS" value={String(envSnapshot.allow_dynamic_agents)} />
+              <EnvRow label="PLANNING_TIMEOUT_MS" value={envSnapshot.planning_timeout_ms} />
+              <div className="mt-3 pt-3 border-t border-mc-border/60">
+                <div className="text-mc-text-secondary uppercase tracking-wide text-[10px] mb-1">
+                  Secrets (presence only)
+                </div>
+                <SecretRow label="OPENCLAW_GATEWAY_TOKEN" present={envSnapshot.secrets_present.openclaw_gateway_token} />
+                <SecretRow label="MC_API_TOKEN" present={envSnapshot.secrets_present.mc_api_token} />
+                <SecretRow label="WEBHOOK_SECRET" present={envSnapshot.secrets_present.webhook_secret} />
+                <SecretRow label="LITELLM_API_KEY" present={envSnapshot.secrets_present.litellm_api_key} />
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-mc-text-secondary">Loading environment…</div>
+          )}
         </section>
 
         {/* Kanban UX */}
@@ -699,6 +764,36 @@ export default function SettingsPage() {
           </p>
         </section>
       </div>
+    </div>
+  );
+}
+
+function EnvRow({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string | null;
+  accent?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[280px_1fr] gap-2">
+      <span className={accent ? 'text-mc-accent' : 'text-mc-text-secondary'}>{label}</span>
+      <span className="text-mc-text break-all">
+        {value && value.length > 0 ? value : <span className="text-mc-text-secondary/60 italic">unset</span>}
+      </span>
+    </div>
+  );
+}
+
+function SecretRow({ label, present }: { label: string; present: boolean }) {
+  return (
+    <div className="grid grid-cols-[280px_1fr] gap-2">
+      <span className="text-mc-text-secondary">{label}</span>
+      <span className={present ? 'text-green-400' : 'text-mc-text-secondary/60'}>
+        {present ? 'set' : 'unset'}
+      </span>
     </div>
   );
 }

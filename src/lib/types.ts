@@ -202,6 +202,12 @@ export interface Workspace {
   slug: string;
   description?: string;
   icon: string;
+  /**
+   * Per-workspace project/deliverables root. `null`/`undefined` means
+   * the workspace uses the env-derived default (resolved server-side
+   * via `resolveWorkspacePath`). Stored raw with optional `~`.
+   */
+  workspace_path?: string | null;
   created_at: string;
   updated_at: string;
 }

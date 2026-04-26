@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   slug TEXT NOT NULL UNIQUE,
   description TEXT,
   icon TEXT DEFAULT '📁',
+  -- Per-workspace project/deliverables root. NULL means "use the
+  -- env-derived default" (see resolveWorkspacePath()). Stored as a raw
+  -- string with optional ~ that the server expands at access time.
+  workspace_path TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

@@ -166,3 +166,47 @@ export function getProjectPath(projectName: string, subpath?: string): string {
   const base = `${projectsPath}/${projectName}`;
   return subpath ? `${base}/${subpath}` : base;
 }
+
+/**
+ * Default workspace path for a given workspace slug. Used both as the
+ * value persisted on workspace creation when the operator doesn't pass
+ * an explicit override, AND as the placeholder shown on the workspace
+ * settings page when `workspace_path` is null.
+ *
+ * Resolution order — most specific to least:
+ *   1. MC_DELIVERABLES_HOST_PATH      (set on the host process when
+ *                                       MC runs in a docker container
+ *                                       but dispatches to host gateway)
+ *   2. MC_DELIVERABLES_CONTAINER_PATH (set inside the container so MC
+ *                                       can read its own filesystem)
+ *   3. PROJECTS_PATH                  (legacy generic env)
+ *   4. ~/Documents/Shared/projects    (final fallback)
+ *
+ * The host path wins because gateway agents execute on the host —
+ * persisting the host path on the workspace row ensures task
+ * dispatches resolve to a real directory the gateway can write to.
+ * Operators in non-container setups will only have one of these set
+ * anyway, so the precedence is benign there.
+ */
+export function getDefaultWorkspaceRoot(): string {
+  if (typeof window !== 'undefined') {
+    return getConfig().projectsPath;
+  }
+  return (
+    process.env.MC_DELIVERABLES_HOST_PATH ||
+    process.env.MC_DELIVERABLES_CONTAINER_PATH ||
+    process.env.PROJECTS_PATH ||
+    '~/Documents/Shared/projects'
+  );
+}
+
+/**
+ * Per-workspace path resolver. Either returns the operator's explicit
+ * override (if any) or `<defaultRoot>/<slug>`. Server-side only;
+ * callers that have a `Workspace` row should use this instead of
+ * concatenating manually.
+ */
+export function resolveWorkspacePath(slug: string, override?: string | null): string {
+  if (override && override.trim().length > 0) return override.trim();
+  return `${getDefaultWorkspaceRoot()}/${slug}`;
+}
