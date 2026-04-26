@@ -16,6 +16,8 @@ import {
   CornerUpLeft,
   Sparkles,
   Network,
+  FileText,
+  CalendarRange,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
@@ -588,6 +590,28 @@ function DetailsPanel({
 
   return (
     <div className="space-y-3">
+      <div>
+        <div className="flex items-center gap-2 text-mc-text-secondary mb-1">
+          <FileText className="w-3.5 h-3.5" />
+          <span className="font-medium">Description</span>
+        </div>
+        {initiative.description ? (
+          <p className="text-xs text-mc-text whitespace-pre-wrap">{initiative.description}</p>
+        ) : (
+          <p className="text-xs text-mc-text-secondary italic">No description.</p>
+        )}
+      </div>
+      {(initiative.target_start || initiative.target_end) && (
+        <div>
+          <div className="flex items-center gap-2 text-mc-text-secondary mb-1">
+            <CalendarRange className="w-3.5 h-3.5" />
+            <span className="font-medium">Target window</span>
+          </div>
+          <p className="text-xs text-mc-text">
+            {initiative.target_start ? initiative.target_start.slice(0, 10) : '—'} → {initiative.target_end ? initiative.target_end.slice(0, 10) : '—'}
+          </p>
+        </div>
+      )}
       <div>
         <div className="flex items-center gap-2 text-mc-text-secondary mb-1">
           <Link2 className="w-3.5 h-3.5" />
