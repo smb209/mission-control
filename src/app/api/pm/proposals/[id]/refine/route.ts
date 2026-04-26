@@ -80,6 +80,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       const ctx = parseTriggerContext(parent.trigger_text);
       const draft = (ctx?.draft as Record<string, unknown> | undefined) ?? { title: 'Untitled' };
       const draftTitle = (draft.title as string | undefined) ?? 'Untitled';
+      // Reuse the same session so multi-turn refinements share context with
+      // the PM agent's prior turns in this planning conversation.
+      const planSessionKey = (ctx?.planSessionKey as string | undefined) ?? null;
 
       // Build a synth baseline (deterministic fallback) incorporating the
       // constraint — used both as the synth-path output and as the sidecar
@@ -100,6 +103,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         workspace_id: parent.workspace_id,
         trigger_text: child.trigger_text,
         trigger_kind: 'plan_initiative',
+        planSessionKey,
         synth: { impact_md: synth.impact_md, changes: synth.changes },
         agent_prompt:
           `Refine the plan for initiative titled "${draftTitle}". ` +
