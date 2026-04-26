@@ -73,6 +73,33 @@ test('POST /api/pm/decompose-initiative: returns draft proposal for an epic', as
   }
 });
 
+test('POST /api/pm/decompose-initiative: chat echo posts the PROPOSAL impact_md', async () => {
+  const ws = freshWorkspace();
+  const epic = createInitiative({
+    workspace_id: ws,
+    kind: 'epic',
+    title: 'Build something else',
+  });
+  const res = await POST(
+    postJson('/api/pm/decompose-initiative', { initiative_id: epic.id }),
+  );
+  const data = await res.json();
+  const expectedImpact = data.proposal.impact_md as string;
+
+  // Echo must mirror the proposal that landed (named-agent or synth).
+  // Posting `synth.impact_md` directly hid the named agent's output
+  // whenever the gateway path was used (PR follow-up to #55).
+  const messages = queryAll<{ role: string; content: string }>(
+    `SELECT role, content FROM agent_chat_messages
+     WHERE agent_id = (SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm')
+     ORDER BY created_at ASC`,
+    [ws],
+  );
+  const assistant = messages.find(m => m.role === 'assistant');
+  assert.ok(assistant);
+  assert.equal(assistant!.content, expectedImpact);
+});
+
 test('POST /api/pm/decompose-initiative + accept: children are created', async () => {
   const ws = freshWorkspace();
   const epic = createInitiative({

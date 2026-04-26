@@ -7,7 +7,7 @@
 
 import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import { sendChatToAgent } from '@/lib/openclaw/send-chat';
 import type { KnowledgeEntry, TaskRole, OpenClawSession } from '@/lib/types';
 
 /**
@@ -104,16 +104,24 @@ Focus on:
         'SELECT * FROM agents WHERE id = ?',
         [learnerRole.agent_id]
       );
-      const prefix = learnerAgent
-        ? resolveAgentSessionKeyPrefix(learnerAgent)
-        : `agent:${learnerRole.agent_id}:`;
-      const sessionKey = `${prefix}${session.openclaw_session_id}`;
-      await client.call('chat.send', {
-        sessionKey,
+      const targetAgent = learnerAgent ?? {
+        id: learnerRole.agent_id,
+        name: learnerRole.agent_name,
+        session_key_prefix: undefined,
+        gateway_agent_id: undefined,
+      };
+      const result = await sendChatToAgent({
+        agent: targetAgent,
         message: learningMessage,
-        idempotencyKey: `learner-${taskId}-${event.newStatus}-${Date.now()}`
+        idempotencyKey: `learner-${taskId}-${event.newStatus}-${Date.now()}`,
+        sessionSuffix: session.openclaw_session_id,
       });
-      console.log(`[Learner] Notified ${learnerRole.agent_name} about ${event.previousStatus}→${event.newStatus}`);
+      if (result.sent) {
+        console.log(`[Learner] Notified ${learnerRole.agent_name} about ${event.previousStatus}→${event.newStatus}`);
+      } else if (result.error) {
+        // Surface transport errors so the existing catch logs them.
+        throw result.error;
+      }
     }
   } catch (err) {
     // Learner notification is best-effort — don't fail the transition

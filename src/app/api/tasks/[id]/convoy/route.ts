@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createConvoy, getConvoy, updateConvoyStatus, deleteConvoy } from '@/lib/convoy';
 import { queryOne, queryAll } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import { sendChatToAgent, buildAgentSessionKey } from '@/lib/openclaw/send-chat';
 import { extractJSON, getMessagesFromOpenClaw } from '@/lib/planning-utils';
 import {
   getAgentRoster,
@@ -204,17 +204,21 @@ async function runAIDecomposition(task: Task): Promise<{
   // Create a unique session key for this decomposition. Uses the agent's
   // own namespace (gateway_agent_id or name) rather than the old `agent:main:`
   // default that misrouted messages to the gateway's main agent.
-  const prefix = resolveAgentSessionKeyPrefix(masterAgent);
-  const sessionKey = `${prefix}decompose:${task.id}`;
+  const sessionSuffix = `decompose:${task.id}`;
+  const sessionKey = buildAgentSessionKey(masterAgent, sessionSuffix);
 
   const prompt = buildDecompositionPrompt(task, roster);
 
-  // Send the decomposition prompt
-  await client.call('chat.send', {
-    sessionKey,
+  // Send the decomposition prompt via the shared helper.
+  const sendResult = await sendChatToAgent({
+    agent: masterAgent,
     message: prompt,
     idempotencyKey: `decompose-${task.id}-${Date.now()}`,
+    sessionSuffix,
   });
+  if (!sendResult.sent && sendResult.error) {
+    throw sendResult.error;
+  }
 
   // Poll for the response
   const startTime = Date.now();

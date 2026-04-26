@@ -78,14 +78,11 @@ export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
       await client.connect();
     }
 
-    // Build a sessionKey that targets the agent's own namespace. The prefix
-    // resolver prefers an explicit `session_key_prefix`, then the gateway
-    // agent id, then a name-slug fallback — anything but the old
-    // `agent:main:` catchall that misrouted to the gateway's main agent.
-    // We append a mail-scoped suffix so each mail occupies its own
-    // session bucket (the gateway creates it on receipt if needed — no
-    // pre-existing openclaw_sessions row required).
-    const { resolveAgentSessionKeyPrefix } = await import('@/lib/openclaw/session-key');
+    // Build a sessionKey that targets the agent's own namespace via the
+    // shared `sendChatToAgent` helper. The mail-scoped suffix ensures
+    // each mail occupies its own session bucket (the gateway creates it
+    // on receipt if needed — no pre-existing openclaw_sessions row
+    // required).
     const target = queryOne<Pick<OpenClawSession, 'id'> & { name: string; session_key_prefix: string | null; gateway_agent_id: string | null }>(
       'SELECT id, name, session_key_prefix, gateway_agent_id FROM agents WHERE id = ?',
       [toAgentId]
@@ -97,12 +94,6 @@ export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
       };
     }
     const fromAgent = queryOne<{ name: string }>('SELECT name FROM agents WHERE id = ?', [fromAgentId]);
-    const prefix = resolveAgentSessionKeyPrefix({
-      session_key_prefix: target.session_key_prefix ?? undefined,
-      gateway_agent_id: target.gateway_agent_id ?? undefined,
-      name: target.name,
-    } as Agent);
-    const sessionKey = `${prefix}mc-mail-${id}`;
 
     // Frame the mail so the agent recognises it as MC→agent mail (not a
     // regular task dispatch). We deliberately don't append a generic
@@ -115,15 +106,28 @@ export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
 ${subject ? `**Subject:** ${subject}\n` : ''}
 ${body}`;
 
-    await client.call('chat.send', {
-      sessionKey,
+    const { sendChatToAgent } = await import('@/lib/openclaw/send-chat');
+    const result = await sendChatToAgent({
+      agent: {
+        id: toAgentId,
+        name: target.name,
+        session_key_prefix: target.session_key_prefix ?? undefined,
+        gateway_agent_id: target.gateway_agent_id ?? undefined,
+      },
       message: framedMessage,
       idempotencyKey: `mail-${id}`,
+      sessionSuffix: `mc-mail-${id}`,
     });
 
+    if (!result.sent) {
+      return {
+        message,
+        delivery: { status: 'failed', error: result.error?.message ?? result.reason ?? 'send failed' },
+      };
+    }
     return {
       message,
-      delivery: { status: 'sent', sessionKey },
+      delivery: { status: 'sent', sessionKey: result.sessionKey },
     };
   } catch (err) {
     return {

@@ -1256,19 +1256,29 @@ export function registerAllTools(server: McpServer): void {
       // Notify the peer through their chat session so they see the
       // rejection inline. Best-effort — if the openclaw client is down,
       // the mailbox fallback still carries the message.
-      const peer = queryOne<{ gateway_agent_id: string | null }>(
-        'SELECT a.gateway_agent_id FROM tasks t JOIN agents a ON a.id = t.assigned_agent_id WHERE t.id = ?',
+      const peer = queryOne<{ id: string; gateway_agent_id: string | null; name: string; session_key_prefix: string | null }>(
+        'SELECT a.id, a.gateway_agent_id, a.name, a.session_key_prefix FROM tasks t JOIN agents a ON a.id = t.assigned_agent_id WHERE t.id = ?',
         [row.task_id],
       );
       if (peer?.gateway_agent_id) {
         try {
           const client = getOpenClawClient();
           if (!client.isConnected()) await client.connect();
-          await client.call('chat.send', {
-            sessionKey: `agent:${peer.gateway_agent_id}:task-${row.task_id}`,
+          const { sendChatToAgent } = await import('@/lib/openclaw/send-chat');
+          const result = await sendChatToAgent({
+            agent: {
+              id: peer.id,
+              name: peer.name,
+              gateway_agent_id: peer.gateway_agent_id,
+              session_key_prefix: peer.session_key_prefix ?? undefined,
+            },
             message: `🔁 **Subtask rejected by coordinator.**\n\n**Reason:** ${args.reason}\n\n${args.new_acceptance_criteria?.length ? `**Updated acceptance criteria:**\n${args.new_acceptance_criteria.map(c => `- ${c}`).join('\n')}\n\n` : ''}Please address the issues and re-register deliverables, then move status back to review.`,
             idempotencyKey: `reject-${args.subtask_id}-${Date.now()}`,
+            sessionSuffix: `task-${row.task_id}`,
           });
+          if (!result.sent && result.error) {
+            console.warn('[reject_subtask] chat.send notification failed:', result.error.message);
+          }
         } catch (err) {
           console.warn('[reject_subtask] chat.send notification failed:', (err as Error).message);
         }

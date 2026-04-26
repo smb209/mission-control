@@ -755,6 +755,12 @@ If you need help or clarification, ask the orchestrator.`;
       let chatSendResponse: unknown;
       let chatSendError: string | null = null;
       try {
+        // TODO(comms-cleanup): migrate to `sendChatToAgent`. Held back
+        // because this path needs the raw chat.send response (logged
+        // below as the canonical dispatch debug event) and a custom
+        // failure rethrow. The helper currently swallows transport
+        // errors; either widen its return shape or extract a thin
+        // `sendRaw` variant before migrating.
         chatSendResponse = await client.call('chat.send', {
           sessionKey,
           message: finalMessage,

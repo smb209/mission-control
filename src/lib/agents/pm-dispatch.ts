@@ -42,7 +42,11 @@ import {
   type PmProposalTriggerKind,
 } from '@/lib/db/pm-proposals';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { resolveAgentSessionKeyPrefix } from '@/lib/openclaw/session-key';
+import {
+  sendChatAndAwaitReply,
+  __setSendChatClientForTests,
+  type SendChatClient,
+} from '@/lib/openclaw/send-chat';
 import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -66,14 +70,22 @@ export interface DispatchPmResult {
  */
 const NAMED_AGENT_TIMEOUT_MS = 60_000;
 
-/** Dependency seam for tests — see `__setOpenClawClientForTests`. */
-type GatewayClient = {
-  isConnected: () => boolean;
-  call: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-};
+/**
+ * Dependency seam for tests. Routes BOTH the local connection probe
+ * (`isConnected()`) and the underlying chat send through a shared mock,
+ * so tests can simulate "agent finishes its turn → final frame arrives"
+ * without needing the real openclaw client.
+ *
+ * Implementation note: the seam now sets the shared
+ * `__setSendChatClientForTests` hook in `send-chat.ts` so the new
+ * `sendChatAndAwaitReply` primitive uses the same mock. This replaces
+ * PR #55's bespoke override which only intercepted `client.call()`.
+ */
+type GatewayClient = SendChatClient;
 let openclawClientOverride: GatewayClient | null = null;
 export function __setOpenClawClientForTests(c: GatewayClient | null): void {
   openclawClientOverride = c;
+  __setSendChatClientForTests(c);
 }
 function gatewayClient(): GatewayClient {
   return openclawClientOverride ?? (getOpenClawClient() as unknown as GatewayClient);
@@ -119,7 +131,6 @@ export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResu
           input,
           snapshot,
           pm,
-          client: gw,
         });
         if (proposal) {
           try {
@@ -200,30 +211,34 @@ interface DispatchNamedAgentParams {
   input: DispatchPmInput;
   snapshot: RoadmapSnapshot;
   pm: Pick<Agent, 'id' | 'name' | 'session_key_prefix' | 'gateway_agent_id' | 'workspace_id'>;
-  client: GatewayClient;
 }
 
 /**
- * Send the trigger to the gateway-hosted PM session, wait until a new
- * proposal lands in `pm_proposals` via the MCP `propose_changes` tool,
- * then return it.
+ * Send the trigger to the gateway-hosted PM session and wait for the
+ * agent's `final` chat frame (signalling its turn is over). Then look up
+ * the proposal it created via the MCP `propose_changes` tool and return
+ * it.
  *
- * Correlation: we record `since` (ISO time at the moment of send) and
- * include a `correlation_id` in the message body. After the round-trip
- * we look up the most recent draft proposal for the workspace whose
- * created_at >= since. This is sufficient because:
- *   - dispatch is single-flight from the operator's perspective,
- *   - we only land here on a successful `chat.send`, so synth hasn't
- *     written yet.
- * If the agent ever lands two proposals from one trigger, we return the
- * newest — refine() can chain the rest.
+ * Replaces the original "poll pm_proposals every 500ms by recency"
+ * workaround with a proper subscription-based wait via
+ * `sendChatAndAwaitReply`. The chat-listener's existing `state==='final'`
+ * is the same signal the per-agent chat surface already uses, so we get
+ * "agent turn complete" deterministically.
+ *
+ * Correlation: we still embed a `correlation_id` in the message body
+ * (audit trail). Lookup remains "most recent draft draft created since
+ * we sent" — that's deterministic given dispatch is single-flight from
+ * the operator's perspective.
+ *
+ * Returns:
+ *   - the PmProposal the agent created during this round-trip, or
+ *   - `null` if the timeout elapses, the send fails, or the agent never
+ *     called `propose_changes`. The caller falls back to synth.
  */
 async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<PmProposal | null> {
-  const { input, snapshot, pm, client } = params;
+  const { input, snapshot, pm } = params;
   const correlationId = uuidv4();
   const sinceIso = new Date().toISOString();
-
-  const sessionKey = buildPmSessionKey(pm);
 
   const summary = buildSnapshotSummary(snapshot);
   const message =
@@ -235,49 +250,27 @@ async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<
     `with a structured PmDiff[] and impact_md. Reference only ids that ` +
     `appear in the snapshot.`;
 
-  await client.call('chat.send', {
-    sessionKey,
+  const result = await sendChatAndAwaitReply({
+    agent: pm,
     message,
     idempotencyKey: `pm-dispatch-${correlationId}`,
+    timeoutMs: namedAgentTimeoutMs(),
   });
 
-  const deadline = Date.now() + namedAgentTimeoutMs();
-  while (Date.now() < deadline) {
-    const proposal = findProposalCreatedSince(input.workspace_id, sinceIso);
-    if (proposal) return proposal;
-    await sleep(500);
-  }
-  return null;
-}
+  // Send failed — caller falls back to synth.
+  if (!result.sent) return null;
 
-/**
- * Build the chat sessionKey for the PM. resolveAgentSessionKeyPrefix
- * returns either the explicit session_key_prefix (already including any
- * suffix) or `agent:<gateway_agent_id>:`. We always want a single ":main"
- * channel for the PM, so collapse trailing duplicates that arise when
- * session_key_prefix is set to `agent:mc-project-manager:main`.
- */
-function buildPmSessionKey(
-  pm: Pick<Agent, 'session_key_prefix' | 'gateway_agent_id' | 'name'>,
-): string {
-  const prefix = resolveAgentSessionKeyPrefix(pm);
-  // prefix always ends with ':' (the helper guarantees that). Tack on
-  // 'main' unless the prefix already ends with ':main:' (i.e. the
-  // operator/migration set session_key_prefix='agent:...:main').
-  if (/:main:$/.test(prefix)) {
-    return prefix.replace(/:$/, '');
-  }
-  return `${prefix}main`;
+  // Whether we got a `final` frame or hit the timeout, do one final
+  // check for a proposal landed by the agent's MCP `propose_changes`
+  // call. The named-agent path is "useful" only if the agent actually
+  // wrote a proposal during the round-trip.
+  return findProposalCreatedSince(input.workspace_id, sinceIso);
 }
 
 function findProposalCreatedSince(workspaceId: string, sinceIso: string): PmProposal | null {
   const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
   // listProposals returns DESC by created_at — pick the newest.
   return drafts[0] ?? null;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -325,21 +318,23 @@ export async function dispatchPmSynthesized(
       try {
         const correlationId = uuidv4();
         const sinceIso = new Date().toISOString();
-        const sessionKey = buildPmSessionKey(pm);
-        await gw.call('chat.send', {
-          sessionKey,
+        const result = await sendChatAndAwaitReply({
+          agent: pm,
           message:
             `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
             input.agent_prompt,
           idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
+          timeoutMs: namedAgentTimeoutMs(),
         });
-        const deadline = Date.now() + namedAgentTimeoutMs();
-        while (Date.now() < deadline) {
+        if (result.sent) {
+          // Whether we got a `final` frame or hit the timeout, the agent
+          // either landed a proposal via MCP `propose_changes` or didn't.
+          // Either way, this is the moment to look — same semantics as
+          // dispatchViaNamedAgent.
           const found = findProposalCreatedSince(input.workspace_id, sinceIso);
           if (found) {
             return { proposal: found, used_synthesize_fallback: false, used_named_agent: true };
           }
-          await sleep(500);
         }
       } catch (err) {
         console.warn(

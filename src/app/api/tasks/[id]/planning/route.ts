@@ -235,7 +235,11 @@ export async function POST(
       await client.connect();
     }
 
-    // Send planning request to the planning session
+    // TODO(comms-cleanup): migrate to `sendChatToAgent`. Planning
+    // routes use a stored `task.planning_session_key` (full sessionKey)
+    // rather than an agent row; the helper would need a raw-sessionKey
+    // overload before this migrates cleanly. Same applies to the other
+    // /planning/* routes (tweak, advance, answer, clarify-add, poll).
     await client.call('chat.send', {
       sessionKey: sessionKey,
       message: planningPrompt,
