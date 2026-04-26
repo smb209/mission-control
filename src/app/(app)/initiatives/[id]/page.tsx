@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, use } from 'react';
+import { useState, useEffect, useCallback, useRef, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -182,6 +182,11 @@ export default function InitiativeDetailPage({
   const [showAddDepModal, setShowAddDepModal] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
+  // Brief accent-ring on the plan panel right after it opens, so the
+  // operator notices it appearing inline under the header instead of
+  // wondering whether the click did anything.
+  const [planPanelHighlight, setPlanPanelHighlight] = useState(false);
+  const planPanelRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -232,6 +237,20 @@ export default function InitiativeDetailPage({
       cancelled = true;
     };
   }, [initiative?.workspace_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open the inline Plan-with-PM panel and pull it into view. The panel
+  // mounts directly under the header card, but a long header can still
+  // push it below the fold on smaller viewports — scrollIntoView + a
+  // brief accent ring gives the operator unambiguous feedback that the
+  // click landed.
+  const openPlanPanel = useCallback(() => {
+    setShowPlanPanel(true);
+    setPlanPanelHighlight(true);
+    requestAnimationFrame(() => {
+      planPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    window.setTimeout(() => setPlanPanelHighlight(false), 1800);
+  }, []);
 
   // PATCH a partial update to this initiative and refresh on success. The
   // route's Zod schema treats every field as optional, so callers can send
@@ -370,7 +389,20 @@ export default function InitiativeDetailPage({
           )}
         </div>
 
-        <header className="mb-6 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
+        {/*
+          Header card layout (top → bottom):
+            1. Identity row: badges + title  ·  Promote-to-task (right)
+            2. Action toolbar (always above the fold so it's never buried
+               under a long description)
+            3. Compact metadata strip — single row of inline-editable
+               schedule + sizing + owner fields
+            4. Description (large click-to-edit textarea)
+            5. Status check (mono click-to-edit textarea)
+          The Plan-with-PM panel mounts immediately AFTER this card, so
+          opening it is visually anchored to the toolbar button rather
+          than appearing far below.
+        */}
+        <header className="mb-4 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
@@ -405,48 +437,42 @@ export default function InitiativeDetailPage({
                 placeholder="Untitled"
                 label="Edit title"
               />
-              <div className="mt-2">
-                <InlineTextarea
-                  value={initiative.description ?? ''}
-                  onSave={next =>
-                    patch({ description: next.length > 0 ? next : null })
-                  }
-                  className="text-mc-text-secondary block"
-                  placeholder="Add a description…"
-                  minRows={6}
-                  label="Edit description"
-                />
-              </div>
             </div>
-            <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="shrink-0">
               <PromoteButton
                 kind={initiative.kind}
                 onClick={() => setShowPromoteModal(true)}
               />
-              {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
-                <button
-                  onClick={() => setShowDecomposeModal(true)}
-                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-mc-accent/40 text-mc-accent hover:bg-mc-accent/10"
-                  title="Ask the PM to propose 3-7 child initiatives"
-                >
-                  <Sparkles className="w-4 h-4" /> Decompose with PM
-                </button>
-              )}
             </div>
           </div>
 
           {/*
-            Secondary action toolbar. The old "Edit" button is gone — every
-            field is now click-to-edit in place. We surface "Plan with PM"
-            here in its place so the PM-suggested fills stay one click away.
+            Action toolbar — grouped left→right by intent:
+              · AI helpers (Plan / Decompose) — primary, accent-tinted
+              · Structural (Move / Convert kind / Add dependency)
+              · Read-only (View history)
+              · Destructive (Detach / Delete) — pushed to the far right
           */}
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
             <ToolbarButton
               icon={<Sparkles className="w-3.5 h-3.5" />}
-              onClick={() => setShowPlanPanel(true)}
+              onClick={openPlanPanel}
+              accent
+              title="PM proposes refined description / sizing / window"
             >
               Plan with PM
             </ToolbarButton>
+            {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
+              <ToolbarButton
+                icon={<Sparkles className="w-3.5 h-3.5" />}
+                onClick={() => setShowDecomposeModal(true)}
+                accent
+                title="Ask the PM to propose 3-7 child initiatives"
+              >
+                Decompose with PM
+              </ToolbarButton>
+            )}
+            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
               Move
             </ToolbarButton>
@@ -456,6 +482,7 @@ export default function InitiativeDetailPage({
             <ToolbarButton icon={<Link2 className="w-3.5 h-3.5" />} onClick={() => setShowAddDepModal(true)}>
               Add dependency
             </ToolbarButton>
+            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<History className="w-3.5 h-3.5" />} onClick={() => setShowHistoryDrawer(true)}>
               View history
             </ToolbarButton>
@@ -479,105 +506,107 @@ export default function InitiativeDetailPage({
             </div>
           </div>
 
-          <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-xs text-mc-text-secondary">
-            <div>
-              <dt className="uppercase tracking-wide">Target start</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineDate
-                  value={initiative.target_start ?? ''}
-                  onSave={next => patch({ target_start: next || null })}
-                  label="Edit target start"
-                />
-              </dd>
-            </div>
-            <div>
-              <dt className="uppercase tracking-wide">Target end</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineDate
-                  value={initiative.target_end ?? ''}
-                  onSave={next => patch({ target_end: next || null })}
-                  label="Edit target end"
-                />
-              </dd>
-            </div>
-            <div>
-              <dt className="uppercase tracking-wide">Committed end</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineDate
-                  value={initiative.committed_end ?? ''}
-                  onSave={next => patch({ committed_end: next || null })}
-                  label="Edit committed end"
-                />
-              </dd>
-            </div>
-            <div>
-              <dt className="uppercase tracking-wide">Owner</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineSelect<string>
-                  value={initiative.owner_agent_id ?? ''}
-                  onSave={next =>
-                    patch({ owner_agent_id: next.length > 0 ? next : null })
-                  }
-                  options={[
-                    { value: '', label: 'Unassigned' },
-                    ...agents.map(a => ({
-                      value: a.id,
-                      label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
-                    })),
-                  ]}
-                  renderDisplay={v => {
-                    const a = agents.find(x => x.id === v);
-                    return a ? (
-                      <span>
-                        {a.avatar_emoji} {a.name}
-                      </span>
-                    ) : (
-                      <span className="text-mc-text-secondary">—</span>
-                    );
-                  }}
-                  label="Edit owner"
-                />
-              </dd>
-            </div>
+          {/*
+            Compact metadata strip — one horizontal row of label/value
+            pairs that wraps on small viewports. Replaces the prior 4×4
+            grid + separate sizing grid (8 boxes of mostly empty space)
+            so the toolbar above and description below stay close.
+          */}
+          <dl className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+            <MetaPair label="Target start">
+              <InlineDate
+                value={initiative.target_start ?? ''}
+                onSave={next => patch({ target_start: next || null })}
+                label="Edit target start"
+              />
+            </MetaPair>
+            <MetaPair label="Target end">
+              <InlineDate
+                value={initiative.target_end ?? ''}
+                onSave={next => patch({ target_end: next || null })}
+                label="Edit target end"
+              />
+            </MetaPair>
+            <MetaPair label="Committed">
+              <InlineDate
+                value={initiative.committed_end ?? ''}
+                onSave={next => patch({ committed_end: next || null })}
+                label="Edit committed end"
+              />
+            </MetaPair>
+            <MetaPair label="Owner">
+              <InlineSelect<string>
+                value={initiative.owner_agent_id ?? ''}
+                onSave={next =>
+                  patch({ owner_agent_id: next.length > 0 ? next : null })
+                }
+                options={[
+                  { value: '', label: 'Unassigned' },
+                  ...agents.map(a => ({
+                    value: a.id,
+                    label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
+                  })),
+                ]}
+                renderDisplay={v => {
+                  const a = agents.find(x => x.id === v);
+                  return a ? (
+                    <span>
+                      {a.avatar_emoji} {a.name}
+                    </span>
+                  ) : (
+                    <span className="text-mc-text-secondary">—</span>
+                  );
+                }}
+                label="Edit owner"
+              />
+            </MetaPair>
+            <MetaPair label="Complexity">
+              <InlineSelect<Complexity | ''>
+                value={(initiative.complexity ?? '') as Complexity | ''}
+                options={COMPLEXITY_OPTIONS}
+                onSave={next => patch({ complexity: next || null })}
+                renderDisplay={v =>
+                  v ? <span>{v}</span> : <span className="text-mc-text-secondary">—</span>
+                }
+                label="Edit complexity"
+              />
+            </MetaPair>
+            <MetaPair label="Effort (h)">
+              <InlineText
+                value={
+                  initiative.estimated_effort_hours == null
+                    ? ''
+                    : String(initiative.estimated_effort_hours)
+                }
+                onSave={next =>
+                  patch({
+                    estimated_effort_hours: next === '' ? null : Number(next),
+                  })
+                }
+                type="number"
+                step="0.5"
+                placeholder="—"
+                label="Edit effort hours"
+              />
+            </MetaPair>
           </dl>
 
-          <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs text-mc-text-secondary">
-            <div>
-              <dt className="uppercase tracking-wide">Complexity</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineSelect<Complexity | ''>
-                  value={(initiative.complexity ?? '') as Complexity | ''}
-                  options={COMPLEXITY_OPTIONS}
-                  onSave={next => patch({ complexity: next || null })}
-                  renderDisplay={v =>
-                    v ? <span>{v}</span> : <span className="text-mc-text-secondary">—</span>
-                  }
-                  label="Edit complexity"
-                />
-              </dd>
+          {/* Description — the largest editable surface */}
+          <div className="mt-5">
+            <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
+              Description
             </div>
-            <div>
-              <dt className="uppercase tracking-wide">Effort (hours)</dt>
-              <dd className="text-mc-text mt-0.5">
-                <InlineText
-                  value={
-                    initiative.estimated_effort_hours == null
-                      ? ''
-                      : String(initiative.estimated_effort_hours)
-                  }
-                  onSave={next =>
-                    patch({
-                      estimated_effort_hours: next === '' ? null : Number(next),
-                    })
-                  }
-                  type="number"
-                  step="0.5"
-                  placeholder="—"
-                  label="Edit effort hours"
-                />
-              </dd>
-            </div>
-          </dl>
+            <InlineTextarea
+              value={initiative.description ?? ''}
+              onSave={next =>
+                patch({ description: next.length > 0 ? next : null })
+              }
+              className="text-mc-text-secondary block"
+              placeholder="Add a description…"
+              minRows={6}
+              label="Edit description"
+            />
+          </div>
 
           <div className="mt-4">
             <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
@@ -597,6 +626,57 @@ export default function InitiativeDetailPage({
             </div>
           </div>
         </header>
+
+        {/*
+          Plan-with-PM panel — mounts inline directly under the header
+          card so opening it is visually anchored to the toolbar button
+          that triggered it. Wrapper carries a brief accent ring on open
+          (1.8s) so the operator notices the panel appearing.
+        */}
+        {showPlanPanel && (
+          <div
+            ref={planPanelRef}
+            className={`mb-6 transition-shadow duration-300 rounded-lg ${
+              planPanelHighlight ? 'ring-2 ring-mc-accent/70 shadow-lg shadow-mc-accent/20' : ''
+            }`}
+          >
+            <PlanWithPmPanel
+              open={showPlanPanel}
+              workspaceId={initiative.workspace_id}
+              draft={{
+                title: initiative.title,
+                description: initiative.description ?? '',
+                kind: initiative.kind,
+                complexity: initiative.complexity,
+                parent_initiative_id: initiative.parent_initiative_id,
+                target_start: initiative.target_start,
+                target_end: initiative.target_end,
+              }}
+              onClose={() => setShowPlanPanel(false)}
+              onApply={async (s: PlanInitiativeSuggestions) => {
+                // Map every suggested field through patch() so the
+                // persistence path stays the same as inline edits.
+                const body: Record<string, unknown> = {};
+                if (s.refined_description) body.description = s.refined_description;
+                if (s.complexity) body.complexity = s.complexity;
+                if (s.target_start) body.target_start = s.target_start;
+                if (s.target_end) body.target_end = s.target_end;
+                if (s.status_check_md) body.status_check_md = s.status_check_md;
+                if (s.owner_agent_id) body.owner_agent_id = s.owner_agent_id;
+                if (Object.keys(body).length > 0) {
+                  try {
+                    await patch(body);
+                  } catch (e) {
+                    setActionError(
+                      e instanceof Error ? e.message : 'Failed to apply suggestions',
+                    );
+                  }
+                }
+                setShowPlanPanel(false);
+              }}
+            />
+          </div>
+        )}
 
         {actionError && (
           <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
@@ -730,43 +810,6 @@ export default function InitiativeDetailPage({
           }}
         />
       )}
-      {showPlanPanel && (
-        <PlanWithPmPanel
-          open={showPlanPanel}
-          workspaceId={initiative.workspace_id}
-          draft={{
-            title: initiative.title,
-            description: initiative.description ?? '',
-            kind: initiative.kind,
-            complexity: initiative.complexity,
-            parent_initiative_id: initiative.parent_initiative_id,
-            target_start: initiative.target_start,
-            target_end: initiative.target_end,
-          }}
-          onClose={() => setShowPlanPanel(false)}
-          onApply={async (s: PlanInitiativeSuggestions) => {
-            // Map every suggested field through patch() so the persistence
-            // path stays the same as inline edits.
-            const body: Record<string, unknown> = {};
-            if (s.refined_description) body.description = s.refined_description;
-            if (s.complexity) body.complexity = s.complexity;
-            if (s.target_start) body.target_start = s.target_start;
-            if (s.target_end) body.target_end = s.target_end;
-            if (s.status_check_md) body.status_check_md = s.status_check_md;
-            if (s.owner_agent_id) body.owner_agent_id = s.owner_agent_id;
-            if (Object.keys(body).length > 0) {
-              try {
-                await patch(body);
-              } catch (e) {
-                setActionError(
-                  e instanceof Error ? e.message : 'Failed to apply suggestions',
-                );
-              }
-            }
-            setShowPlanPanel(false);
-          }}
-        />
-      )}
       {showMoveModal && (
         <MoveModal
           initiative={initiative as ListInitiative}
@@ -815,17 +858,25 @@ function ToolbarButton({
   onClick,
   children,
   destructive,
+  accent,
   title,
 }: {
   icon: React.ReactNode;
   onClick: () => void;
   children: React.ReactNode;
   destructive?: boolean;
+  accent?: boolean;
   title?: string;
 }) {
+  // Three palettes:
+  //   accent     — primary AI helpers (Plan / Decompose with PM)
+  //   destructive — Detach / Delete
+  //   default    — everything else
   const palette = destructive
     ? 'border-red-500/30 text-red-300 hover:bg-red-500/10 hover:border-red-500/50'
-    : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40';
+    : accent
+      ? 'border-mc-accent/40 text-mc-accent bg-mc-accent/5 hover:bg-mc-accent/10'
+      : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40';
   return (
     <button
       onClick={onClick}
@@ -835,6 +886,17 @@ function ToolbarButton({
       {icon}
       <span>{children}</span>
     </button>
+  );
+}
+
+function MetaPair({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <dt className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70">
+        {label}
+      </dt>
+      <dd className="text-mc-text">{children}</dd>
+    </div>
   );
 }
 
