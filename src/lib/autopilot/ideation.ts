@@ -41,9 +41,13 @@ function buildIdeationPrompt(
    - target_user_segment: who benefits (optional)
    - revenue_potential: money impact (optional)
 
+## Product
+
+**Name:** ${product.name}
+${product.description ? `\n**Description:** ${product.description}\n` : ''}${product.repo_url ? `**Repo:** ${product.repo_url}\n` : ''}${product.live_url ? `**Live URL:** ${product.live_url}\n` : ''}
 ## Product Program
 
-${product.product_program || 'No product program defined yet.'}
+${product.product_program || '_No detailed product program — treat the **Product** section above as the source of truth for what this product is and who it serves. Generate ideas that fit the stated domain, not generic SaaS features._'}
 
 ## Research Report
 
