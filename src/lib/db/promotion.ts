@@ -44,6 +44,97 @@ export interface PromoteInitiativeToTaskInput {
 }
 
 /**
+ * Tx-agnostic core: insert one task row attached to an initiative,
+ * append the initial task_initiative_history audit row, emit one
+ * `task_promoted_from_initiative` event. Uses the shared `run()` helper
+ * so it runs correctly inside an outer `db.transaction(...)` (e.g. when
+ * called from `acceptProposal` for the `create_task_under_initiative`
+ * diff kind). Callers wrap in their own transaction when needed.
+ *
+ * Validation (initiative kind, etc.) is the caller's responsibility.
+ */
+export interface CreateTaskFromInitiativeInput {
+  initiative_id: string;
+  workspace_id: string;
+  title: string;
+  description?: string | null;
+  status_check_md?: string | null;
+  assigned_agent_id?: string | null;
+  priority?: 'low' | 'normal' | 'high';
+  created_by_agent_id?: string | null;
+  reason?: string | null;
+}
+
+export function createTaskFromInitiative(input: CreateTaskFromInitiativeInput): { id: string } {
+  const taskId = uuidv4();
+  const now = new Date().toISOString();
+  const title = (input.title ?? '').trim();
+  if (!title) throw new Error('createTaskFromInitiative: title required');
+
+  // The default workflow template, matching /api/tasks POST so promoted
+  // drafts behave consistently when later moved to inbox.
+  const defaultTemplate = queryOne<{ id: string }>(
+    'SELECT id FROM workflow_templates WHERE workspace_id = ? AND is_default = 1 LIMIT 1',
+    [input.workspace_id],
+  );
+  const workflowTemplateId = defaultTemplate?.id ?? null;
+  const priority = input.priority ?? 'normal';
+
+  run(
+    `INSERT INTO tasks (
+       id, title, description, status, priority, workspace_id, business_id,
+       workflow_template_id, initiative_id, assigned_agent_id, status_check_md,
+       created_by_agent_id, created_at, updated_at
+     ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      taskId,
+      title,
+      input.description ?? null,
+      priority,
+      input.workspace_id,
+      // Tasks have a NOT NULL business_id; reuse workspace_id as the
+      // legacy business_id when none is set, matching seed and existing
+      // task creation defaults.
+      input.workspace_id,
+      workflowTemplateId,
+      input.initiative_id,
+      input.assigned_agent_id ?? null,
+      input.status_check_md ?? null,
+      input.created_by_agent_id ?? null,
+      now,
+      now,
+    ],
+  );
+  run(
+    `INSERT INTO task_initiative_history (
+       id, task_id, from_initiative_id, to_initiative_id,
+       moved_by_agent_id, reason, created_at
+     ) VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+    [
+      uuidv4(),
+      taskId,
+      input.initiative_id,
+      input.created_by_agent_id ?? null,
+      input.reason ?? 'initial promotion',
+      now,
+    ],
+  );
+  run(
+    `INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
+     VALUES (?, 'task_promoted_from_initiative', ?, ?, ?, ?, ?)`,
+    [
+      uuidv4(),
+      input.created_by_agent_id ?? null,
+      taskId,
+      `Task drafted from initiative ${input.initiative_id}`,
+      JSON.stringify({ initiative_id: input.initiative_id }),
+      now,
+    ],
+  );
+  return { id: taskId };
+}
+
+/**
  * Promote a story-kind initiative to a draft task. Creates one task row
  * with status='draft' and initiative_id set, plus an initial
  * task_initiative_history row (from_initiative_id=NULL).
@@ -68,70 +159,21 @@ export function promoteInitiativeToTask(
     );
   }
 
-  const taskId = uuidv4();
-  const now = new Date().toISOString();
   const title = (input.task_title ?? initiative.title).trim() || initiative.title;
-
-  // The default workflow template, like /api/tasks POST does, so promoted
-  // drafts behave consistently when later moved to inbox.
-  const defaultTemplate = queryOne<{ id: string }>(
-    'SELECT id FROM workflow_templates WHERE workspace_id = ? AND is_default = 1 LIMIT 1',
-    [initiative.workspace_id],
-  );
-  const workflowTemplateId = defaultTemplate?.id ?? null;
-
-  // Single transaction: insert task, audit row, event.
   const db = getDb();
+  let taskId = '';
   db.transaction(() => {
-    db.prepare(
-      `INSERT INTO tasks (
-         id, title, description, status, priority, workspace_id, business_id,
-         workflow_template_id, initiative_id, status_check_md,
-         created_by_agent_id, created_at, updated_at
-       ) VALUES (?, ?, ?, 'draft', 'normal', ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      taskId,
+    const result = createTaskFromInitiative({
+      initiative_id,
+      workspace_id: initiative.workspace_id,
       title,
-      input.task_description ?? initiative.description ?? null,
-      initiative.workspace_id,
-      // Tasks have a NOT NULL business_id; reuse the workspace_id as the
-      // legacy business_id when none is set, matching seed and existing
-      // task creation defaults.
-      initiative.workspace_id,
-      workflowTemplateId,
-      initiative_id,
-      input.status_check_md ?? null,
-      input.created_by_agent_id ?? null,
-      now,
-      now,
-    );
-    db.prepare(
-      `INSERT INTO task_initiative_history (
-         id, task_id, from_initiative_id, to_initiative_id,
-         moved_by_agent_id, reason, created_at
-       ) VALUES (?, ?, NULL, ?, ?, ?, ?)`,
-    ).run(
-      uuidv4(),
-      taskId,
-      initiative_id,
-      input.created_by_agent_id ?? null,
-      input.reason ?? 'initial promotion',
-      now,
-    );
-    db.prepare(
-      `INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      uuidv4(),
-      'task_promoted_from_initiative',
-      input.created_by_agent_id ?? null,
-      taskId,
-      `Task drafted from initiative: ${initiative.title}`,
-      JSON.stringify({ initiative_id }),
-      now,
-    );
+      description: input.task_description ?? initiative.description ?? null,
+      status_check_md: input.status_check_md ?? null,
+      created_by_agent_id: input.created_by_agent_id ?? null,
+      reason: input.reason ?? 'initial promotion',
+    });
+    taskId = result.id;
   })();
-
   return { id: taskId };
 }
 

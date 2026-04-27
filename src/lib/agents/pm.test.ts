@@ -379,3 +379,157 @@ test('dispatchPm: falls back to synth when named agent times out without writing
     __setNamedAgentTimeoutForTests(null);
   }
 });
+
+// ─── notes_intake + allowFallback ──────────────────────────────────
+
+test('dispatchPm: notes_intake uses a fresh per-correlation session and the notes prompt', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+
+  const { client, seenSends } = makeFakeClient({
+    onChatSend: () => {
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'notes',
+        trigger_kind: 'notes_intake',
+        impact_md: '### Notes intake verdict\n\n- task list',
+        proposed_changes: [],
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(2_000);
+
+  try {
+    const result = await dispatchPm({
+      workspace_id: ws,
+      trigger_text: 'Stand-up notes:\n- ship onboarding\n- fix #123',
+      trigger_kind: 'notes_intake',
+    });
+    assert.equal(result.used_named_agent, true);
+    const send = seenSends.find(s => s.method === 'chat.send');
+    assert.ok(send);
+    const params = send!.params as { sessionKey?: string; message?: string };
+    // Fresh notes-<correlation> session, NOT the stable dispatch-main key.
+    assert.match(params.sessionKey ?? '', /:notes-/);
+    // Prompt template includes the notes-intake instructions.
+    assert.match(params.message ?? '', /PM notes intake/);
+    assert.match(params.message ?? '', /create_task_under_initiative/);
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+test('dispatchPm: allowFallback=false propagates gateway error instead of synth-falling-back', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+
+  // Gateway is down — synth path should be skipped.
+  const { client } = makeFakeClient({ isConnected: false });
+  __setOpenClawClientForTests(client);
+  const { PmDispatchGatewayUnavailableError } = await import('./pm-dispatch');
+  try {
+    await assert.rejects(
+      dispatchPm({
+        workspace_id: ws,
+        trigger_text: 'notes go here',
+        trigger_kind: 'notes_intake',
+        allowFallback: false,
+      }),
+      PmDispatchGatewayUnavailableError,
+    );
+  } finally {
+    __setOpenClawClientForTests(null);
+  }
+});
+
+test('dispatchPm: allowFallback=false also surfaces a no-proposal-on-final timeout as an error', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+
+  // Connected, but the agent never writes a proposal AND emitFinal arrives,
+  // so dispatchViaNamedAgent returns null. With fallback disabled this must throw.
+  const { client } = makeFakeClient({ emitFinal: true });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(500);
+  try {
+    await assert.rejects(
+      dispatchPm({
+        workspace_id: ws,
+        trigger_text: 'whatever',
+        trigger_kind: 'notes_intake',
+        allowFallback: false,
+      }),
+    );
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+// ─── pm-pending-drain ──────────────────────────────────────────────
+
+test('drainPendingNotes: skips when gateway is down', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  const { enqueuePendingNote } = await import('@/lib/db/pm-pending-notes');
+  enqueuePendingNote({ workspace_id: ws, agent_id: 'a', notes_text: 'x' });
+
+  const { client } = makeFakeClient({ isConnected: false });
+  __setOpenClawClientForTests(client);
+  const { drainPendingNotes, __setGatewayProbeForTests } = await import('./pm-pending-drain');
+  __setGatewayProbeForTests({ isConnected: () => false });
+  try {
+    const result = await drainPendingNotes();
+    assert.equal(result.skipped_gateway_down, true);
+    assert.equal(result.attempted, 0);
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setGatewayProbeForTests(null);
+  }
+});
+
+test('drainPendingNotes: dispatches each pending row and marks dispatched', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  // Earlier tests in the file may leave pending rows whose workspace
+  // PMs aren't wired up to this fake client. Skip them so the drain
+  // loop processes our row only.
+  run(`UPDATE pm_pending_notes SET status = 'dispatched' WHERE status = 'pending'`);
+  const { enqueuePendingNote, getPendingNote } = await import('@/lib/db/pm-pending-notes');
+  const note = enqueuePendingNote({
+    workspace_id: ws,
+    agent_id: 'a',
+    notes_text: 'queued notes',
+  });
+
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'queued notes',
+        trigger_kind: 'notes_intake',
+        impact_md: '### Drained',
+        proposed_changes: [],
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(1_000);
+
+  const { drainPendingNotes, __setGatewayProbeForTests } = await import('./pm-pending-drain');
+  __setGatewayProbeForTests({ isConnected: () => true });
+  try {
+    const result = await drainPendingNotes();
+    assert.equal(result.skipped_gateway_down, false);
+    assert.ok(result.dispatched >= 1);
+    const after = getPendingNote(note.id)!;
+    assert.equal(after.status, 'dispatched');
+    assert.ok(after.proposal_id);
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+    __setGatewayProbeForTests(null);
+  }
+});

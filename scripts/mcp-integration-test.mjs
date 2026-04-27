@@ -229,7 +229,7 @@ try {
     'fail_task',
     'save_checkpoint',
     'send_mail',
-    'delegate',
+    'spawn_subtask',
     'save_knowledge',
   ]) {
     expect(names.has(t), `tools/list should expose ${t}`);

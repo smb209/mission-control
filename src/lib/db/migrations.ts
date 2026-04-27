@@ -3305,6 +3305,80 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: '054',
+    name: 'pm_pending_notes_and_notes_intake_trigger_kind',
+    up: (db) => {
+      // 1. Extend pm_proposals.trigger_kind CHECK constraint with
+      //    'notes_intake' so propose_from_notes-driven proposals can be
+      //    persisted. Mirrors the migration 053 rebuild pattern.
+      const fkList = db.prepare(`PRAGMA foreign_key_list(pm_proposals)`).all() as Array<{ from: string; on_delete: string }>;
+      const targetFk = fkList.find(fk => fk.from === 'target_initiative_id');
+      // Detect whether the CHECK already permits notes_intake by sniffing
+      // the schema text, since SQLite doesn't expose CHECK clauses through
+      // PRAGMA. Skip if already up-to-date.
+      const tableSql = (db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='pm_proposals'`,
+      ).get() as { sql: string } | undefined)?.sql ?? '';
+      const needsCheckRebuild = !tableSql.includes('notes_intake');
+      if (needsCheckRebuild) {
+        const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+        const colNames = ['id', 'workspace_id', 'trigger_text', 'trigger_kind', 'impact_md',
+          'proposed_changes', 'status', 'applied_at', 'applied_by_agent_id', 'parent_proposal_id',
+          'created_at', 'target_initiative_id', 'plan_suggestions'].filter(c => cols.some(x => x.name === c));
+        const colList = colNames.join(', ');
+        const targetCascade = targetFk?.on_delete === 'CASCADE' ? 'CASCADE' : 'SET NULL';
+        db.exec(`
+          CREATE TABLE pm_proposals_new (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            trigger_text TEXT NOT NULL,
+            trigger_kind TEXT NOT NULL DEFAULT 'manual'
+              CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative','notes_intake')),
+            impact_md TEXT NOT NULL,
+            proposed_changes TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft'
+              CHECK (status IN ('draft','accepted','rejected','superseded')),
+            applied_at TEXT,
+            applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+            parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE ${targetCascade},
+            plan_suggestions TEXT
+          )
+        `);
+        db.exec(`INSERT INTO pm_proposals_new (${colList}) SELECT ${colList} FROM pm_proposals`);
+        db.exec(`DROP TABLE pm_proposals`);
+        db.exec(`ALTER TABLE pm_proposals_new RENAME TO pm_proposals`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_target_init ON pm_proposals(target_initiative_id, status, created_at DESC)`);
+      }
+
+      // 2. pm_pending_notes — defer-and-replay queue for propose_from_notes
+      //    requests that arrive while the openclaw gateway is unreachable.
+      //    Mirrors the task_notes pending pattern (migration 017).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pm_pending_notes (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL,
+          notes_text TEXT NOT NULL,
+          scope_hint TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','dispatched','failed')),
+          proposal_id TEXT,
+          error TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          dispatched_at TEXT
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_pm_pending_notes_pending ON pm_pending_notes(status, created_at) WHERE status = 'pending'`,
+      );
+      console.log('[Migration 054] pm_pending_notes + notes_intake trigger_kind ready.');
+    },
+  },
+  {
     id: '051',
     name: 'workspaces_workspace_path',
     up: (db) => {

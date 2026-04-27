@@ -916,7 +916,7 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   trigger_text TEXT NOT NULL,
   trigger_kind TEXT NOT NULL DEFAULT 'manual'
-    CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative')),
+    CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative','notes_intake')),
   impact_md TEXT NOT NULL,
   proposed_changes TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft'
@@ -928,6 +928,25 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
   plan_suggestions TEXT
 );
+
+-- Defer-and-replay queue for propose_from_notes requests that arrive
+-- while the openclaw gateway is unreachable. The drain worker picks
+-- pending rows up on reconnect / periodic tick.
+CREATE TABLE IF NOT EXISTS pm_pending_notes (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  notes_text TEXT NOT NULL,
+  scope_hint TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','dispatched','failed')),
+  proposal_id TEXT,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  dispatched_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pm_pending_notes_pending ON pm_pending_notes(status, created_at) WHERE status = 'pending';
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

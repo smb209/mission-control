@@ -47,6 +47,7 @@ import {
   __setSendChatClientForTests,
   type SendChatClient,
 } from '@/lib/openclaw/send-chat';
+import { buildNotesIntakeMessage } from './pm-prompts/notes-intake';
 import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -56,12 +57,27 @@ export interface DispatchPmInput {
   trigger_text: string;
   trigger_kind?: PmProposalTriggerKind;
   parent_proposal_id?: string | null;
+  /**
+   * When `false`, skip the deterministic `synthesizeImpactAnalysis`
+   * fallback and propagate the gateway error instead. The
+   * `propose_from_notes` flow uses this — a regex parser on freeform
+   * notes is worse than nothing; the queue handles offline cases.
+   * Defaults to `true` for back-compat with the disruption path.
+   */
+  allowFallback?: boolean;
 }
 
 export interface DispatchPmResult {
   proposal: PmProposal;
   used_synthesize_fallback: boolean;
   used_named_agent?: boolean;
+}
+
+export class PmDispatchGatewayUnavailableError extends Error {
+  constructor(message = 'openclaw gateway unavailable') {
+    super(message);
+    this.name = 'PmDispatchGatewayUnavailableError';
+  }
 }
 
 /**
@@ -122,6 +138,8 @@ export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResu
     console.warn('[pm-dispatch] user chat insert failed:', (err as Error).message);
   }
 
+  const allowFallback = input.allowFallback ?? true;
+
   // ── 1. Try the named-agent path ────────────────────────────────────
   if (pm && pm.gateway_agent_id) {
     const gw = gatewayClient();
@@ -145,13 +163,27 @@ export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResu
           }
           return { proposal, used_synthesize_fallback: false, used_named_agent: true };
         }
+        // Sent succeeded but no proposal landed (timeout). Treat as a
+        // gateway-side failure for the no-fallback path.
+        if (!allowFallback) {
+          throw new PmDispatchGatewayUnavailableError(
+            'PM agent did not produce a proposal within the timeout',
+          );
+        }
       } catch (err) {
+        if (!allowFallback) throw err;
         console.warn(
           '[pm-dispatch] named-agent dispatch failed; falling back to synth:',
           (err as Error).message,
         );
       }
+    } else if (!allowFallback) {
+      throw new PmDispatchGatewayUnavailableError();
     }
+  } else if (!allowFallback) {
+    throw new PmDispatchGatewayUnavailableError(
+      'PM agent missing gateway_agent_id; cannot dispatch without fallback',
+    );
   }
 
   // ── 2. Synthesize fallback ────────────────────────────────────────
@@ -242,22 +274,30 @@ async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<
 
   const summary = buildSnapshotSummary(snapshot);
   const message =
-    `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
-    `Operator-reported event:\n> ${input.trigger_text}\n\n` +
-    `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
-    `${summary}\n\n` +
-    `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
-    `with a structured PmDiff[] and impact_md. Reference only ids that ` +
-    `appear in the snapshot.`;
+    input.trigger_kind === 'notes_intake'
+      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
+      : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
+        `Operator-reported event:\n> ${input.trigger_text}\n\n` +
+        `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
+        `${summary}\n\n` +
+        `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
+        `with a structured PmDiff[] and impact_md. Reference only ids that ` +
+        `appear in the snapshot.`;
+
+  // Notes intake gets a fresh session per dispatch (like plan/decompose)
+  // so the PM doesn't carry over disruption-conversation context. The
+  // disruption path keeps the stable 'dispatch-main' session warm.
+  const sessionSuffix =
+    input.trigger_kind === 'notes_intake'
+      ? `notes-${correlationId}`
+      : 'dispatch-main';
 
   const result = await sendChatAndAwaitReply({
     agent: pm,
     message,
     idempotencyKey: `pm-dispatch-${correlationId}`,
     timeoutMs: namedAgentTimeoutMs(),
-    // Stable session keeps the PM agent warm between disruption dispatches.
-    // Fresh plan-<uuid> sessions are used for plan/decompose flows instead.
-    sessionSuffix: 'dispatch-main',
+    sessionSuffix,
   });
 
   // Send failed — caller falls back to synth.

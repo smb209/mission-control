@@ -69,7 +69,9 @@ import {
   type PmProposalStatus,
   PmProposalValidationError,
 } from '@/lib/db/pm-proposals';
-import { dispatchPm } from '@/lib/agents/pm-dispatch';
+import { dispatchPm, PmDispatchGatewayUnavailableError } from '@/lib/agents/pm-dispatch';
+import { getOpenClawClient } from '@/lib/openclaw/client';
+import { enqueuePendingNote } from '@/lib/db/pm-pending-notes';
 import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
 
 const agentIdArg = z
@@ -194,6 +196,18 @@ const DiffSchema = z.discriminatedUnion('kind', [
     sort_order: z.number().optional(),
     depends_on_initiative_ids: z.array(z.string().min(1)).optional(),
     placeholder_id: z.string().optional(),
+  }),
+  z.object({
+    // Notes-intake flow: insert one draft task attached to an existing
+    // initiative or to a placeholder ($N or `placeholder_id`) referring
+    // to a create_child_initiative diff earlier in the same proposal.
+    kind: z.literal('create_task_under_initiative'),
+    initiative_id: z.string().min(1),
+    title: z.string().min(1).max(500),
+    description: z.string().nullish(),
+    status_check_md: z.string().nullish(),
+    assigned_agent_id: z.string().nullish(),
+    priority: z.enum(['low', 'normal', 'high']).optional(),
   }),
 ]);
 
@@ -593,6 +607,7 @@ export function registerRoadmapTools(server: McpServer): void {
             'status_check_investigation',
             'plan_initiative',
             'decompose_initiative',
+            'notes_intake',
           ])
           .optional(),
         impact_md: z.string().min(1).max(20000),
@@ -619,6 +634,63 @@ export function registerRoadmapTools(server: McpServer): void {
         plan_suggestions: args.plan_suggestions ?? null,
         parent_proposal_id: args.parent_proposal_id ?? null,
       });
+    }),
+  );
+
+  server.registerTool(
+    'propose_from_notes',
+    {
+      title: 'PM: propose roadmap + task changes from freeform notes',
+      description:
+        "Hand the PM a paragraph (or several) of freeform text — meeting notes, kickoff transcript, weekly review, brain-dump — and the PM agent reads it, consults the roadmap snapshot, and replies with a single `propose_changes` MCP call carrying a coherent set of structured diffs (creates/updates on initiatives plus draft tasks under them). Returns `{status: 'dispatched', proposal_id}` on success. If the openclaw gateway is unreachable, the request is enqueued in `pm_pending_notes` and replayed automatically when the gateway comes back; in that case `{status: 'queued', pending_id}` is returned. There is NO deterministic fallback: a regex parser on freeform notes is worse than nothing.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        workspace_id: z.string().min(1),
+        notes_text: z.string().min(1).max(20000),
+        scope_hint: z
+          .object({
+            target_initiative_id: z.string().optional(),
+            include_tasks: z.boolean().optional(),
+          })
+          .optional(),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => safeWrapAsync(async () => {
+      // Health check before dispatch. When the gateway is down, enqueue
+      // and bail — no synth fallback for this path.
+      const gw = getOpenClawClient();
+      if (!gw.isConnected()) {
+        const queued = enqueuePendingNote({
+          workspace_id: args.workspace_id,
+          agent_id: args.agent_id,
+          notes_text: args.notes_text,
+          scope_hint: args.scope_hint ?? null,
+        });
+        return { status: 'queued' as const, pending_id: queued.id };
+      }
+      try {
+        const result = await dispatchPm({
+          workspace_id: args.workspace_id,
+          trigger_text: args.notes_text,
+          trigger_kind: 'notes_intake',
+          allowFallback: false,
+        });
+        return { status: 'dispatched' as const, proposal_id: result.proposal.id };
+      } catch (err) {
+        if (err instanceof PmDispatchGatewayUnavailableError) {
+          // Gateway dropped between the health check and dispatch — queue
+          // it so the request isn't lost.
+          const queued = enqueuePendingNote({
+            workspace_id: args.workspace_id,
+            agent_id: args.agent_id,
+            notes_text: args.notes_text,
+            scope_hint: args.scope_hint ?? null,
+          });
+          return { status: 'queued' as const, pending_id: queued.id };
+        }
+        throw err;
+      }
     }),
   );
 

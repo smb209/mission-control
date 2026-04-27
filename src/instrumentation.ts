@@ -18,4 +18,14 @@ export async function register() {
     console.error('[Instrumentation] Eager DB init failed:', err);
     throw err;
   }
+
+  // Register the pm_pending_notes drain worker. The drain is cheap when
+  // the queue is empty and it's the only path that recovers
+  // propose_from_notes requests captured while the gateway was offline.
+  try {
+    const { registerDrainTriggers } = await import('@/lib/agents/pm-pending-drain');
+    registerDrainTriggers();
+  } catch (err) {
+    console.warn('[Instrumentation] pm-pending-drain registration failed:', (err as Error).message);
+  }
 }
