@@ -24,6 +24,7 @@ import { queryOne } from '@/lib/db';
 import {
   applyPlanInitiativeSuggestions,
   parseSuggestionsFromImpactMd,
+  type PlanInitiativeSuggestionsBlob,
 } from '@/lib/pm/applyPlanInitiativeProposal';
 
 export const dynamic = 'force-dynamic';
@@ -61,22 +62,27 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       trigger_kind: string;
       impact_md: string;
       status: string;
+      plan_suggestions: string | null;
     }>(
-      'SELECT id, workspace_id, trigger_kind, impact_md, status FROM pm_proposals WHERE id = ?',
+      'SELECT id, workspace_id, trigger_kind, impact_md, status, plan_suggestions FROM pm_proposals WHERE id = ?',
       [id],
     );
     if (!proposal) {
       return NextResponse.json({ error: 'Proposal not found' }, { status: 404 });
     }
-    // We used to gate on `trigger_kind === 'plan_initiative'`, but the
-    // PM agent's `propose_changes` MCP call can mislabel kind (defaults
-    // to 'manual' when omitted) even though the dispatch was a plan
-    // request — and proposals created before pm-dispatch started
-    // post-hoc-stamping the kind keep the wrong label forever. The
-    // stronger signal that this is really a plan proposal is the
-    // presence of the embedded `<!--pm-plan-suggestions ...-->` sidecar.
-    // If suggestions parse, accept the apply regardless of trigger_kind.
-    const suggestions = parseSuggestionsFromImpactMd(proposal.impact_md);
+    // Prefer the structured plan_suggestions column (written by the PM agent
+    // via propose_changes). Fall back to sidecar parsing for older proposals.
+    let suggestions: PlanInitiativeSuggestionsBlob | null = null;
+    if (proposal.plan_suggestions) {
+      try {
+        suggestions = JSON.parse(proposal.plan_suggestions) as PlanInitiativeSuggestionsBlob;
+      } catch {
+        suggestions = null;
+      }
+    }
+    if (!suggestions) {
+      suggestions = parseSuggestionsFromImpactMd(proposal.impact_md);
+    }
     if (!suggestions) {
       return NextResponse.json(
         {
