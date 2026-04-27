@@ -3245,6 +3245,57 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: '052',
+    name: 'pm_proposals_plan_suggestions',
+    up: (db) => {
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'plan_suggestions')) {
+        db.exec(`ALTER TABLE pm_proposals ADD COLUMN plan_suggestions TEXT`);
+      }
+      console.log('[Migration 052] pm_proposals.plan_suggestions added.');
+    },
+  },
+  {
+    id: '053',
+    name: 'pm_proposals_target_initiative_cascade',
+    up: (db) => {
+      // Change target_initiative_id from ON DELETE SET NULL to ON DELETE CASCADE
+      // so that deleting an initiative automatically removes its scoped proposals
+      // rather than leaving them as unattributed orphans.
+      // SQLite requires a full table rebuild to change FK actions.
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      const colNames = ['id', 'workspace_id', 'trigger_text', 'trigger_kind', 'impact_md',
+        'proposed_changes', 'status', 'applied_at', 'applied_by_agent_id', 'parent_proposal_id',
+        'created_at', 'target_initiative_id', 'plan_suggestions'].filter(c => cols.some(x => x.name === c));
+      const colList = colNames.join(', ');
+      db.exec(`
+        CREATE TABLE pm_proposals_new (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          trigger_text TEXT NOT NULL,
+          trigger_kind TEXT NOT NULL DEFAULT 'manual'
+            CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative')),
+          impact_md TEXT NOT NULL,
+          proposed_changes TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK (status IN ('draft','accepted','rejected','superseded')),
+          applied_at TEXT,
+          applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          parent_proposal_id TEXT REFERENCES pm_proposals_new(id) ON DELETE SET NULL,
+          created_at TEXT DEFAULT (datetime('now')),
+          target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          plan_suggestions TEXT
+        )
+      `);
+      db.exec(`INSERT INTO pm_proposals_new (${colList}) SELECT ${colList} FROM pm_proposals`);
+      db.exec(`DROP TABLE pm_proposals`);
+      db.exec(`ALTER TABLE pm_proposals_new RENAME TO pm_proposals`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_target_init ON pm_proposals(target_initiative_id, status, created_at DESC)`);
+      console.log('[Migration 053] pm_proposals.target_initiative_id changed to ON DELETE CASCADE.');
+    },
+  },
+  {
     id: '051',
     name: 'workspaces_workspace_path',
     up: (db) => {

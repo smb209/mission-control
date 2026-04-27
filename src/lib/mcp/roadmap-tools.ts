@@ -598,52 +598,25 @@ export function registerRoadmapTools(server: McpServer): void {
         impact_md: z.string().min(1).max(20000),
         changes: z.array(DiffSchema),
         parent_proposal_id: z.string().nullish(),
+        /**
+         * Structured planning suggestions for plan_initiative proposals.
+         * Pass the suggestions object here directly rather than embedding
+         * JSON in impact_md — avoids all sidecar parsing problems.
+         * Required fields: refined_description, complexity.
+         * Optional: target_start, target_end, status_check_md, dependencies.
+         */
+        plan_suggestions: z.record(z.string(), z.unknown()).nullish(),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
     async (args) => safeWrap(() => {
-      // For plan_initiative proposals, the chat-side Apply flow needs
-      // a `<!--pm-plan-suggestions ...-->` JSON sidecar in impact_md.
-      // SOUL.md asks the agent to embed it, but LLMs are unreliable
-      // about arbitrary HTML-comment JSON. When it's missing AND the
-      // agent passed a parseable draft in trigger_text, re-derive
-      // suggestions deterministically and inject. Graceful degradation:
-      // if trigger_text isn't a draft blob (or synth fails), proceed
-      // without — the chat picker modal will show a clear "no embedded
-      // suggestions" warning instead of silently failing.
-      let impactMd = args.impact_md;
-      if (
-        args.trigger_kind === 'plan_initiative' &&
-        !/<!--pm-plan-suggestions/.test(impactMd)
-      ) {
-        try {
-          const parsed = JSON.parse(args.trigger_text) as {
-            mode?: string;
-            draft?: {
-              title: string;
-              description?: string | null;
-              kind?: 'theme' | 'milestone' | 'epic' | 'story';
-              complexity?: 'S' | 'M' | 'L' | 'XL' | null;
-              parent_initiative_id?: string | null;
-              target_start?: string | null;
-              target_end?: string | null;
-            };
-          };
-          if (parsed?.mode === 'plan_initiative' && parsed.draft?.title) {
-            const snapshot = getRoadmapSnapshot({ workspace_id: args.workspace_id });
-            const synth = synthesizePlanInitiative(snapshot, parsed.draft);
-            impactMd = `${impactMd.trim()}\n\n<!--pm-plan-suggestions ${JSON.stringify(synth.suggestions)} -->`;
-          }
-        } catch {
-          // trigger_text wasn't a JSON draft blob — leave impact_md as-is.
-        }
-      }
       return createProposal({
         workspace_id: args.workspace_id,
         trigger_text: args.trigger_text,
         trigger_kind: args.trigger_kind,
-        impact_md: impactMd,
+        impact_md: args.impact_md,
         proposed_changes: args.changes as PmDiff[],
+        plan_suggestions: args.plan_suggestions ?? null,
         parent_proposal_id: args.parent_proposal_id ?? null,
       });
     }),

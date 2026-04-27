@@ -255,9 +255,9 @@ async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<
     message,
     idempotencyKey: `pm-dispatch-${correlationId}`,
     timeoutMs: namedAgentTimeoutMs(),
-    // Fresh session per disruption — prevents context from one disruption
-    // analysis bleeding into the next independent request.
-    sessionSuffix: `dispatch-${correlationId}`,
+    // Stable session keeps the PM agent warm between disruption dispatches.
+    // Fresh plan-<uuid> sessions are used for plan/decompose flows instead.
+    sessionSuffix: 'dispatch-main',
   });
 
   // Send failed — caller falls back to synth.
@@ -305,7 +305,7 @@ export interface DispatchSynthesizedInput {
   trigger_text: string;
   trigger_kind: PmProposalTriggerKind;
   /** Synth output ready to persist as a fallback. */
-  synth: { impact_md: string; changes: PmDiff[] };
+  synth: { impact_md: string; changes: PmDiff[]; plan_suggestions?: Record<string, unknown> | null };
   /** Free-text prompt sent to the named agent. */
   agent_prompt: string;
   parent_proposal_id?: string | null;
@@ -411,6 +411,7 @@ export async function dispatchPmSynthesized(
     trigger_kind: input.trigger_kind,
     impact_md: input.synth.impact_md,
     proposed_changes: input.synth.changes,
+    plan_suggestions: input.synth.plan_suggestions ?? null,
     parent_proposal_id: input.parent_proposal_id ?? null,
     target_initiative_id: input.target_initiative_id ?? null,
   });

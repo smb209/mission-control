@@ -13,6 +13,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles } from 'lucide-react';
 import {
   parseSuggestionsFromImpactMd,
@@ -715,19 +716,24 @@ function PmChatPageInner() {
               </li>
             )}
             {recentProposals.map(p => (
-              <li key={p.id} className="px-4 py-3 hover:bg-mc-bg/50">
-                <div className="flex items-center gap-2 text-xs mb-1">
-                  <span className={`px-2 py-0.5 rounded-sm ${STATUS_BADGE[p.status]}`}>{p.status}</span>
-                  <span className="text-mc-text-secondary">
-                    {p.proposed_changes.length} change{p.proposed_changes.length === 1 ? '' : 's'}
-                  </span>
-                  <span className="ml-auto text-mc-text-secondary/70">
-                    {new Date(p.created_at.endsWith('Z') ? p.created_at : p.created_at + 'Z').toLocaleString()}
-                  </span>
-                </div>
-                <p className="text-xs text-mc-text-secondary line-clamp-2 break-words">
-                  {p.trigger_text}
-                </p>
+              <li key={p.id}>
+                <Link
+                  href={`/pm/proposals/${p.id}`}
+                  className="block px-4 py-3 hover:bg-mc-bg-secondary transition-colors"
+                >
+                  <div className="flex items-center gap-2 text-xs mb-1">
+                    <span className={`px-2 py-0.5 rounded-sm ${STATUS_BADGE[p.status]}`}>{p.status}</span>
+                    <span className="text-mc-text-secondary">
+                      {p.proposed_changes.length} change{p.proposed_changes.length === 1 ? '' : 's'}
+                    </span>
+                    <span className="ml-auto text-mc-text-secondary/70">
+                      {new Date(p.created_at.endsWith('Z') ? p.created_at : p.created_at + 'Z').toLocaleString()}
+                    </span>
+                  </div>
+                  <p className="text-xs text-mc-text-secondary line-clamp-2 break-words">
+                    {p.trigger_text}
+                  </p>
+                </Link>
               </li>
             ))}
           </ul>

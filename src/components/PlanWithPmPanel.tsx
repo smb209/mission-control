@@ -22,7 +22,8 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Sparkles, Send, X, RefreshCw } from 'lucide-react';
+import { Sparkles, Send, X, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { parseSuggestionsFromImpactMd as parseSharedSuggestions } from '@/lib/pm/planSuggestionsSidecar';
 
 export interface PlanInitiativeDraft {
   title: string;
@@ -48,21 +49,8 @@ export interface PlanInitiativeSuggestions {
   owner_agent_id: string | null;
 }
 
-/**
- * Extract the structured suggestions JSON from a proposal's impact_md
- * (we embed it in an HTML comment so the markdown stays human-readable
- * but the client can pull suggestions out of any /refine response).
- */
 function parseSuggestionsFromImpactMd(md: string): PlanInitiativeSuggestions | null {
-  // [\s\S] matches anything including newlines (the `s` flag is ES2018+
-  // and the project's tsconfig predates that — works on a wider range).
-  const m = md.match(/<!--pm-plan-suggestions\s+([\s\S]*?)\s*-->/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[1]) as PlanInitiativeSuggestions;
-  } catch {
-    return null;
-  }
+  return parseSharedSuggestions(md) as PlanInitiativeSuggestions | null;
 }
 
 interface KnownInitiative {
@@ -120,6 +108,7 @@ export default function PlanWithPmPanel({
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [draftOpen, setDraftOpen] = useState(false);
   // Snapshot the draft at open-time so React-driven re-renders of the
   // host (which construct a fresh `draft` object every render) don't
   // retrigger this effect and cancel the in-flight fetch.
@@ -145,6 +134,7 @@ export default function PlanWithPmPanel({
       setSuggestions(null);
       setErr(null);
       setRefineText('');
+      setDraftOpen(false);
       return;
     }
 
@@ -214,8 +204,11 @@ export default function PlanWithPmPanel({
       const newProposal = body.proposal;
       setProposalId(newProposal.id);
       setImpactMd(newProposal.impact_md);
-      const parsed = parseSuggestionsFromImpactMd(newProposal.impact_md);
-      if (parsed) setSuggestions(parsed);
+      // Prefer structured plan_suggestions column; fall back to sidecar parsing.
+      const refined =
+        (newProposal.plan_suggestions as PlanInitiativeSuggestions | null) ??
+        parseSuggestionsFromImpactMd(newProposal.impact_md);
+      if (refined) setSuggestions(refined);
       setRefineText('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Refine failed');
@@ -263,13 +256,22 @@ export default function PlanWithPmPanel({
         </button>
       </header>
 
-      <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3 text-xs">
-        <div className="text-mc-text-secondary uppercase tracking-wide text-[10px] mb-1">Your draft</div>
-        <div className="text-mc-text">
-          <strong>{draft.title}</strong>
-          {draft.description ? <p className="text-mc-text-secondary mt-1 whitespace-pre-wrap">{draft.description}</p> : null}
+      <button
+        type="button"
+        onClick={() => setDraftOpen(o => !o)}
+        className="w-full flex items-center gap-1 text-[10px] text-mc-text-secondary uppercase tracking-wide mb-3 hover:text-mc-text transition-colors"
+      >
+        {draftOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Your draft
+      </button>
+      {draftOpen && (
+        <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3 text-xs">
+          <div className="text-mc-text">
+            <strong>{draft.title}</strong>
+            {draft.description ? <p className="text-mc-text-secondary mt-1 whitespace-pre-wrap">{draft.description}</p> : null}
+          </div>
         </div>
-      </div>
+      )}
 
       {err && (
         <div className="p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs mb-3">
@@ -302,13 +304,13 @@ export default function PlanWithPmPanel({
                 <div className="text-mc-text font-medium">{suggestions.target_end}</div>
               </div>
             </div>
-            {suggestions.dependencies.length > 0 && (
+            {(suggestions.dependencies?.length ?? 0) > 0 && (
               <div>
                 <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">
-                  Will create on Apply ({suggestions.dependencies.length} dependenc{suggestions.dependencies.length === 1 ? 'y' : 'ies'})
+                  Will create on Apply ({suggestions.dependencies!.length} dependenc{suggestions.dependencies!.length === 1 ? 'y' : 'ies'})
                 </div>
                 <ul className="text-mc-text mt-1 space-y-1">
-                  {suggestions.dependencies.map(d => (
+                  {suggestions.dependencies!.map(d => (
                     <li key={d.depends_on_initiative_id}>
                       <span className="font-medium">{titleFor(d.depends_on_initiative_id)}</span>{' '}
                       <span className="text-mc-text-secondary italic">— {d.note}</span>
