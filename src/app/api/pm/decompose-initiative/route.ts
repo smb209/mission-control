@@ -23,6 +23,7 @@ import { getInitiative } from '@/lib/db/initiatives';
 import { synthesizeDecompose } from '@/lib/agents/pm-agent';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
+import { queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +72,31 @@ export async function POST(request: NextRequest) {
       hint: parsed.data.hint ?? null,
     });
 
+    // Dedup: return any identical draft dispatched in the last 2 seconds
+    // (guards against React StrictMode double-invoke and rapid re-opens).
+    const recent = queryOne<{ id: string; impact_md: string; proposed_changes: string }>(
+      `SELECT id, impact_md, proposed_changes FROM pm_proposals
+       WHERE workspace_id = ?
+         AND trigger_kind = 'decompose_initiative'
+         AND trigger_text = ?
+         AND status = 'draft'
+         AND created_at >= datetime('now', '-2 seconds')
+       ORDER BY created_at DESC LIMIT 1`,
+      [parent.workspace_id, triggerText],
+    );
+    if (recent) {
+      return NextResponse.json(
+        {
+          proposal: {
+            ...recent,
+            proposed_changes: JSON.parse(recent.proposed_changes),
+          },
+          deduped: true,
+        },
+        { status: 201 },
+      );
+    }
+
     // Try the named-agent path first (PM gateway agent at
     // ~/.openclaw/workspaces/mc-project-manager). On timeout or no
     // session, the synthesized proposal is persisted exactly like
@@ -118,4 +144,53 @@ export async function POST(request: NextRequest) {
     console.error('Failed to decompose initiative:', err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+/**
+ * GET /api/pm/decompose-initiative?workspace_id=…&initiative_id=…
+ *
+ * Resume-lookup. Returns the latest draft decompose_initiative proposal
+ * for the given initiative so the modal can re-open the same draft instead
+ * of dispatching a fresh one every open.
+ *
+ * 200 { proposal } when resumable, 200 { proposal: null } when none.
+ */
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const workspaceId = url.searchParams.get('workspace_id');
+  const initiativeId = url.searchParams.get('initiative_id');
+  if (!workspaceId || !initiativeId) {
+    return NextResponse.json(
+      { error: 'workspace_id and initiative_id required' },
+      { status: 400 },
+    );
+  }
+
+  const row = queryOne<{
+    id: string;
+    workspace_id: string;
+    trigger_text: string;
+    trigger_kind: string;
+    impact_md: string;
+    proposed_changes: string;
+    status: string;
+  }>(
+    `SELECT id, workspace_id, trigger_text, trigger_kind, impact_md, proposed_changes, status
+     FROM pm_proposals
+     WHERE workspace_id = ?
+       AND trigger_kind = 'decompose_initiative'
+       AND status = 'draft'
+       AND json_extract(trigger_text, '$.initiative_id') = ?
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [workspaceId, initiativeId],
+  );
+
+  if (!row) {
+    return NextResponse.json({ proposal: null });
+  }
+
+  return NextResponse.json({
+    proposal: { ...row, proposed_changes: JSON.parse(row.proposed_changes) },
+  });
 }

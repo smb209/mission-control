@@ -617,9 +617,9 @@ function PmChatPageInner() {
             {messages.length === 0 && pmAgent && (
               <div className="text-center py-12 text-mc-text-secondary">
                 <Inbox className="w-8 h-8 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">Drop a disruption to get started.</p>
+                <p className="text-sm">Drop anything that reshapes the plan.</p>
                 <p className="text-xs mt-1 opacity-70">
-                  Examples: &quot;Sarah out next week&quot; · &quot;API X delayed until 2026-05-03&quot; · &quot;We&apos;re cutting Phase 2&quot;
+                  e.g. &quot;Sarah out next week&quot; · &quot;API X delayed to 2026-05-03&quot; · &quot;New idea that could be huge — needs scoping&quot; · &quot;Customer signed early, can we pull Phase 2 forward?&quot;
                 </p>
               </div>
             )}
@@ -677,7 +677,7 @@ function PmChatPageInner() {
                 rows={2}
                 placeholder={
                   pmAgent
-                    ? 'Drop a disruption — the PM will respond with a proposal card.'
+                    ? 'Drop anything that reshapes the plan — blocker, opportunity, new idea — the PM will respond with a proposal.'
                     : 'No PM agent in this workspace.'
                 }
                 disabled={!pmAgent || sending}
