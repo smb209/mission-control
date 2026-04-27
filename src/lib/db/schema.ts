@@ -924,7 +924,9 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   applied_at TEXT,
   applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+  plan_suggestions TEXT
 );
 
 -- Indexes for performance

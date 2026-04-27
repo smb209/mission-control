@@ -185,6 +185,12 @@ export default function InitiativeDetailPage({
   const [showAddDepModal, setShowAddDepModal] = useState(false);
   const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
+  // True while there is a known unresolved draft proposal for this initiative.
+  // Disables the "Plan with PM" button to prevent duplicate dispatches.
+  const [hasDraftProposal, setHasDraftProposal] = useState(false);
+  // Once the initiative loads, check once for an existing draft proposal so
+  // we can auto-open the plan panel and prevent duplicate dispatches.
+  const draftProposalCheckDone = useRef(false);
   // Operator guidance captured via the "Plan with PM ▾ → With guidance"
   // option in the toolbar split-button. Threaded into the initial PM
   // dispatch (POST body's `guidance` field). Cleared on panel close
@@ -249,6 +255,25 @@ export default function InitiativeDetailPage({
     };
   }, [initiative?.workspace_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-open the plan panel when there's an existing unresolved draft
+  // proposal for this initiative. Guards with a ref so it only fires once
+  // per mount, not on every subsequent refresh() call.
+  useEffect(() => {
+    if (!initiative || draftProposalCheckDone.current) return;
+    draftProposalCheckDone.current = true;
+    fetch(
+      `/api/pm/plan-initiative?workspace_id=${encodeURIComponent(initiative.workspace_id)}&target_initiative_id=${encodeURIComponent(initiative.id)}`,
+    )
+      .then(r => r.json())
+      .then((body: { proposal?: unknown }) => {
+        if (body?.proposal) {
+          setHasDraftProposal(true);
+          setShowPlanPanel(true);
+        }
+      })
+      .catch(() => {});
+  }, [initiative]);
+
   // Open the inline Plan-with-PM panel and pull it into view. The panel
   // mounts directly under the header card, but a long header can still
   // push it below the fold on smaller viewports — scrollIntoView + a
@@ -276,6 +301,7 @@ export default function InitiativeDetailPage({
   const closePlanPanel = useCallback(() => {
     setShowPlanPanel(false);
     setPlanGuidance(null);
+    setHasDraftProposal(false);
   }, []);
 
   // PATCH a partial update to this initiative and refresh on success. The
@@ -488,7 +514,8 @@ export default function InitiativeDetailPage({
               guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
 or "treat memory + checklist as MVP, exclude dashboard widgets"`}
               guidanceCta="Plan with guidance"
-              title="PM proposes refined description / sizing / window"
+              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'PM proposes refined description / sizing / window'}
+              disabled={hasDraftProposal}
             >
               Plan with PM
             </SplitToolbarButton>
