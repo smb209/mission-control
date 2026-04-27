@@ -3259,15 +3259,24 @@ const migrations: Migration[] = [
     id: '053',
     name: 'pm_proposals_target_initiative_cascade',
     up: (db) => {
-      // Change target_initiative_id from ON DELETE SET NULL to ON DELETE CASCADE
-      // so that deleting an initiative automatically removes its scoped proposals
-      // rather than leaving them as unattributed orphans.
-      // SQLite requires a full table rebuild to change FK actions.
+      // Change target_initiative_id from ON DELETE SET NULL to ON DELETE CASCADE.
+      // Skip if the column already has CASCADE (fresh DBs get the correct schema
+      // from schema.ts and don't need the rebuild).
+      const fkList = db.prepare(`PRAGMA foreign_key_list(pm_proposals)`).all() as Array<{ from: string; on_delete: string }>;
+      const targetFk = fkList.find(fk => fk.from === 'target_initiative_id');
+      if (targetFk?.on_delete === 'CASCADE') {
+        console.log('[Migration 053] pm_proposals.target_initiative_id already CASCADE, skipping rebuild.');
+        return;
+      }
       const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
       const colNames = ['id', 'workspace_id', 'trigger_text', 'trigger_kind', 'impact_md',
         'proposed_changes', 'status', 'applied_at', 'applied_by_agent_id', 'parent_proposal_id',
         'created_at', 'target_initiative_id', 'plan_suggestions'].filter(c => cols.some(x => x.name === c));
       const colList = colNames.join(', ');
+      // Note: SQLite doesn't validate FK target table names at CREATE TABLE time,
+      // so REFERENCES pm_proposals(id) is correct here — it will resolve properly
+      // after the rename and avoids the dangling-reference bug that would occur
+      // with REFERENCES pm_proposals_new(id).
       db.exec(`
         CREATE TABLE pm_proposals_new (
           id TEXT PRIMARY KEY,
@@ -3281,7 +3290,7 @@ const migrations: Migration[] = [
             CHECK (status IN ('draft','accepted','rejected','superseded')),
           applied_at TEXT,
           applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
-          parent_proposal_id TEXT REFERENCES pm_proposals_new(id) ON DELETE SET NULL,
+          parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL,
           created_at TEXT DEFAULT (datetime('now')),
           target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
           plan_suggestions TEXT

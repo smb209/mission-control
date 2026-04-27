@@ -94,6 +94,20 @@ export default function DecomposeWithPmModal({
       setLoading(true);
       setErr(null);
       try {
+        // Resume path: check for an existing draft before dispatching a new one.
+        const resumeRes = await fetch(
+          `/api/pm/decompose-initiative?workspace_id=${encodeURIComponent(initiative.workspace_id)}&initiative_id=${encodeURIComponent(initiative.id)}`,
+        );
+        if (resumeRes.ok) {
+          const resumeBody = await resumeRes.json() as { proposal?: ProposalRow | null };
+          if (resumeBody?.proposal) {
+            if (cancelled) return;
+            setProposalId(resumeBody.proposal.id);
+            setImpactMd(resumeBody.proposal.impact_md);
+            setChildren(resumeBody.proposal.proposed_changes);
+            return;
+          }
+        }
         const res = await fetch('/api/pm/decompose-initiative', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -103,7 +117,7 @@ export default function DecomposeWithPmModal({
           }),
         });
         const body = await res.json();
-        if (!res.ok) throw new Error(body.error || `Decompose failed (${res.status})`);
+        if (!res.ok) throw new Error((body as { error?: string }).error || `Decompose failed (${res.status})`);
         if (cancelled) return;
         const proposal = body.proposal as ProposalRow;
         setProposalId(proposal.id);
@@ -118,7 +132,7 @@ export default function DecomposeWithPmModal({
     return () => {
       cancelled = true;
     };
-  }, [initiative.id, initialHint]);
+  }, [initiative.id, initiative.workspace_id, initialHint]);
 
   // Esc to close.
   useEffect(() => {

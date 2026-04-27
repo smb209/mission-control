@@ -188,8 +188,10 @@ export default function InitiativeDetailPage({
   // True while there is a known unresolved draft proposal for this initiative.
   // Disables the "Plan with PM" button to prevent duplicate dispatches.
   const [hasDraftProposal, setHasDraftProposal] = useState(false);
-  // Once the initiative loads, check once for an existing draft proposal so
-  // we can auto-open the plan panel and prevent duplicate dispatches.
+  // True while there is a known unresolved draft decompose proposal.
+  const [hasDraftDecomposeProposal, setHasDraftDecomposeProposal] = useState(false);
+  // Once the initiative loads, check once for existing draft proposals so
+  // we can surface them and prevent duplicate dispatches.
   const draftProposalCheckDone = useRef(false);
   // Operator guidance captured via the "Plan with PM ▾ → With guidance"
   // option in the toolbar split-button. Threaded into the initial PM
@@ -255,21 +257,26 @@ export default function InitiativeDetailPage({
     };
   }, [initiative?.workspace_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-open the plan panel when there's an existing unresolved draft
-  // proposal for this initiative. Guards with a ref so it only fires once
-  // per mount, not on every subsequent refresh() call.
+  // On first load, check for existing draft proposals (plan + decompose) to
+  // surface them and disable the buttons that would create duplicates.
   useEffect(() => {
     if (!initiative || draftProposalCheckDone.current) return;
     draftProposalCheckDone.current = true;
-    fetch(
-      `/api/pm/plan-initiative?workspace_id=${encodeURIComponent(initiative.workspace_id)}&target_initiative_id=${encodeURIComponent(initiative.id)}`,
-    )
+    const ws = encodeURIComponent(initiative.workspace_id);
+    const iid = encodeURIComponent(initiative.id);
+    fetch(`/api/pm/plan-initiative?workspace_id=${ws}&target_initiative_id=${iid}`)
       .then(r => r.json())
       .then((body: { proposal?: unknown }) => {
         if (body?.proposal) {
           setHasDraftProposal(true);
           setShowPlanPanel(true);
         }
+      })
+      .catch(() => {});
+    fetch(`/api/pm/decompose-initiative?workspace_id=${ws}&initiative_id=${iid}`)
+      .then(r => r.json())
+      .then((body: { proposal?: unknown }) => {
+        if (body?.proposal) setHasDraftDecomposeProposal(true);
       })
       .catch(() => {});
   }, [initiative]);
@@ -293,6 +300,11 @@ export default function InitiativeDetailPage({
   const openDecompose = useCallback((hint?: string) => {
     setDecomposeHint(hint && hint.length > 0 ? hint : null);
     setShowDecomposeModal(true);
+  }, []);
+
+  const closeDecompose = useCallback(() => {
+    setShowDecomposeModal(false);
+    setHasDraftDecomposeProposal(false);
   }, []);
 
   // Closes the plan panel AND clears any guidance so the next default
@@ -528,7 +540,8 @@ or "treat memory + checklist as MVP, exclude dashboard widgets"`}
                 guidancePlaceholder={`e.g. "split by frontend / backend / data"
 or "carve out the onboarding flow as its own story first"`}
                 guidanceCta="Decompose with guidance"
-                title="Ask the PM to propose 3-7 child initiatives"
+                title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Ask the PM to propose 3-7 child initiatives'}
+                disabled={hasDraftDecomposeProposal}
               >
                 Decompose with PM
               </SplitToolbarButton>
@@ -888,9 +901,9 @@ or "carve out the onboarding flow as its own story first"`}
             workspace_id: initiative.workspace_id,
           }}
           initialHint={decomposeHint}
-          onClose={() => { setShowDecomposeModal(false); setDecomposeHint(null); }}
+          onClose={() => { closeDecompose(); setDecomposeHint(null); }}
           onAccepted={() => {
-            setShowDecomposeModal(false);
+            closeDecompose();
             setDecomposeHint(null);
             refresh();
           }}
