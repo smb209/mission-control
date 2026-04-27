@@ -26,6 +26,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
+import { createTaskFromInitiative } from './promotion';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -36,7 +37,8 @@ export type PmProposalTriggerKind =
   | 'disruption_event'
   | 'status_check_investigation'
   | 'plan_initiative'
-  | 'decompose_initiative';
+  | 'decompose_initiative'
+  | 'notes_intake';
 
 export type PmDiff =
   | {
@@ -93,6 +95,19 @@ export type PmDiff =
       depends_on_initiative_ids?: string[];
       /** Optional placeholder id for cross-sibling dep resolution. */
       placeholder_id?: string;
+    }
+  | {
+      // Freeform-notes intake: create one draft task attached to an
+      // initiative. `initiative_id` may be a placeholder ($N or a custom
+      // `placeholder_id` from a same-proposal `create_child_initiative`)
+      // or a real id for an existing initiative.
+      kind: 'create_task_under_initiative';
+      initiative_id: string;
+      title: string;
+      description?: string | null;
+      status_check_md?: string | null;
+      assigned_agent_id?: string | null;
+      priority?: 'low' | 'normal' | 'high';
     };
 
 export interface PmProposal {
@@ -182,6 +197,19 @@ export function validateProposedChanges(
 
   if (!Array.isArray(changes)) {
     return ['proposed_changes must be an array'];
+  }
+
+  // Build a placeholder set so create_task_under_initiative diffs can
+  // reference initiatives created earlier in the SAME proposal. Both
+  // ordinal `$N` (where N is the position of a create_child_initiative)
+  // and explicit `placeholder_id` are supported.
+  const validPlaceholders = new Set<string>();
+  for (let i = 0; i < changes.length; i++) {
+    const c = changes[i];
+    if (c && c.kind === 'create_child_initiative') {
+      validPlaceholders.add(`$${i}`);
+      if (c.placeholder_id) validPlaceholders.add(c.placeholder_id);
+    }
   }
 
   for (let i = 0; i < changes.length; i++) {
@@ -285,6 +313,38 @@ export function validateProposedChanges(
         assertInitiativeInWorkspace(workspaceId, c.initiative_id, errors, initiativeCache);
         if (typeof c.status_check_md !== 'string') {
           errors.push(`changes[${i}]: status_check_md must be a string`);
+        }
+        break;
+      }
+      case 'create_task_under_initiative': {
+        if (!c.initiative_id) {
+          errors.push(`changes[${i}]: initiative_id required`);
+          break;
+        }
+        // Accept either an ordinal placeholder ($N) or a custom
+        // placeholder_id from a same-proposal create_child_initiative,
+        // OR a real workspace initiative id.
+        if (validPlaceholders.has(c.initiative_id)) {
+          // Resolved at apply time.
+        } else if (c.initiative_id.startsWith('$')) {
+          errors.push(
+            `changes[${i}]: placeholder ${c.initiative_id} does not match any create_child_initiative diff`,
+          );
+        } else {
+          assertInitiativeInWorkspace(workspaceId, c.initiative_id, errors, initiativeCache);
+        }
+        if (!c.title || typeof c.title !== 'string' || c.title.length > 500) {
+          errors.push(`changes[${i}]: title required (1..500 chars)`);
+        }
+        if (c.assigned_agent_id) {
+          const a = queryOne<{ id: string }>(
+            'SELECT id FROM agents WHERE id = ? AND workspace_id = ?',
+            [c.assigned_agent_id, workspaceId],
+          );
+          if (!a) errors.push(`changes[${i}]: assigned_agent_id ${c.assigned_agent_id} not in workspace`);
+        }
+        if (c.priority != null && !['low', 'normal', 'high'].includes(c.priority)) {
+          errors.push(`changes[${i}]: priority must be one of low/normal/high`);
         }
         break;
       }
@@ -531,7 +591,7 @@ export function acceptProposal(
           changesApplied++;
         }
       }
-      // Second pass: dep edges + remaining diffs.
+      // Second pass: dep edges + task creation (placeholder-aware) + remaining diffs.
       for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
         const change = existing.proposed_changes[idx];
         if (change.kind === 'create_child_initiative') {
@@ -555,6 +615,33 @@ export function acceptProposal(
               );
             }
           }
+          continue;
+        }
+        if (change.kind === 'create_task_under_initiative') {
+          // Try the placeholder map first ($N or custom placeholder_id
+          // from a same-proposal create_child_initiative); fall back to
+          // the literal id for existing initiatives.
+          const mapped = placeholderMap.get(change.initiative_id);
+          const realInit = mapped ?? (change.initiative_id.startsWith('$')
+            ? undefined
+            : change.initiative_id);
+          if (!realInit) {
+            throw new PmProposalValidationError(
+              `create_task_under_initiative: unresolved placeholder "${change.initiative_id}"`,
+            );
+          }
+          createTaskFromInitiative({
+            initiative_id: realInit,
+            workspace_id: existing.workspace_id,
+            title: change.title,
+            description: change.description ?? null,
+            status_check_md: change.status_check_md ?? null,
+            assigned_agent_id: change.assigned_agent_id ?? null,
+            priority: change.priority ?? 'normal',
+            created_by_agent_id: applied_by_agent_id,
+            reason: `created via PM notes proposal #${id}`,
+          });
+          changesApplied++;
           continue;
         }
         applyDiff(change, now);
@@ -676,6 +763,11 @@ function applyDiff(diff: PmDiff, now: string): void {
       // placeholders can resolve in a second pass. Reaching this branch
       // is a programming error.
       throw new Error('create_child_initiative must be applied via applyCreateChildInitiative');
+    }
+    case 'create_task_under_initiative': {
+      // Same out-of-band pattern: handled in acceptProposal so
+      // initiative_id placeholders can resolve from the same proposal.
+      throw new Error('create_task_under_initiative must be applied via acceptProposal pass-2');
     }
     default: {
       const exhaustive: never = diff;

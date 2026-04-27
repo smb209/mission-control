@@ -374,6 +374,178 @@ test('acceptProposal is idempotent — second accept is a no-op', () => {
   assert.equal(r2.changes_applied, 0);
 });
 
+// ─── create_task_under_initiative diff kind ─────────────────────────
+
+test('create_task_under_initiative: validates initiative exists in workspace', () => {
+  const ws = freshWorkspace();
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'notes',
+        trigger_kind: 'notes_intake',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'create_task_under_initiative',
+            initiative_id: 'does-not-exist',
+            title: 'A task',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('create_task_under_initiative: requires title', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'Parent' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: '.',
+        trigger_kind: 'notes_intake',
+        impact_md: '.',
+        proposed_changes: [
+          { kind: 'create_task_under_initiative', initiative_id: init.id, title: '' },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('create_task_under_initiative: rejects placeholder that does not match any earlier diff', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Real parent' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: '.',
+        trigger_kind: 'notes_intake',
+        impact_md: '.',
+        proposed_changes: [
+          // No create_child_initiative ahead of this diff to back the placeholder.
+          { kind: 'create_task_under_initiative', initiative_id: '$0', title: 'Task' },
+          {
+            kind: 'create_child_initiative',
+            parent_initiative_id: init.id,
+            title: 'Child',
+            child_kind: 'story',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('create_task_under_initiative: applies under existing initiative', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'Existing' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 'meeting notes',
+    trigger_kind: 'notes_intake',
+    impact_md: '### Tasks',
+    proposed_changes: [
+      {
+        kind: 'create_task_under_initiative',
+        initiative_id: init.id,
+        title: 'Wire up the export',
+        description: 'add csv export to settings',
+        priority: 'high',
+      },
+    ],
+  });
+  const result = acceptProposal(p.id);
+  assert.equal(result.changes_applied, 1);
+  const tasks = queryAll<{ id: string; title: string; initiative_id: string; priority: string; status: string }>(
+    `SELECT id, title, initiative_id, priority, status FROM tasks WHERE initiative_id = ?`,
+    [init.id],
+  );
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].title, 'Wire up the export');
+  assert.equal(tasks[0].priority, 'high');
+  assert.equal(tasks[0].status, 'draft');
+  // Audit row written.
+  const hist = queryAll<{ from_initiative_id: string | null; to_initiative_id: string }>(
+    `SELECT from_initiative_id, to_initiative_id FROM task_initiative_history WHERE task_id = ?`,
+    [tasks[0].id],
+  );
+  assert.equal(hist.length, 1);
+  assert.equal(hist[0].from_initiative_id, null);
+  assert.equal(hist[0].to_initiative_id, init.id);
+});
+
+test('create_task_under_initiative: placeholder resolves to a same-proposal create_child_initiative', () => {
+  const ws = freshWorkspace();
+  const parent = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Parent epic' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 'notes',
+    trigger_kind: 'notes_intake',
+    impact_md: '.',
+    proposed_changes: [
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'New onboarding story',
+        child_kind: 'story',
+        placeholder_id: 'onboarding-story',
+      },
+      {
+        kind: 'create_task_under_initiative',
+        initiative_id: 'onboarding-story',
+        title: 'Draft onboarding copy',
+      },
+      {
+        kind: 'create_task_under_initiative',
+        initiative_id: '$0',
+        title: 'Build onboarding step 1',
+      },
+    ],
+  });
+  const result = acceptProposal(p.id);
+  assert.equal(result.changes_applied, 3);
+
+  const child = queryOne<{ id: string; title: string }>(
+    `SELECT id, title FROM initiatives WHERE parent_initiative_id = ? LIMIT 1`,
+    [parent.id],
+  );
+  assert.ok(child);
+  const tasks = queryAll<{ title: string; initiative_id: string }>(
+    `SELECT title, initiative_id FROM tasks WHERE initiative_id = ?`,
+    [child!.id],
+  );
+  assert.equal(tasks.length, 2);
+  assert.ok(tasks.some(t => t.title === 'Draft onboarding copy'));
+  assert.ok(tasks.some(t => t.title === 'Build onboarding step 1'));
+});
+
+test('create_task_under_initiative: bad assigned_agent_id rolls back the whole proposal', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'Anchor' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: '.',
+        trigger_kind: 'notes_intake',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'create_task_under_initiative',
+            initiative_id: init.id,
+            title: 'A task',
+            assigned_agent_id: 'no-such-agent',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
 test('acceptProposal emits a pm_proposal_accepted event row', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
