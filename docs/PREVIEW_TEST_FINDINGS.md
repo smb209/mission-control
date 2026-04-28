@@ -20,7 +20,7 @@ A running log of regressions, UX issues, and doc-drift items surfaced by walking
 
 ### §1.3 · Stock `Builder Agent` / `Learner Agent` rows seeded alongside gateway-synced agents
 
-- Severity: regression
+- Severity: regression (RESOLVED — `bootstrapCoreAgents` / `bootstrapCoreAgentsRaw` are now no-ops; worker roster is gateway-only, PM is the one MC-side agent created by `ensurePmAgent`)
 - Repro: from a wiped DB → `yarn db:reset` → `preview_start` → open `/agents`
 - Expected: only gateway-synced rows (`Builder`, `Coordinator`, `Learner`, `main`, `Project Manager`) plus any workspace-local PM. Total ≈ 5–6 agents.
 - Actual: 13 rows. Duplicates appear because the local-source rows `Builder Agent` (role=builder) and `Learner Agent` (role=learner) are seeded next to the gateway-linked `Builder` / `Learner` rows.
@@ -87,7 +87,7 @@ A running log of regressions, UX issues, and doc-drift items surfaced by walking
 
 ### §2.3 · `/api/pm/proposals?workspace_id=default` returns empty list while plan_initiative draft exists
 
-- Severity: polish (data inconsistency)
+- Severity: polish (NOT REPRODUCIBLE — false alarm from eval response-shape parsing; endpoint returns the array correctly)
 - Repro: after a plan_initiative dispatch lands a draft, GET `/api/pm/proposals?workspace_id=default`.
 - Expected: at least the new draft proposal in the response.
 - Actual: `[]`. The proposal IS reachable via `/api/pm/plan-initiative?…&target_initiative_id=…` and `/pm/proposals/<id>`, just not in the workspace-wide list.
@@ -103,7 +103,7 @@ A running log of regressions, UX issues, and doc-drift items surfaced by walking
 
 ### §2.4-2.5 · Agent's plan_suggestions occasionally omits target_start / target_end
 
-- Severity: polish
+- Severity: polish (RESOLVED — reconciler now backfills `target_start` / `target_end` from synth's `plan_suggestions` when the agent's row leaves them null)
 - Repro: from `setup-stable` → /initiatives → Smart Snappy → Plan with PM with the standard refinement guidance; inspect the resulting `plan_suggestions` and the post-Apply initiative row.
 - Expected: target window populated (synth fallback always proposes today + N weeks based on complexity).
 - Actual: agent's `plan_suggestions.target_start` / `.target_end` are both `null`; Apply leaves them null on the initiative row.
@@ -152,7 +152,7 @@ A running log of regressions, UX issues, and doc-drift items surfaced by walking
 
 ### §3.1 · Synth and agent disagree on "next week" semantics
 
-- Severity: polish
+- Severity: polish (RESOLVED — synth's `nextWeekStart` now uses conversational "tomorrow / next Monday on weekends" semantics, with a unit test pinning the behavior)
 - Repro: same as §3.1 above — observe the two competing proposals.
 - Expected: consistent date interpretation across synth and agent (both should produce Apr 28 – May 2 OR both May 4 – 10 — not divergent).
 - Actual: synth uses ISO-week semantics (Monday after next Monday → 2026-05-04 → 05-10). Agent uses conversational semantics (this Tue-Fri → 2026-04-28 → 05-02).
@@ -180,5 +180,11 @@ A running log of regressions, UX issues, and doc-drift items surfaced by walking
 - Notes: not a bug — it's the cold-start state on a workspace where the operator hasn't made owner assignments yet. Two doc-side options:
   1. PREVIEW_TEST_FLOW.md §4.3 should explicitly call out "first assign owners (Coordinator → backend stories, Builder Agent → mobile)" before staging availability.
   2. The agent's `decompose_initiative` SOUL.md guidance could nudge it to suggest owners based on the description's "Owner: Backend / Mobile / Design" labels (which the agent itself wrote in the Smart Snappy refined description). That'd make the ripple test work end-to-end out of the box.
+
+### §4.4 · Quarter zoom doesn't render month/quarter headers on short ranges
+
+- Severity: polish (RESOLVED — `axisTicks` includes the boundary at-or-before windowStart so the leftmost edge always carries a label; canvas renderer clamps negative-x labels to render at the left edge instead of off-screen)
+- Repro: from `roadmap-after-disruption` → /roadmap → Quarter zoom on a window that doesn't span Apr→Jul (or any quarter boundary).
+- Notes: live confirmed — Quarter zoom on the Smart Snappy Apr-May window now shows `Q2 2026` anchor label.
 
 <!-- new entries below -->

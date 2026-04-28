@@ -1,232 +1,54 @@
 /**
- * Bootstrap Core Agents
+ * Workspace bootstrap helpers.
  *
- * Creates the 4 core agents (Builder, Tester, Reviewer, Learner)
- * for a workspace if it has zero agents. Also clones workflow
- * templates from the default workspace to new workspaces.
+ * Worker agents (Builder, Tester, Reviewer, Learner, Researcher, Writer,
+ * main) are gateway-synced from openclaw and arrive via
+ * `agent-catalog-sync.ts` once the gateway is connected. The PM agent is
+ * MC-side and is created/linked by `ensurePmAgent` (further down in this
+ * file).
+ *
+ * The legacy `bootstrapCoreAgents` / `bootstrapCoreAgentsRaw` previously
+ * inserted four hardcoded `source='local'` rows (Builder Agent /
+ * Tester Agent / Reviewer Agent / Learner Agent) for any new workspace.
+ * That ran before gateway sync had a chance to populate the same roles,
+ * leaving the operator with duplicate rows on `/agents` (one local, one
+ * gateway-linked) on every fresh DB.
+ *
+ * The functions are kept as no-ops so existing call sites and migration
+ * 013 don't need to be patched. The new architectural rule:
+ *
+ *   - Worker roster: gateway sync only (mc-builder / mc-coordinator /
+ *     mc-learner / mc-researcher / mc-reviewer / mc-tester / mc-writer /
+ *     main).
+ *   - PM agent: `ensurePmAgent(workspaceId)` (called from
+ *     `POST /api/workspaces` and migration 049).
+ *   - Workflow templates: `cloneWorkflowTemplates` (still active).
  */
 
 import Database from 'better-sqlite3';
 import { getDb } from '@/lib/db';
-import { getMissionControlUrl } from '@/lib/config';
-
-// ── Agent Definitions ──────────────────────────────────────────────
-
-function sharedUserMd(missionControlUrl: string): string {
-  return `# User Context
-
-## Operating Environment
-- Platform: Autensa multi-agent task orchestration
-- API Base: ${missionControlUrl}
-- Tasks are dispatched automatically by the workflow engine
-- Communication via OpenClaw Gateway
-
-## The Human
-Manages overall system, sets priorities, defines tasks. Follow specifications precisely.
-
-## Communication Style
-- Be concise and action-oriented
-- Report results with evidence
-- Ask for clarification only when truly needed`;
-}
-
-const SHARED_AGENTS_MD = `# Team Roster
-
-## Builder Agent (🛠️)
-Creates deliverables from specs. Writes code, creates files, builds projects. When work comes back from failed QA, fixes all reported issues.
-
-## Tester Agent (🧪) — Front-End QA
-Tests the app from the user's perspective. Clicks elements, checks rendering, verifies images/links, tests forms. This is FRONT-END testing — does the app work when you use it?
-
-## Reviewer Agent (🔍) — Code QC
-Final quality gate. Reviews code quality, best practices, correctness, completeness. This is BACK-END/CODE review — is the code good? Works in the Verification column.
-
-## Learner Agent (📚)
-Observes all transitions. Captures patterns and lessons learned. Feeds knowledge back to improve future work.
-
-## How We Work Together
-Builder → Tester (front-end QA) → Review Queue → Reviewer (code QC) → Done
-If Testing fails: back to Builder with front-end issues.
-If Verification fails: back to Builder with code issues.
-Learner watches all transitions and records lessons.
-Review is a queue — tasks wait there until the Reviewer is free.
-Only one task in Verification at a time.`;
-
-interface AgentDef {
-  name: string;
-  role: string;
-  emoji: string;
-  soulMd: string;
-}
-
-const CORE_AGENTS: AgentDef[] = [
-  {
-    name: 'Builder Agent',
-    role: 'builder',
-    emoji: '🛠️',
-    soulMd: `# Builder Agent
-
-Expert builder. Follows specs exactly. Creates output in the designated project directory.
-
-## Core Responsibilities
-- Read the spec carefully before writing any code
-- Create all deliverables in the designated output directory
-- Register every deliverable via the API (POST .../deliverables)
-- Log activity when done (POST .../activities)
-- Update status to move the task forward (PATCH .../tasks/{id})
-
-## Fail-Loopback
-When tasks come back from failed QA (testing or verification), read the failure reason carefully and fix ALL issues mentioned. Do not partially fix — address every single point.
-
-## Quality Standards
-- Clean, well-structured code
-- Follow project conventions
-- No placeholder or stub code — everything must be functional
-- Test your work before marking complete`,
-  },
-  {
-    name: 'Tester Agent',
-    role: 'tester',
-    emoji: '🧪',
-    soulMd: `# Tester Agent — Front-End QA
-
-Front-end QA specialist. Tests the app/project from the user's perspective.
-
-## What You Test
-- Click on UI elements — do they respond correctly?
-- Visual rendering — does it look right? Layout, spacing, colors?
-- Images — do they load? Are they the right ones?
-- Links — do they navigate to the right places?
-- Forms — do they submit? Validation messages?
-- Responsiveness — does it work on different screen sizes?
-- Basically: does it WORK when you USE it?
-
-## Decision Criteria
-- PASS only if everything works when you use it
-- FAIL with specific details: which element, what happened, what was expected
-
-## Rules
-- Never fix issues yourself — that's the Builder's job
-- Be thorough — check every visible element and interaction
-- Report failures with evidence (what you clicked, what happened, what should have happened)`,
-  },
-  {
-    name: 'Reviewer Agent',
-    role: 'reviewer',
-    emoji: '🔍',
-    soulMd: `# Reviewer Agent — Code Quality Gatekeeper
-
-Reviews code structure, best practices, patterns, completeness, correctness, and security.
-
-## What You Review
-- Code quality — clean, well-structured, maintainable
-- Best practices — proper patterns, no anti-patterns
-- Completeness — does the code address ALL requirements in the spec?
-- Correctness — logic errors, edge cases, security issues
-- Standards — follows project conventions
-
-## Critical Rule
-You MUST fail tasks that have real code issues. A false pass wastes far more time than a false fail — the Builder gets re-dispatched with your notes, which is fast. But if bad code ships to Done, the whole pipeline failed.
-
-Never rubber-stamp. If the code is genuinely good, pass it. If there are real issues, fail it.
-
-## Failure Reports
-Explain every issue with:
-- File name and line number
-- What's wrong
-- What the fix should be
-
-Be specific. "Code quality could be better" is useless. "src/utils.ts:42 — missing null check on user input before database query" is actionable.`,
-  },
-  {
-    name: 'Learner Agent',
-    role: 'learner',
-    emoji: '📚',
-    soulMd: `# Learner Agent
-
-Observes all task transitions — both passes and failures. Captures lessons learned and writes them to the knowledge base.
-
-## What You Capture
-- Failure patterns — what went wrong and why
-- Fix patterns — what the Builder did to fix failures
-- Checklists — recurring items that should be checked every time
-- Best practices — patterns that consistently lead to passes
-
-## How to Record
-POST /api/workspaces/{workspace_id}/knowledge
-Body: {
-  "task_id": "the task id",
-  "category": "failure" | "fix" | "pattern" | "checklist",
-  "title": "Brief, searchable title",
-  "content": "Detailed description",
-  "tags": ["relevant", "tags"],
-  "confidence": 0.0-1.0
-}
-
-## Guidelines
-- Focus on actionable insights that help the team avoid repeating mistakes
-- Higher confidence for patterns seen multiple times
-- Lower confidence for first-time observations
-- Tag entries so they can be found and injected into future dispatches`,
-  },
-];
 
 // ── Public API ──────────────────────────────────────────────────────
 
 /**
- * Bootstrap core agents for a workspace using the normal getDb() accessor.
- * Safe to call from API routes (NOT from migrations — use bootstrapCoreAgentsRaw).
+ * No-op kept for back-compat with `POST /api/workspaces`. Worker agents
+ * arrive via gateway sync; the PM is created by `ensurePmAgent`.
  */
-export function bootstrapCoreAgents(workspaceId: string): void {
-  const db = getDb();
-  const missionControlUrl = getMissionControlUrl();
-  bootstrapCoreAgentsRaw(db, workspaceId, missionControlUrl);
+export function bootstrapCoreAgents(_workspaceId: string): void {
+  // Intentional no-op. See the file header for the rationale.
 }
 
 /**
- * Bootstrap core agents using a raw db handle.
- * Use this inside migrations to avoid getDb() recursion.
+ * No-op kept for back-compat with migration 013. The original behavior
+ * (inserting four hardcoded local-source agent rows) caused duplicate
+ * rows once gateway sync layered the real roles on top.
  */
 export function bootstrapCoreAgentsRaw(
-  db: Database.Database,
-  workspaceId: string,
-  missionControlUrl: string,
+  _db: Database.Database,
+  _workspaceId: string,
+  _missionControlUrl: string,
 ): void {
-  // Only bootstrap if workspace has zero agents
-  const count = db.prepare(
-    'SELECT COUNT(*) as cnt FROM agents WHERE workspace_id = ?'
-  ).get(workspaceId) as { cnt: number };
-
-  if (count.cnt > 0) {
-    console.log(`[Bootstrap] Workspace ${workspaceId} already has ${count.cnt} agent(s) — skipping`);
-    return;
-  }
-
-  const userMd = sharedUserMd(missionControlUrl);
-  const now = new Date().toISOString();
-
-  const insert = db.prepare(`
-    INSERT INTO agents (id, name, role, description, avatar_emoji, status, is_master, workspace_id, soul_md, user_md, agents_md, source, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'standby', 0, ?, ?, ?, ?, 'local', ?, ?)
-  `);
-
-  for (const agent of CORE_AGENTS) {
-    const id = crypto.randomUUID();
-    insert.run(
-      id,
-      agent.name,
-      agent.role,
-      `${agent.name} — core team member`,
-      agent.emoji,
-      workspaceId,
-      agent.soulMd,
-      userMd,
-      SHARED_AGENTS_MD,
-      now,
-      now,
-    );
-    console.log(`[Bootstrap] Created ${agent.name} (${agent.role}) for workspace ${workspaceId}`);
-  }
+  // Intentional no-op.
 }
 
 /**

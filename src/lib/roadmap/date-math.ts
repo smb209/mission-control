@@ -201,8 +201,10 @@ export function axisTicks(
       cursor.setUTCDate(cursor.getUTCDate() + 7);
     }
   } else if (zoom === 'month') {
+    // Include the month boundary at-or-before window start so the leftmost
+    // visible region always has a label, even when the window doesn't span
+    // a month boundary cleanly.
     const cursor = new Date(Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), 1));
-    if (cursor < s) cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     while (cursor <= e) {
       ticks.push(new Date(cursor));
       cursor.setUTCMonth(cursor.getUTCMonth() + 1);
@@ -211,8 +213,11 @@ export function axisTicks(
     // quarter
     const month = s.getUTCMonth();
     const qStart = month - (month % 3);
+    // Include the quarter boundary at-or-before window start (e.g. Apr 1
+    // for an Apr 27 – Jun 11 window) so we always have at least one tick
+    // to render. The canvas renderer clamps negative x values to 0 so the
+    // label lands at the leftmost edge.
     const cursor = new Date(Date.UTC(s.getUTCFullYear(), qStart, 1));
-    if (cursor < s) cursor.setUTCMonth(cursor.getUTCMonth() + 3);
     while (cursor <= e) {
       ticks.push(new Date(cursor));
       cursor.setUTCMonth(cursor.getUTCMonth() + 3);

@@ -93,18 +93,26 @@ export function RoadmapCanvas({
             <svg width={totalWidth} height={48} style={{ display: 'block' }}>
               {ticks.map((t, i) => {
                 const x = dateToPx(t, windowStart, pxPerDay);
+                // Ticks placed at-or-before windowStart keep the leftmost
+                // edge labelled even on short ranges (e.g. a Quarter-zoom
+                // view that spans <90 days). Clamp the visible label to
+                // x=4 so it doesn't render in negative space.
+                const labelX = Math.max(x + 4, 4);
+                const lineVisible = x >= 0;
                 return (
                   <g key={i}>
-                    <line
-                      x1={x}
-                      x2={x}
-                      y1={0}
-                      y2={48}
-                      stroke="currentColor"
-                      className="text-mc-border"
-                    />
+                    {lineVisible && (
+                      <line
+                        x1={x}
+                        x2={x}
+                        y1={0}
+                        y2={48}
+                        stroke="currentColor"
+                        className="text-mc-border"
+                      />
+                    )}
                     <text
-                      x={x + 4}
+                      x={labelX}
                       y={30}
                       className="fill-mc-text-secondary"
                       fontSize={11}
