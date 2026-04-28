@@ -1,20 +1,29 @@
+# syntax=docker/dockerfile:1.7
 FROM node:22-bookworm-slim AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+# Pin the yarn cache path so the BuildKit cache mounts in the install
+# stages below land somewhere predictable and survive across rebuilds.
+ENV YARN_CACHE_FOLDER=/root/.cache/yarn
 
 FROM base AS build-deps
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
+# BuildKit cache mount: a warm yarn cache survives across rebuilds, so
+# even when this layer is invalidated by a package.json change yarn
+# pulls from cache instead of re-downloading every dep.
+RUN --mount=type=cache,target=/root/.cache/yarn \
+    yarn install --frozen-lockfile
 
 FROM base AS prod-deps
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --production && yarn cache clean
+RUN --mount=type=cache,target=/root/.cache/yarn \
+    yarn install --frozen-lockfile --production
 
 FROM base AS builder
 COPY --from=build-deps /app/node_modules ./node_modules

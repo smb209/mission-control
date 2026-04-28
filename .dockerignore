@@ -9,7 +9,7 @@ coverage
 .tmp
 .claude
 data
-db-backups
+backups
 openclaw-workspaces
 presentation
 .cursor
