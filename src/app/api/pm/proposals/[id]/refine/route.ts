@@ -102,16 +102,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           (draft.description ? `${draft.description as string}\n\n` : '') +
           `Refine: ${parsed.data.additional_constraint}`,
       } as Parameters<typeof synthesizePlanInitiative>[1];
-      const synth = synthesizePlanInitiative(snapshot, synthDraft);
+      const synth = synthesizePlanInitiative(snapshot, synthDraft, {
+        targetInitiativeId: parent.target_initiative_id ?? null,
+      });
 
       // Route through the PM gateway agent (same as the initial plan
       // dispatch) so the refinement gets an LLM-based response instead of
       // the deterministic heuristic that just capitalises the first letter.
-      const dispatch = await dispatchPmSynthesized({
+      const dispatch = dispatchPmSynthesized({
         workspace_id: parent.workspace_id,
         trigger_text: child.trigger_text,
         trigger_kind: 'plan_initiative',
         planSessionKey,
+        // Match the initial plan dispatch's longer wait — refines hit the
+        // same large-prompt cold-session profile.
+        timeoutMs: 120_000,
         synth: { impact_md: synth.impact_md, changes: synth.changes },
         agent_prompt:
           `Refine the plan for initiative titled "${draftTitle}". ` +
@@ -122,22 +127,32 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
           `See your SOUL.md for the plan_suggestions shape.`,
       });
+      // Refine has a pre-allocated child row to copy content onto, so we
+      // wait for the full dispatch lifecycle (Tier 2 reconciliation
+      // included) rather than returning the synth placeholder immediately.
+      const settled = await dispatch.completion;
 
-      const agentImpactMd = dispatch.proposal.impact_md;
+      const agentImpactMd = settled.final.impact_md;
       // Resolve structured suggestions: prefer what the agent wrote into
       // plan_suggestions (via propose_changes MCP param), then sidecar,
       // then the deterministic synth. This eliminates the sidecar-injection
       // band-aid that was applied here before.
       const refinedSuggestions =
-        (dispatch.proposal.plan_suggestions as typeof synth.suggestions | null) ??
+        (settled.final.plan_suggestions as typeof synth.suggestions | null) ??
         parseSuggestionsFromImpactMd(agentImpactMd) ??
         synth.suggestions;
 
-      // dispatchPmSynthesized created its own proposal row — delete it
-      // since we already have the pre-allocated child from refineProposal().
+      // dispatchPmSynthesized may have created up to two transient rows:
+      // the synth placeholder, and (if the named agent responded) a
+      // separate agent row that supersedes it. Refine has its own
+      // pre-allocated child row to copy content onto, so both transient
+      // rows are cleaned up.
+      const { run: del } = await import('@/lib/db');
       if (dispatch.proposal.id !== child.id) {
-        const { run: del } = await import('@/lib/db');
         del('DELETE FROM pm_proposals WHERE id = ?', [dispatch.proposal.id]);
+      }
+      if (settled.final.id !== dispatch.proposal.id && settled.final.id !== child.id) {
+        del('DELETE FROM pm_proposals WHERE id = ?', [settled.final.id]);
       }
 
       newImpactMd = agentImpactMd;
@@ -164,15 +179,39 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // Default disruption-analysis path. We borrow dispatchPm's
       // synthesizer and patch the result onto the pre-allocated child
       // row, then delete the side-effect row dispatchPm created.
-      const synthesized = await dispatchPm({
+      // Don't forward `child.trigger_text` directly — it carries the
+      // `[refine] <constraint>` envelope written by `refineProposalDb`,
+      // and the `[refine]` token nudges the PM agent to call the
+      // `refine_proposal` MCP tool, which itself calls dispatchPm and
+      // creates a recursive cascade. Build a clean disruption-style
+      // trigger that combines the original parent context with the
+      // operator's new constraint, plus an explicit "use propose_changes"
+      // instruction so the agent stays on the right tool.
+      const cleanTrigger =
+        `Operator refinement of an earlier ${parent.trigger_kind} proposal.\n\n` +
+        `Original context:\n${(parent.trigger_text || '').replace(/\n*\[refine\][\s\S]*$/, '').trim()}\n\n` +
+        `New constraint to incorporate: ${parsed.data.additional_constraint}\n\n` +
+        `Respond by calling \`propose_changes\` with an updated impact_md + diff list. ` +
+        `Do NOT call \`refine_proposal\` — that's an operator-only tool and would create a dispatch loop.`;
+      const synthesized = dispatchPm({
         workspace_id: parent.workspace_id,
-        trigger_text: child.trigger_text,
+        trigger_text: cleanTrigger,
         trigger_kind: parent.trigger_kind,
       });
-      newImpactMd = synthesized.proposal.impact_md;
-      newChanges = synthesized.proposal.proposed_changes;
+      // Refine has a pre-allocated child row to copy content onto, so
+      // wait for the full lifecycle (Tier 2 reconciler included) rather
+      // than returning the synth placeholder immediately.
+      const settled = await synthesized.completion;
+      newImpactMd = settled.final.impact_md;
+      newChanges = settled.final.proposed_changes;
       const { run } = await import('@/lib/db');
-      run(`DELETE FROM pm_proposals WHERE id = ?`, [synthesized.proposal.id]);
+      // Clean up both the placeholder and (if separate) the agent's row.
+      if (synthesized.proposal.id !== child.id) {
+        run(`DELETE FROM pm_proposals WHERE id = ?`, [synthesized.proposal.id]);
+      }
+      if (settled.final.id !== synthesized.proposal.id && settled.final.id !== child.id) {
+        run(`DELETE FROM pm_proposals WHERE id = ?`, [settled.final.id]);
+      }
     }
 
     const { run } = await import('@/lib/db');

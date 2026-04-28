@@ -104,9 +104,9 @@ export function SplitToolbarButton({
             aria-hidden
             onClick={() => setOpen(false)}
           />
-          <div className="absolute top-full right-0 mt-1 w-80 z-50 bg-mc-bg-secondary border border-mc-border rounded-md shadow-lg p-3">
+          <div className="absolute top-full left-0 mt-1 z-50 bg-mc-bg-secondary border border-mc-border rounded-md shadow-lg p-3 w-[min(28rem,calc(100vw-2rem))]">
             <div className="flex items-start justify-between gap-2 mb-2">
-              <span className="text-xs font-medium text-mc-text">
+              <span className="text-xs font-medium text-mc-text leading-tight">
                 {guidanceLabel ?? 'Add guidance'}
               </span>
               <button

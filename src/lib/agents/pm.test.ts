@@ -18,11 +18,12 @@ import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import {
   synthesizeImpactAnalysis,
   dispatchPm,
+  dispatchPmSynthesized,
   __setOpenClawClientForTests,
   __setNamedAgentTimeoutForTests,
 } from './pm-dispatch';
 import type { ChatEvent, SendChatClient } from '@/lib/openclaw/send-chat';
-import { createProposal } from '@/lib/db/pm-proposals';
+import { createProposal, getProposal } from '@/lib/db/pm-proposals';
 
 /**
  * Build a SendChatClient stub that satisfies both `client.call('chat.send')`
@@ -192,11 +193,16 @@ test('dispatchPm: persists a draft proposal AND posts to PM chat with metadata',
   ensurePmAgent(ws);
   const sarahId = seedNamedAgent(ws, 'Sarah');
 
-  const result = await dispatchPm({
+  const result = dispatchPm({
     workspace_id: ws,
     trigger_text: 'Sarah out 2026-05-01 to 2026-05-05',
   });
-  assert.equal(result.used_synthesize_fallback, true);
+  // Tier 3 of pm-dispatch-async: dispatchPm returns the synth placeholder
+  // synchronously; the named-agent reconciler runs in the background.
+  // Await completion to assert the lifecycle settled with the synth-only
+  // outcome (no PM agent connected in this test seed).
+  const settled = await result.completion;
+  assert.equal(settled.used_synthesize_fallback, true);
   assert.equal(result.proposal.workspace_id, ws);
   assert.equal(result.proposal.status, 'draft');
 
@@ -229,7 +235,8 @@ test('dispatchPm: persists a draft proposal AND posts to PM chat with metadata',
 test('dispatchPm: returns a usable proposal even when nothing is parsed', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
-  const result = await dispatchPm({ workspace_id: ws, trigger_text: 'qqq xyz' });
+  const result = dispatchPm({ workspace_id: ws, trigger_text: 'qqq xyz' });
+  await result.completion;
   assert.equal(result.proposal.status, 'draft');
   assert.equal(result.proposal.proposed_changes.length, 0);
   assert.match(result.proposal.impact_md, /could not extract|No structured changes/);
@@ -289,13 +296,17 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
   __setNamedAgentTimeoutForTests(2_000);
 
   try {
-    const result = await dispatchPm({
+    const result = dispatchPm({
       workspace_id: ws,
       trigger_text: 'Operator says we lost a sprint',
     });
-    assert.equal(result.used_synthesize_fallback, false);
-    assert.equal(result.used_named_agent, true);
-    assert.match(result.proposal.impact_md, /Named-agent verdict/);
+    // Synth placeholder returned synchronously; agent supersedes via the
+    // background reconciler.
+    assert.equal(result.awaiting_agent, true);
+    const settled = await result.completion;
+    assert.equal(settled.used_synthesize_fallback, false);
+    assert.equal(settled.used_named_agent, true);
+    assert.match(settled.final.impact_md, /Named-agent verdict/);
     // chat.send went to the canonical PM session.
     const send = seenSends.find(s => s.method === 'chat.send');
     assert.ok(send);
@@ -316,12 +327,16 @@ test('dispatchPm: falls back to synth when openclaw client is offline', async ()
   __setOpenClawClientForTests(client);
 
   try {
-    const result = await dispatchPm({
+    const result = dispatchPm({
       workspace_id: ws,
       trigger_text: 'Sarah out next week',
     });
-    assert.equal(result.used_synthesize_fallback, true);
-    assert.equal(result.used_named_agent, false);
+    // Gateway down → no background reconciler runs; placeholder is the
+    // operator's final draft, marked synth_only.
+    assert.equal(result.awaiting_agent, false);
+    const settled = await result.completion;
+    assert.equal(settled.used_synthesize_fallback, true);
+    assert.equal(settled.used_named_agent, false);
     // The synth path produced a real availability diff.
     const avail = result.proposal.proposed_changes.find(c => c.kind === 'add_availability');
     assert.ok(avail, 'expected synth fallback to produce add_availability');
@@ -344,13 +359,14 @@ test('dispatchPm: falls back to synth when named-agent send throws', async () =>
   __setNamedAgentTimeoutForTests(500);
 
   try {
-    const result = await dispatchPm({
+    const result = dispatchPm({
       workspace_id: ws,
       trigger_text: 'Sarah out next week',
     });
-    assert.equal(result.used_synthesize_fallback, true);
-    assert.equal(result.used_named_agent, false);
-    assert.equal(result.proposal.status, 'draft');
+    const settled = await result.completion;
+    assert.equal(settled.used_synthesize_fallback, true);
+    assert.equal(settled.used_named_agent, false);
+    assert.equal(settled.final.status, 'draft');
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
@@ -367,13 +383,14 @@ test('dispatchPm: falls back to synth when named agent times out without writing
   __setNamedAgentTimeoutForTests(500);
 
   try {
-    const result = await dispatchPm({
+    const result = dispatchPm({
       workspace_id: ws,
       trigger_text: 'no agent will respond',
     });
-    assert.equal(result.used_synthesize_fallback, true);
-    assert.equal(result.used_named_agent, false);
-    assert.match(result.proposal.impact_md, /No structured changes|could not extract/);
+    const settled = await result.completion;
+    assert.equal(settled.used_synthesize_fallback, true);
+    assert.equal(settled.used_named_agent, false);
+    assert.match(settled.final.impact_md, /No structured changes|could not extract/);
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
@@ -401,12 +418,13 @@ test('dispatchPm: notes_intake uses a fresh per-correlation session and the note
   __setNamedAgentTimeoutForTests(2_000);
 
   try {
-    const result = await dispatchPm({
+    const result = dispatchPm({
       workspace_id: ws,
       trigger_text: 'Stand-up notes:\n- ship onboarding\n- fix #123',
       trigger_kind: 'notes_intake',
     });
-    assert.equal(result.used_named_agent, true);
+    const settled = await result.completion;
+    assert.equal(settled.used_named_agent, true);
     const send = seenSends.find(s => s.method === 'chat.send');
     assert.ok(send);
     const params = send!.params as { sessionKey?: string; message?: string };
@@ -430,13 +448,16 @@ test('dispatchPm: allowFallback=false propagates gateway error instead of synth-
   __setOpenClawClientForTests(client);
   const { PmDispatchGatewayUnavailableError } = await import('./pm-dispatch');
   try {
-    await assert.rejects(
-      dispatchPm({
-        workspace_id: ws,
-        trigger_text: 'notes go here',
-        trigger_kind: 'notes_intake',
-        allowFallback: false,
-      }),
+    // dispatchPm is now synchronous; allowFallback:false + gateway down
+    // throws immediately before any placeholder is created.
+    assert.throws(
+      () =>
+        dispatchPm({
+          workspace_id: ws,
+          trigger_text: 'notes go here',
+          trigger_kind: 'notes_intake',
+          allowFallback: false,
+        }),
       PmDispatchGatewayUnavailableError,
     );
   } finally {
@@ -444,24 +465,30 @@ test('dispatchPm: allowFallback=false propagates gateway error instead of synth-
   }
 });
 
-test('dispatchPm: allowFallback=false also surfaces a no-proposal-on-final timeout as an error', async () => {
+test('dispatchPm: allowFallback=false + gateway-up but agent silent → completion.used_named_agent === false', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
 
-  // Connected, but the agent never writes a proposal AND emitFinal arrives,
-  // so dispatchViaNamedAgent returns null. With fallback disabled this must throw.
+  // Gateway up, but the agent emits final without writing a propose_changes
+  // row. The reconciler tail expires; completion settles synth_only.
   const { client } = makeFakeClient({ emitFinal: true });
   __setOpenClawClientForTests(client);
   __setNamedAgentTimeoutForTests(500);
   try {
-    await assert.rejects(
-      dispatchPm({
-        workspace_id: ws,
-        trigger_text: 'whatever',
-        trigger_kind: 'notes_intake',
-        allowFallback: false,
-      }),
-    );
+    const result = dispatchPm({
+      workspace_id: ws,
+      trigger_text: 'whatever',
+      trigger_kind: 'notes_intake',
+      allowFallback: false,
+    });
+    // With Tier 3, dispatchPm always returns the placeholder synchronously
+    // even with allowFallback:false — the strict-gateway behavior is
+    // delegated to callers (e.g. propose_from_notes) that await completion
+    // and act on `used_named_agent === false`.
+    assert.equal(result.awaiting_agent, true);
+    const settled = await result.completion;
+    assert.equal(settled.used_named_agent, false);
+    assert.equal(settled.final.dispatch_state, 'synth_only');
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
@@ -531,5 +558,185 @@ test('drainPendingNotes: dispatches each pending row and marks dispatched', asyn
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
     __setGatewayProbeForTests(null);
+  }
+});
+
+// ─── dispatchPmSynthesized — Tier 1/2/3 (async w/ tail-window reconciler) ──
+
+const baseSynth = {
+  impact_md: '### Synth\n- placeholder',
+  changes: [],
+  plan_suggestions: { refined_description: '_(synth)_', complexity: 'M' as const, target_start: null, target_end: null, dependencies: [], status_check_md: null, owner_agent_id: null },
+};
+
+test('dispatchPmSynthesized: returns synth placeholder synchronously when gateway is up', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      // Simulate the agent landing a proposal via MCP propose_changes.
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'agent reply',
+        trigger_kind: 'manual',
+        impact_md: '### Agent reply\n- richer than synth',
+        proposed_changes: [],
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(2_000);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'plan something',
+      trigger_kind: 'plan_initiative',
+      synth: baseSynth,
+      agent_prompt: 'plan it',
+    });
+    // Returns immediately with the placeholder; agent dispatch runs in background.
+    assert.equal(dispatch.proposal.status, 'draft');
+    assert.equal(dispatch.proposal.dispatch_state, 'pending_agent');
+    assert.equal(dispatch.awaiting_agent, true);
+    // Wait for the lifecycle to settle.
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, true);
+    // The agent's row supersedes the synth placeholder.
+    const placeholder = getProposal(dispatch.proposal.id)!;
+    assert.equal(placeholder.status, 'superseded');
+    const agentRow = getProposal(settled.final.id)!;
+    assert.equal(agentRow.parent_proposal_id, dispatch.proposal.id);
+    assert.equal(agentRow.trigger_kind, 'plan_initiative');
+    assert.equal(agentRow.dispatch_state, 'agent_complete');
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+test('dispatchPmSynthesized: timeoutMs is honored — bumping it lets a slow agent win', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  // The fake client emits final 200ms after send; with a 50ms timeout the
+  // primary wait fails, but the tail window catches it.
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'slow agent reply',
+        trigger_kind: 'manual',
+        impact_md: '### Slow agent reply',
+        proposed_changes: [],
+      });
+    },
+    emitDelayMs: 200,
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(50);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'plan slow',
+      trigger_kind: 'plan_initiative',
+      synth: baseSynth,
+      agent_prompt: 'plan it',
+      // Generous tail window will catch the agent's late arrival.
+    });
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, true);
+    assert.notEqual(settled.final.id, dispatch.proposal.id);
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+test('dispatchPmSynthesized: synth_only when no agent reply ever arrives', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  // No onChatSend → no agent row created. emitFinal default true so wait
+  // returns sent:true but findProposal sees nothing.
+  const { client } = makeFakeClient({});
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(50);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'silent agent',
+      trigger_kind: 'plan_initiative',
+      synth: baseSynth,
+      agent_prompt: 'plan it',
+    });
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, false);
+    assert.equal(settled.final.id, dispatch.proposal.id);
+    // Placeholder stays as the operator's draft, marked as synth-only.
+    const refreshed = getProposal(dispatch.proposal.id)!;
+    assert.equal(refreshed.status, 'draft');
+    assert.equal(refreshed.dispatch_state, 'synth_only');
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+test('dispatchPmSynthesized: gateway down → synth-only placeholder, no background dispatch', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  const { client } = makeFakeClient({ isConnected: false });
+  __setOpenClawClientForTests(client);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'no gateway',
+      trigger_kind: 'plan_initiative',
+      synth: baseSynth,
+      agent_prompt: 'plan it',
+    });
+    assert.equal(dispatch.awaiting_agent, false);
+    assert.equal(dispatch.proposal.dispatch_state, 'synth_only');
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, false);
+    assert.equal(settled.final.id, dispatch.proposal.id);
+  } finally {
+    __setOpenClawClientForTests(null);
+  }
+});
+
+test('dispatchPmSynthesized: target_initiative_id is stamped on the agent row during supersede', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Tier-2 target' });
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      // Agent's propose_changes call lands without target_initiative_id (current MCP shape).
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'agent reply',
+        trigger_kind: 'manual',
+        impact_md: '### Plan',
+        proposed_changes: [],
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(2_000);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'plan with target',
+      trigger_kind: 'plan_initiative',
+      target_initiative_id: init.id,
+      synth: baseSynth,
+      agent_prompt: 'plan it',
+    });
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, true);
+    const agentRow = getProposal(settled.final.id)!;
+    assert.equal(agentRow.target_initiative_id, init.id);
+    assert.equal(agentRow.trigger_kind, 'plan_initiative');
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
   }
 });

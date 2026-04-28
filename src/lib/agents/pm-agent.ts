@@ -135,9 +135,16 @@ export interface SynthesizePlanResult {
 export function synthesizePlanInitiative(
   snapshot: RoadmapSnapshot,
   draft: PlanInitiativeDraft,
-  _opts: {
+  opts: {
     velocityOverrides?: unknown;
     availabilityOverrides?: unknown;
+    /**
+     * The initiative being planned, when this is a re-plan / refinement
+     * against an existing row. Excluded from the dependency-suggestion
+     * candidate set so the heuristic doesn't propose the initiative depend
+     * on itself when its title overlaps with itself (the §2.3 self-dep bug).
+     */
+    targetInitiativeId?: string | null;
   } = {},
 ): SynthesizePlanResult {
   const title = draft.title.trim();
@@ -185,9 +192,18 @@ export function synthesizePlanInitiative(
   const titleNouns = extractNouns(title);
   if (titleNouns.length > 0) {
     const seen = new Set<string>();
+    const titleLower = title.toLowerCase();
     for (const i of snapshot.initiatives) {
+      // Skip the target itself (re-plan / refinement) so we don't propose
+      // a self-dep — the §2.3 regression that produced
+      // "Title shares 'smart, snappy' — confirm if this is a real dependency."
+      if (opts.targetInitiativeId && i.id === opts.targetInitiativeId) continue;
       if (i.id === draft.parent_initiative_id) continue;
       if (i.status === 'done' || i.status === 'cancelled') continue;
+      // Belt-and-suspenders for the non-target case: skip any candidate
+      // whose title is an exact case-insensitive match for the draft —
+      // that's almost always self-reference, not a real dependency.
+      if (i.title.trim().toLowerCase() === titleLower) continue;
       const otherNouns = extractNouns(i.title);
       const overlap = titleNouns.filter(n => otherNouns.includes(n));
       if (overlap.length === 0) continue;

@@ -37,10 +37,13 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   createProposal,
   listProposals,
+  setDispatchState,
+  supersedeWithAgentProposal,
   type PmDiff,
   type PmProposal,
   type PmProposalTriggerKind,
 } from '@/lib/db/pm-proposals';
+import { broadcast } from '@/lib/events';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import {
   sendChatAndAwaitReply,
@@ -68,7 +71,23 @@ export interface DispatchPmInput {
 }
 
 export interface DispatchPmResult {
+  /** The synth placeholder row, returned immediately. When awaiting_agent
+   *  is true, this row's content will be replaced by the agent's row via a
+   *  `pm_proposal_replaced` SSE event when the named PM agent finishes. */
   proposal: PmProposal;
+  awaiting_agent: boolean;
+  /** Resolves when the dispatch lifecycle settles. Tests await this; HTTP
+   *  callers usually just return `proposal` immediately and let SSE drive
+   *  UI updates. Same shape as DispatchPmSynthesizedResult.completion. */
+  completion: Promise<{
+    final: PmProposal;
+    used_named_agent: boolean;
+    used_synthesize_fallback: boolean;
+  }>;
+  /** @deprecated Use `completion` to get the final state. Retained on the
+   *  result for back-compat with callers that don't await the completion;
+   *  reflects whether the synth placeholder was the only output at the
+   *  moment dispatchPm returned. */
   used_synthesize_fallback: boolean;
   used_named_agent?: boolean;
 }
@@ -117,17 +136,39 @@ function namedAgentTimeoutMs(): number {
 }
 
 /**
- * Top-level dispatch entry. Routes through the named openclaw agent when
- * available; falls back to `synthesizeImpactAnalysis` otherwise. Always
- * persists a proposal + posts the operator/PM messages into the PM
- * agent's chat thread so the /pm UI's card renderer fires.
+ * Top-level disruption dispatch. Returns the synth placeholder row
+ * synchronously so the API can respond fast; the named-agent dispatch
+ * runs in the background and either supersedes the placeholder via SSE
+ * (`pm_proposal_replaced`) when the agent's `propose_changes` lands, or
+ * leaves the synth row as the operator's draft when no agent reply
+ * arrives within the tail window.
+ *
+ * Mirror of `dispatchPmSynthesized` for the disruption code path. See
+ * specs/pm-dispatch-async.md for the architectural rationale.
+ *
+ * `allowFallback: false` (used by `propose_from_notes`) keeps the strict
+ * gateway-required behavior: if the gateway is down we throw
+ * `PmDispatchGatewayUnavailableError` instead of persisting a synth row.
  */
-export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResult> {
+export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
   const snapshot = getRoadmapSnapshot({ workspace_id: input.workspace_id });
   const pm = lookupPmAgent(input.workspace_id);
+  const allowFallback = input.allowFallback ?? true;
+  const gw = gatewayClient();
+  const gatewayUp = !!(pm && pm.gateway_agent_id && gw.isConnected());
 
-  // Always echo the operator's trigger as a user message regardless of
-  // path so the /pm chat reflects the conversation faithfully.
+  // Strict-gateway path (propose_from_notes / queue replay): no synth row,
+  // no chat echo — surface the unavailability cleanly.
+  if (!allowFallback && !gatewayUp) {
+    throw new PmDispatchGatewayUnavailableError(
+      pm && pm.gateway_agent_id
+        ? 'openclaw gateway unavailable'
+        : 'PM agent missing gateway_agent_id; cannot dispatch without fallback',
+    );
+  }
+
+  // Echo the operator's trigger as a user message so the /pm chat
+  // reflects the conversation faithfully.
   try {
     postPmChatMessage({
       workspace_id: input.workspace_id,
@@ -138,75 +179,168 @@ export async function dispatchPm(input: DispatchPmInput): Promise<DispatchPmResu
     console.warn('[pm-dispatch] user chat insert failed:', (err as Error).message);
   }
 
-  const allowFallback = input.allowFallback ?? true;
-
-  // ── 1. Try the named-agent path ────────────────────────────────────
-  if (pm && pm.gateway_agent_id) {
-    const gw = gatewayClient();
-    if (gw.isConnected()) {
-      try {
-        const proposal = await dispatchViaNamedAgent({
-          input,
-          snapshot,
-          pm,
-        });
-        if (proposal) {
-          try {
-            postPmChatMessage({
-              workspace_id: input.workspace_id,
-              content: proposal.impact_md,
-              proposal_id: proposal.id,
-              role: 'assistant',
-            });
-          } catch (err) {
-            console.warn('[pm-dispatch] assistant chat insert failed:', (err as Error).message);
-          }
-          return { proposal, used_synthesize_fallback: false, used_named_agent: true };
-        }
-        // Sent succeeded but no proposal landed (timeout). Treat as a
-        // gateway-side failure for the no-fallback path.
-        if (!allowFallback) {
-          throw new PmDispatchGatewayUnavailableError(
-            'PM agent did not produce a proposal within the timeout',
-          );
-        }
-      } catch (err) {
-        if (!allowFallback) throw err;
-        console.warn(
-          '[pm-dispatch] named-agent dispatch failed; falling back to synth:',
-          (err as Error).message,
-        );
-      }
-    } else if (!allowFallback) {
-      throw new PmDispatchGatewayUnavailableError();
-    }
-  } else if (!allowFallback) {
-    throw new PmDispatchGatewayUnavailableError(
-      'PM agent missing gateway_agent_id; cannot dispatch without fallback',
-    );
-  }
-
-  // ── 2. Synthesize fallback ────────────────────────────────────────
+  // Always persist the synth placeholder first — operator gets *something*
+  // to react to even if the gateway times out, and the row id is stable
+  // so the /pm UI's chat card can subscribe to SSE updates from the
+  // moment dispatchPm returns.
   const synth = synthesizeImpactAnalysis(snapshot, input.trigger_text);
-  const proposal = createProposal({
+  const placeholder = createProposal({
     workspace_id: input.workspace_id,
     trigger_text: input.trigger_text,
     trigger_kind: input.trigger_kind ?? 'manual',
     impact_md: synth.impact_md,
     proposed_changes: synth.changes,
     parent_proposal_id: input.parent_proposal_id ?? null,
+    dispatch_state: gatewayUp ? 'pending_agent' : 'synth_only',
   });
   try {
     postPmChatMessage({
       workspace_id: input.workspace_id,
       content: synth.impact_md,
-      proposal_id: proposal.id,
+      proposal_id: placeholder.id,
       role: 'assistant',
     });
   } catch (err) {
     console.warn('[pm-dispatch] chat insert failed:', (err as Error).message);
   }
-  return { proposal, used_synthesize_fallback: true, used_named_agent: false };
+
+  if (!gatewayUp) {
+    return {
+      proposal: placeholder,
+      awaiting_agent: false,
+      completion: Promise.resolve({
+        final: placeholder,
+        used_named_agent: false,
+        used_synthesize_fallback: true,
+      }),
+      used_synthesize_fallback: true,
+      used_named_agent: false,
+    };
+  }
+
+  // Fire the named-agent dispatch + late-arrival reconciler in the
+  // background. Same architecture as dispatchPmSynthesized: when the
+  // agent's `propose_changes` lands, supersede the placeholder, broadcast
+  // `pm_proposal_replaced`, and re-echo the agent's impact_md into chat.
+  const completion = runDisruptionDispatchInBackground({
+    input,
+    snapshot,
+    pm: pm!,
+    placeholder,
+    allowFallback,
+  });
+  return {
+    proposal: placeholder,
+    awaiting_agent: true,
+    completion,
+    used_synthesize_fallback: true, // Placeholder is synth at the moment we return.
+    used_named_agent: false,
+  };
+}
+
+interface RunDisruptionDispatchInput {
+  input: DispatchPmInput;
+  snapshot: RoadmapSnapshot;
+  pm: NonNullable<ReturnType<typeof lookupPmAgent>>;
+  placeholder: PmProposal;
+  allowFallback: boolean;
+}
+
+async function runDisruptionDispatchInBackground(
+  params: RunDisruptionDispatchInput,
+): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
+  const { input, snapshot, pm, placeholder } = params;
+  // Re-mint the message + sinceIso so we can poll for the agent's row.
+  const correlationId = uuidv4();
+  const sinceIso = new Date().toISOString();
+  const summary = buildSnapshotSummary(snapshot);
+  const message =
+    input.trigger_kind === 'notes_intake'
+      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
+      : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
+        `Operator-reported event:\n> ${input.trigger_text}\n\n` +
+        `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
+        `${summary}\n\n` +
+        `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
+        `with a structured PmDiff[] and impact_md. Reference only ids that ` +
+        `appear in the snapshot.`;
+  const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
+
+  let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
+  try {
+    result = await sendChatAndAwaitReply({
+      agent: pm,
+      message,
+      idempotencyKey: `pm-dispatch-${correlationId}`,
+      timeoutMs: namedAgentTimeoutMs(),
+      sessionSuffix,
+    });
+  } catch (err) {
+    console.warn(
+      '[pm-dispatch] disruption named-agent dispatch failed:',
+      (err as Error).message,
+    );
+  }
+
+  const tailMs = result?.sent ? RECONCILER_TAIL_MS : 0;
+  const found = await pollForAgentProposal(input.workspace_id, sinceIso, placeholder.id, tailMs);
+
+  if (found) {
+    console.log(
+      `[pm-dispatch] disruption reconciler matched agent row ${found.id} for placeholder ${placeholder.id} ` +
+        `(workspace=${input.workspace_id})`,
+    );
+    try {
+      supersedeWithAgentProposal(placeholder.id, found.id, {
+        trigger_kind: input.trigger_kind ?? 'manual',
+        target_initiative_id: null,
+      });
+      // Re-echo the agent's (richer) impact_md into chat — the placeholder
+      // already posted the synth content, but the agent's reasoning is
+      // what the operator actually wants to see.
+      try {
+        postPmChatMessage({
+          workspace_id: input.workspace_id,
+          content: found.impact_md,
+          proposal_id: found.id,
+          role: 'assistant',
+        });
+      } catch (err) {
+        console.warn('[pm-dispatch] agent chat re-echo failed:', (err as Error).message);
+      }
+      broadcast({
+        type: 'pm_proposal_replaced',
+        payload: {
+          workspace_id: input.workspace_id,
+          old_id: placeholder.id,
+          new_id: found.id,
+          target_initiative_id: null,
+          trigger_kind: input.trigger_kind ?? 'manual',
+        },
+      });
+      return { final: found, used_named_agent: true, used_synthesize_fallback: false };
+    } catch (err) {
+      console.warn('[pm-dispatch] disruption supersede failed:', (err as Error).message);
+    }
+  }
+
+  console.log(
+    `[pm-dispatch] disruption reconciler timed out for placeholder ${placeholder.id} (workspace=${input.workspace_id}); marking synth_only`,
+  );
+  setDispatchState(placeholder.id, 'synth_only');
+  broadcast({
+    type: 'pm_proposal_dispatch_state_changed',
+    payload: {
+      workspace_id: input.workspace_id,
+      proposal_id: placeholder.id,
+      dispatch_state: 'synth_only',
+    },
+  });
+  return {
+    final: { ...placeholder, dispatch_state: 'synth_only' },
+    used_named_agent: false,
+    used_synthesize_fallback: true,
+  };
 }
 
 // ─── Named-agent dispatch ───────────────────────────────────────────
@@ -237,83 +371,6 @@ function buildSnapshotSummary(snapshot: RoadmapSnapshot): string {
     }
   }
   return lines.join('\n');
-}
-
-interface DispatchNamedAgentParams {
-  input: DispatchPmInput;
-  snapshot: RoadmapSnapshot;
-  pm: Pick<Agent, 'id' | 'name' | 'session_key_prefix' | 'gateway_agent_id' | 'workspace_id'>;
-}
-
-/**
- * Send the trigger to the gateway-hosted PM session and wait for the
- * agent's `final` chat frame (signalling its turn is over). Then look up
- * the proposal it created via the MCP `propose_changes` tool and return
- * it.
- *
- * Replaces the original "poll pm_proposals every 500ms by recency"
- * workaround with a proper subscription-based wait via
- * `sendChatAndAwaitReply`. The chat-listener's existing `state==='final'`
- * is the same signal the per-agent chat surface already uses, so we get
- * "agent turn complete" deterministically.
- *
- * Correlation: we still embed a `correlation_id` in the message body
- * (audit trail). Lookup remains "most recent draft draft created since
- * we sent" — that's deterministic given dispatch is single-flight from
- * the operator's perspective.
- *
- * Returns:
- *   - the PmProposal the agent created during this round-trip, or
- *   - `null` if the timeout elapses, the send fails, or the agent never
- *     called `propose_changes`. The caller falls back to synth.
- */
-async function dispatchViaNamedAgent(params: DispatchNamedAgentParams): Promise<PmProposal | null> {
-  const { input, snapshot, pm } = params;
-  const correlationId = uuidv4();
-  const sinceIso = new Date().toISOString();
-
-  const summary = buildSnapshotSummary(snapshot);
-  const message =
-    input.trigger_kind === 'notes_intake'
-      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
-      : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
-        `Operator-reported event:\n> ${input.trigger_text}\n\n` +
-        `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
-        `${summary}\n\n` +
-        `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
-        `with a structured PmDiff[] and impact_md. Reference only ids that ` +
-        `appear in the snapshot.`;
-
-  // Notes intake gets a fresh session per dispatch (like plan/decompose)
-  // so the PM doesn't carry over disruption-conversation context. The
-  // disruption path keeps the stable 'dispatch-main' session warm.
-  const sessionSuffix =
-    input.trigger_kind === 'notes_intake'
-      ? `notes-${correlationId}`
-      : 'dispatch-main';
-
-  const result = await sendChatAndAwaitReply({
-    agent: pm,
-    message,
-    idempotencyKey: `pm-dispatch-${correlationId}`,
-    timeoutMs: namedAgentTimeoutMs(),
-    sessionSuffix,
-  });
-
-  // Send failed — caller falls back to synth.
-  if (!result.sent) return null;
-
-  // Whether we got a `final` frame or hit the timeout, do one final
-  // check for a proposal landed by the agent's MCP `propose_changes`
-  // call. The named-agent path is "useful" only if the agent actually
-  // wrote a proposal during the round-trip.
-  return findProposalCreatedSince(input.workspace_id, sinceIso);
-}
-
-function findProposalCreatedSince(workspaceId: string, sinceIso: string): PmProposal | null {
-  const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
-  // listProposals returns DESC by created_at — pick the newest.
-  return drafts[0] ?? null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -365,87 +422,68 @@ export interface DispatchSynthesizedInput {
    * turns. When omitted, falls back to ':main'.
    */
   planSessionKey?: string | null;
+  /**
+   * Per-call override for the named-agent wait. Disruption + refine paths
+   * are happy with the 60s default; plan_initiative and decompose_initiative
+   * dispatches benefit from longer (~120s) because the PM agent has to
+   * compose structured output from a sizable input. When omitted falls back
+   * to `namedAgentTimeoutMs()`.
+   */
+  timeoutMs?: number;
 }
 
-export async function dispatchPmSynthesized(
+export interface DispatchSynthesizedResult {
+  /** The synth placeholder row, returned immediately so the API can respond
+   *  without waiting for the named-agent round trip. */
+  proposal: PmProposal;
+  /** Whether a named-agent dispatch is in flight. When true, the panel
+   *  should subscribe to `pm_proposal_replaced` SSE events; when the agent
+   *  responds, the synth row will be superseded by the agent's row. */
+  awaiting_agent: boolean;
+  /** Promise that resolves when the dispatch lifecycle is complete: either
+   *  the agent's `propose_changes` lands and supersedes the synth row, or
+   *  the tail window elapses and the synth row is marked `synth_only`.
+   *  Tests await this to assert the post-state; callers that don't care can
+   *  ignore it. */
+  completion: Promise<{
+    final: PmProposal;
+    used_named_agent: boolean;
+    used_synthesize_fallback: boolean;
+  }>;
+}
+
+/** Tail window the reconciler keeps watching for an agent proposal AFTER the
+ *  configured timeout elapses, in case the agent is just slow. The current
+ *  60s + 60s tail covers all observed cold-session round trips (~70s). */
+const RECONCILER_TAIL_MS = 60_000;
+/** Polling interval inside the tail window — cheap because most of the time
+ *  no rows match. */
+const RECONCILER_POLL_MS = 2_000;
+
+/**
+ * Persist a synth-derived placeholder row immediately, then dispatch the
+ * named PM agent in the background. Returns the placeholder + a completion
+ * promise so callers can either:
+ *
+ *   - Return the placeholder right away (Tier 3, the common API path) and
+ *     let SSE notify the UI when the agent's proposal supersedes it; OR
+ *   - `await result.completion` to block until the lifecycle settles
+ *     (tests, code paths that need the final state synchronously).
+ *
+ * If the gateway is unreachable, the placeholder is returned with
+ * `awaiting_agent: false` and `dispatch_state: 'synth_only'`.
+ */
+export function dispatchPmSynthesized(
   input: DispatchSynthesizedInput,
-): Promise<{ proposal: PmProposal; used_synthesize_fallback: boolean; used_named_agent: boolean }> {
+): DispatchSynthesizedResult {
   const pm = lookupPmAgent(input.workspace_id);
-  if (pm && pm.gateway_agent_id) {
-    const gw = gatewayClient();
-    if (gw.isConnected()) {
-      try {
-        const correlationId = uuidv4();
-        const sinceIso = new Date().toISOString();
-        const sessionSuffix = input.planSessionKey ?? 'main';
-        const result = await sendChatAndAwaitReply({
-          agent: pm,
-          message:
-            `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
-            input.agent_prompt,
-          idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
-          timeoutMs: namedAgentTimeoutMs(),
-          sessionSuffix,
-        });
-        if (result.sent) {
-          // Whether we got a `final` frame or hit the timeout, the agent
-          // either landed a proposal via MCP `propose_changes` or didn't.
-          // Either way, this is the moment to look — same semantics as
-          // dispatchViaNamedAgent.
-          const found = findProposalCreatedSince(input.workspace_id, sinceIso);
-          if (found) {
-            // Reconcile the row with this dispatch's intent. The PM
-            // agent's `propose_changes` call is freeform — it can pass
-            // a wrong trigger_kind (defaults to 'manual' if omitted)
-            // and doesn't accept target_initiative_id at all. We know
-            // what kind of dispatch this was and where it came from,
-            // so stamp both onto the row so the downstream Apply path
-            // (which validates trigger_kind === 'plan_initiative' when
-            // target_initiative_id is supplied) doesn't reject what is
-            // really a plan_initiative proposal.
-            const fixes: string[] = [];
-            const vals: unknown[] = [];
-            let nextTriggerKind = found.trigger_kind;
-            let nextTarget = found.target_initiative_id;
-            if (found.trigger_kind !== input.trigger_kind) {
-              fixes.push('trigger_kind = ?');
-              vals.push(input.trigger_kind);
-              nextTriggerKind = input.trigger_kind;
-            }
-            if (input.target_initiative_id && !found.target_initiative_id) {
-              fixes.push('target_initiative_id = ?');
-              vals.push(input.target_initiative_id);
-              nextTarget = input.target_initiative_id;
-            }
-            if (fixes.length > 0) {
-              try {
-                run(`UPDATE pm_proposals SET ${fixes.join(', ')} WHERE id = ?`, [...vals, found.id]);
-                return {
-                  proposal: {
-                    ...found,
-                    trigger_kind: nextTriggerKind,
-                    target_initiative_id: nextTarget,
-                  },
-                  used_synthesize_fallback: false,
-                  used_named_agent: true,
-                };
-              } catch (err) {
-                console.warn('[pm-dispatch] post-hoc stamp failed:', (err as Error).message);
-              }
-            }
-            return { proposal: found, used_synthesize_fallback: false, used_named_agent: true };
-          }
-        }
-      } catch (err) {
-        console.warn(
-          '[pm-dispatch] synthesized named-agent dispatch failed; falling back:',
-          (err as Error).message,
-        );
-      }
-    }
-  }
-  // Fallback — persist the synthesized proposal exactly like before.
-  const proposal = createProposal({
+  const gw = gatewayClient();
+  const gatewayUp = !!(pm && pm.gateway_agent_id && gw.isConnected());
+
+  // 1. Always persist the synth row first — the operator gets *something*
+  //    even if the agent never replies, and the row id is stable so the UI
+  //    can subscribe to it from the moment the API returns.
+  const placeholder = createProposal({
     workspace_id: input.workspace_id,
     trigger_text: input.trigger_text,
     trigger_kind: input.trigger_kind,
@@ -454,8 +492,156 @@ export async function dispatchPmSynthesized(
     plan_suggestions: input.synth.plan_suggestions ?? null,
     parent_proposal_id: input.parent_proposal_id ?? null,
     target_initiative_id: input.target_initiative_id ?? null,
+    dispatch_state: gatewayUp ? 'pending_agent' : 'synth_only',
   });
-  return { proposal, used_synthesize_fallback: true, used_named_agent: false };
+
+  if (!gatewayUp) {
+    return {
+      proposal: placeholder,
+      awaiting_agent: false,
+      completion: Promise.resolve({
+        final: placeholder,
+        used_named_agent: false,
+        used_synthesize_fallback: true,
+      }),
+    };
+  }
+
+  // 2. Kick off the named-agent dispatch + late-arrival reconciler as a
+  //    fire-and-forget background promise. The placeholder is returned
+  //    immediately so the API can respond without waiting.
+  const completion = runNamedAgentDispatchInBackground(input, pm!, placeholder);
+  return { proposal: placeholder, awaiting_agent: true, completion };
+}
+
+async function runNamedAgentDispatchInBackground(
+  input: DispatchSynthesizedInput,
+  pm: NonNullable<ReturnType<typeof lookupPmAgent>>,
+  placeholder: PmProposal,
+): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
+  const correlationId = uuidv4();
+  const sinceIso = new Date().toISOString();
+  const sessionSuffix = input.planSessionKey ?? 'main';
+  const timeoutMs = input.timeoutMs ?? namedAgentTimeoutMs();
+
+  let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
+  try {
+    result = await sendChatAndAwaitReply({
+      agent: pm,
+      message:
+        `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
+        input.agent_prompt,
+      idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
+      timeoutMs,
+      sessionSuffix,
+    });
+  } catch (err) {
+    console.warn(
+      '[pm-dispatch] synthesized named-agent dispatch failed:',
+      (err as Error).message,
+    );
+  }
+
+  // 3. Keep watching for an agent-produced row up to RECONCILER_TAIL_MS
+  //    past the original timeout. Cold sessions can land their
+  //    `propose_changes` after the primary timeout; without this tail
+  //    window those proposals are orphaned (the §2.3 regression that
+  //    motivated this whole refactor).
+  //
+  //    When send succeeded → the agent is still likely composing, so we
+  //    keep the full tail window. When send failed outright (no session,
+  //    network error, throw) → there's no agent to wait for, so a single
+  //    immediate check is enough.
+  const tailMs = result?.sent ? RECONCILER_TAIL_MS : 0;
+  const found = await pollForAgentProposal(
+    input.workspace_id,
+    sinceIso,
+    placeholder.id,
+    tailMs,
+  );
+
+  if (found) {
+    console.log(
+      `[pm-dispatch] reconciler matched agent row ${found.id} for placeholder ${placeholder.id} ` +
+        `(workspace=${input.workspace_id}, trigger_kind=${input.trigger_kind})`,
+    );
+    try {
+      supersedeWithAgentProposal(placeholder.id, found.id, {
+        trigger_kind: input.trigger_kind,
+        target_initiative_id: input.target_initiative_id ?? null,
+      });
+      const refreshed = listProposals({ workspace_id: input.workspace_id, limit: 1, since: sinceIso }).find(p => p.id === found.id) ?? found;
+      broadcast({
+        type: 'pm_proposal_replaced',
+        payload: {
+          workspace_id: input.workspace_id,
+          old_id: placeholder.id,
+          new_id: found.id,
+          target_initiative_id: input.target_initiative_id ?? null,
+          trigger_kind: input.trigger_kind,
+        },
+      });
+      return { final: refreshed, used_named_agent: true, used_synthesize_fallback: false };
+    } catch (err) {
+      console.warn('[pm-dispatch] supersede failed:', (err as Error).message);
+    }
+  }
+
+  // 4. No agent row arrived. Mark the placeholder as the operator's final
+  //    draft so the UI can stop showing the "PM agent is working" indicator
+  //    and re-enable Accept.
+  console.log(
+    `[pm-dispatch] reconciler timed out waiting for agent reply on placeholder ${placeholder.id} ` +
+      `(workspace=${input.workspace_id}, trigger_kind=${input.trigger_kind}); marking synth_only`,
+  );
+  setDispatchState(placeholder.id, 'synth_only');
+  broadcast({
+    type: 'pm_proposal_dispatch_state_changed',
+    payload: {
+      workspace_id: input.workspace_id,
+      proposal_id: placeholder.id,
+      dispatch_state: 'synth_only',
+    },
+  });
+  return {
+    final: { ...placeholder, dispatch_state: 'synth_only' },
+    used_named_agent: false,
+    used_synthesize_fallback: true,
+  };
+}
+
+/**
+ * Poll `pm_proposals` for a draft created by the named PM agent during this
+ * dispatch's window. The agent's `propose_changes` call lands as a fresh
+ * row; we identify it by "newest draft created since `sinceIso` whose id is
+ * NOT the placeholder we just wrote".
+ *
+ * `extraWaitMs` is the additional tail window beyond the original timeout —
+ * 0 to bail right after the configured timeout, RECONCILER_TAIL_MS for the
+ * full late-arrival catch.
+ */
+async function pollForAgentProposal(
+  workspaceId: string,
+  sinceIso: string,
+  placeholderId: string,
+  extraWaitMs: number,
+): Promise<PmProposal | null> {
+  const deadline = Date.now() + extraWaitMs;
+  // The candidate filter is: a draft proposal that isn't our placeholder
+  // AND whose dispatch_state is NOT 'pending_agent' (i.e. NOT another
+  // concurrent placeholder). Without the second clause, two simultaneous
+  // dispatches would cross-supersede each other's placeholders before
+  // either agent row landed. See §2.3 cross-supersede finding.
+  const isAgentRow = (p: PmProposal) => p.id !== placeholderId && p.dispatch_state !== 'pending_agent';
+  do {
+    const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
+    const hit = drafts.find(isAgentRow);
+    if (hit) return hit;
+    if (Date.now() >= deadline) return null;
+    await new Promise(resolve => setTimeout(resolve, RECONCILER_POLL_MS));
+  } while (Date.now() < deadline);
+  const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
+  return drafts.find(isAgentRow) ?? null;
 }
 
 // ─── Synthesize fallback ────────────────────────────────────────────

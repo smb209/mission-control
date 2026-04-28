@@ -1000,7 +1000,9 @@ export type SSEEventType =
   | 'rollcall_started'
   | 'rollcall_delivered'
   | 'rollcall_entry_updated'
-  | 'agent_pinged';
+  | 'agent_pinged'
+  | 'pm_proposal_replaced'
+  | 'pm_proposal_dispatch_state_changed';
 
 export interface SSEEvent {
   type: SSEEventType;

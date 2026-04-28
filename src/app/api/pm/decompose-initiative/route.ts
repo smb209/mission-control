@@ -101,10 +101,14 @@ export async function POST(request: NextRequest) {
     // ~/.openclaw/workspaces/mc-project-manager). On timeout or no
     // session, the synthesized proposal is persisted exactly like
     // before so the operator always has something to react to.
-    const dispatch = await dispatchPmSynthesized({
+    const dispatch = dispatchPmSynthesized({
       workspace_id: parent.workspace_id,
       trigger_text: triggerText,
       trigger_kind: 'decompose_initiative',
+      // Same rationale as plan-initiative: composing 3-7 children with
+      // dep wiring takes the named PM agent more than the default 60s on
+      // cold sessions.
+      timeoutMs: 120_000,
       synth: { impact_md: synth.impact_md, changes: synth.changes },
       agent_prompt:
         `Decompose initiative ${parent.id} ("${parent.title}", kind=${parent.kind}) ` +
@@ -174,8 +178,9 @@ export async function GET(request: NextRequest) {
     impact_md: string;
     proposed_changes: string;
     status: string;
+    dispatch_state: string | null;
   }>(
-    `SELECT id, workspace_id, trigger_text, trigger_kind, impact_md, proposed_changes, status
+    `SELECT id, workspace_id, trigger_text, trigger_kind, impact_md, proposed_changes, status, dispatch_state
      FROM pm_proposals
      WHERE workspace_id = ?
        AND trigger_kind = 'decompose_initiative'

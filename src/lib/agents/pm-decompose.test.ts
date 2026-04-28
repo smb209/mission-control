@@ -178,6 +178,48 @@ test('acceptProposal: rejects create_child_initiative with theme/milestone child
   );
 });
 
+// ─── synthesizePlanInitiative dependency suggestions ─────────────────
+
+test('synthesizePlanInitiative: skips the target initiative from dependency candidates (self-dep guard)', () => {
+  const ws = freshWorkspace();
+  const target = createInitiative({
+    workspace_id: ws,
+    kind: 'epic',
+    title: 'Smart Snappy',
+    description: 'turning passive logging into proactive coaching',
+  });
+  const snapshot = getRoadmapSnapshot({ workspace_id: ws });
+  const result = synthesizePlanInitiative(
+    snapshot,
+    { title: 'Smart Snappy', description: 'turning passive logging into proactive coaching' },
+    { targetInitiativeId: target.id },
+  );
+  for (const dep of result.changes.flatMap(c => c.kind === 'create_child_initiative' ? [] : [])) {
+    void dep;
+  }
+  // The result.suggestions field carries the candidate dependencies; ensure none point at the target.
+  const deps = result.suggestions?.dependencies ?? [];
+  for (const d of deps) {
+    assert.notEqual(d.depends_on_initiative_id, target.id, 'must not propose self-dependency');
+  }
+});
+
+test('synthesizePlanInitiative: belt-and-suspenders — skips exact-title matches even without targetInitiativeId', () => {
+  const ws = freshWorkspace();
+  const twin = createInitiative({
+    workspace_id: ws,
+    kind: 'epic',
+    title: 'Smart Snappy',
+    description: 'older draft of the same idea',
+  });
+  const snapshot = getRoadmapSnapshot({ workspace_id: ws });
+  const result = synthesizePlanInitiative(snapshot, { title: 'Smart Snappy', description: 'a fresh draft' });
+  const deps = result.suggestions?.dependencies ?? [];
+  for (const d of deps) {
+    assert.notEqual(d.depends_on_initiative_id, twin.id, 'exact-title match should not be suggested as a dep');
+  }
+});
+
 test('acceptProposal: plan_initiative is a no-op (advisory)', () => {
   const ws = freshWorkspace();
   const snapshot = getRoadmapSnapshot({ workspace_id: ws });

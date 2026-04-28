@@ -35,6 +35,7 @@ import { useMissionControl } from '@/lib/store';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Agent, AgentStatus, AgentHealthState, OpenClawSession } from '@/lib/types';
 import { AgentModal } from '@/components/AgentModal';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DiscoverAgentsModal } from '@/components/DiscoverAgentsModal';
 import { HealthIndicator } from '@/components/HealthIndicator';
 import { AgentPingIndicator } from '@/components/AgentPingIndicator';
@@ -87,6 +88,15 @@ export default function AgentsPage() {
   const [rollCallBusy, setRollCallBusy] = useState(false);
   const [rollCallResult, setRollCallResult] = useState<RollCallResultView | null>(null);
   const [resetSessionsBusy, setResetSessionsBusy] = useState(false);
+  // Replaces native window.confirm() — see §1.7 finding in PREVIEW_TEST_FINDINGS.
+  // The native dialog blocks automation tooling and breaks the test-flow walk.
+  const [pendingConfirm, setPendingConfirm] = useState<null | {
+    title: string;
+    body: React.ReactNode;
+    confirmLabel: string;
+    destructive?: boolean;
+    onConfirm: () => void;
+  }>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [emojiPickerFor, setEmojiPickerFor] = useState<string | null>(null);
@@ -247,17 +257,28 @@ export default function AgentsPage() {
     }
   };
 
-  const resetAllSessions = async () => {
-    if (
-      !confirm(
-        'Reset ALL agent sessions?\n\n' +
-          '  1. Aborts in-flight Product Autopilot research/ideation cycles.\n' +
-          '  2. Wipes Mission Control session tracking.\n' +
-          '  3. Sends `/reset` to every active gateway-synced agent.\n\n' +
-          'Use after editing persona files or when sessionKey routing has drifted.',
-      )
-    )
-      return;
+  const resetAllSessions = () => {
+    setPendingConfirm({
+      title: 'Reset ALL agent sessions?',
+      body: (
+        <ol className="list-decimal pl-5 space-y-1">
+          <li>Aborts in-flight Product Autopilot research/ideation cycles.</li>
+          <li>Wipes Mission Control session tracking.</li>
+          <li>
+            Sends <code className="text-xs px-1 rounded bg-mc-bg-secondary">/reset</code> to every active gateway-synced agent.
+          </li>
+          <li className="text-mc-text-secondary">
+            Use after editing persona files or when sessionKey routing has drifted.
+          </li>
+        </ol>
+      ),
+      confirmLabel: 'Reset all',
+      destructive: true,
+      onConfirm: () => { void doResetAllSessions(); },
+    });
+  };
+
+  const doResetAllSessions = async () => {
     setResetSessionsBusy(true);
     try {
       const res = await fetch('/api/openclaw/sessions', { method: 'DELETE' });
@@ -327,12 +348,21 @@ export default function AgentsPage() {
     setTogglingAgentId(null);
   };
 
-  const resetAgentSession = async (agent: Agent) => {
+  const resetAgentSession = (agent: Agent) => {
     if (!agent.gateway_agent_id) {
       alert('This agent has no gateway_agent_id; nothing to reset on the gateway side.');
       return;
     }
-    if (!confirm(`Reset ${agent.name}'s session? The agent will re-init persona files on its next message.`)) return;
+    setPendingConfirm({
+      title: `Reset ${agent.name}'s session?`,
+      body: <p>The agent will re-init persona files on its next message.</p>,
+      confirmLabel: 'Reset',
+      destructive: true,
+      onConfirm: () => { void doResetAgentSession(agent); },
+    });
+  };
+
+  const doResetAgentSession = async (agent: Agent) => {
     setResettingAgentId(agent.id);
     try {
       const res = await fetch(`/api/agents/${agent.id}/reset`, { method: 'POST' });
@@ -554,6 +584,19 @@ export default function AgentsPage() {
       {showDiscoverModal && (
         <DiscoverAgentsModal onClose={() => setShowDiscoverModal(false)} workspaceId={workspaceId} />
       )}
+      <ConfirmDialog
+        open={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ''}
+        body={pendingConfirm?.body ?? null}
+        confirmLabel={pendingConfirm?.confirmLabel ?? 'Confirm'}
+        destructive={pendingConfirm?.destructive}
+        onConfirm={() => {
+          const action = pendingConfirm?.onConfirm;
+          setPendingConfirm(null);
+          action?.();
+        }}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   );
 }

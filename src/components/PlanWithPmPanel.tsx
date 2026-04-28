@@ -104,6 +104,7 @@ export default function PlanWithPmPanel({
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
   const [suggestions, setSuggestions] = useState<PlanInitiativeSuggestions | null>(null);
+  const [dispatchState, setDispatchState] = useState<'pending_agent' | 'agent_complete' | 'synth_only' | null>(null);
   const [loading, setLoading] = useState(false);
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
@@ -132,6 +133,7 @@ export default function PlanWithPmPanel({
       setProposalId(null);
       setImpactMd('');
       setSuggestions(null);
+      setDispatchState(null);
       setErr(null);
       setRefineText('');
       setDraftOpen(false);
@@ -157,6 +159,7 @@ export default function PlanWithPmPanel({
               setProposalId(resumeBody.proposal_id);
               setImpactMd(resumeBody.proposal.impact_md ?? '');
               setSuggestions(resumeBody.suggestions);
+              setDispatchState(resumeBody.proposal.dispatch_state ?? null);
               return; // Skip the POST — we resumed an existing draft.
             }
           }
@@ -177,6 +180,7 @@ export default function PlanWithPmPanel({
         setProposalId(body.proposal_id);
         setImpactMd(body.proposal?.impact_md ?? '');
         setSuggestions(body.suggestions ?? null);
+        setDispatchState(body.proposal?.dispatch_state ?? null);
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : 'Plan failed');
       } finally {
@@ -188,6 +192,62 @@ export default function PlanWithPmPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workspaceId, targetInitiativeId, initialGuidance]);
+
+  // Tier 3 of the pm-dispatch-async spec. While the synth placeholder is
+  // pending the named-agent reply, listen for the server-side
+  // `pm_proposal_replaced` SSE event. When the agent's row supersedes the
+  // placeholder, swap to the new proposal id + refetch its content. Also
+  // listen for `pm_proposal_dispatch_state_changed` so the indicator
+  // resolves to "synth_only" if the agent never replies.
+  useEffect(() => {
+    if (!open || !proposalId || !targetInitiativeId) return;
+    if (dispatchState !== 'pending_agent') return;
+    const es = new EventSource('/api/events/stream');
+    let cancelled = false;
+    const refetch = async (newProposalId: string) => {
+      try {
+        const url = `/api/pm/plan-initiative?workspace_id=${encodeURIComponent(workspaceId)}&target_initiative_id=${encodeURIComponent(targetInitiativeId)}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (cancelled) return;
+        // The server's plan-initiative GET already follows the supersede
+        // chain when present, so we get the live (agent-completed) row.
+        setProposalId(newProposalId);
+        setImpactMd(body.proposal?.impact_md ?? '');
+        setSuggestions(body.suggestions ?? null);
+        setDispatchState(body.proposal?.dispatch_state ?? null);
+      } catch {
+        // Best-effort — leaves the panel as-is and the operator can refresh manually.
+      }
+    };
+    es.onmessage = (ev) => {
+      if (cancelled) return;
+      let parsed: { type?: string; payload?: Record<string, unknown> } | null = null;
+      try { parsed = JSON.parse(ev.data); } catch { return; }
+      if (!parsed || !parsed.type) return;
+      if (parsed.type === 'pm_proposal_replaced') {
+        const oldId = parsed.payload?.old_id as string | undefined;
+        const newId = parsed.payload?.new_id as string | undefined;
+        if (oldId === proposalId && newId) {
+          void refetch(newId);
+        }
+      } else if (parsed.type === 'pm_proposal_dispatch_state_changed') {
+        const id = parsed.payload?.proposal_id as string | undefined;
+        const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
+        if (id === proposalId && next) {
+          setDispatchState(next);
+        }
+      }
+    };
+    es.onerror = () => {
+      // SSE auto-reconnects; nothing to do here.
+    };
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+  }, [open, proposalId, dispatchState, targetInitiativeId, workspaceId]);
 
   const refine = async () => {
     if (!proposalId || !refineText.trim()) return;
@@ -285,6 +345,19 @@ export default function PlanWithPmPanel({
         </div>
       ) : suggestions ? (
         <>
+          {dispatchState === 'pending_agent' && (
+            <div
+              className="mb-3 flex items-start gap-2 rounded border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-[11px] text-mc-text-secondary"
+              role="status"
+              aria-live="polite"
+            >
+              <RefreshCw className="w-3.5 h-3.5 mt-[1px] animate-spin text-mc-accent" />
+              <div>
+                PM agent is still composing — these are draft suggestions from the deterministic synth.
+                The agent's final answer will replace this content automatically when it lands.
+              </div>
+            </div>
+          )}
           <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3 text-xs space-y-2">
             <div>
               <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">Refined description</div>
@@ -363,7 +436,13 @@ export default function PlanWithPmPanel({
             </button>
             <button
               onClick={apply}
-              className="px-3 py-1.5 rounded bg-mc-accent text-white text-xs"
+              disabled={dispatchState === 'pending_agent'}
+              title={
+                dispatchState === 'pending_agent'
+                  ? 'PM agent is still composing — wait for it to land or click Discard if you want to start over.'
+                  : undefined
+              }
+              className="px-3 py-1.5 rounded bg-mc-accent text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Apply suggestions
             </button>
