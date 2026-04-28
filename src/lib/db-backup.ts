@@ -143,7 +143,9 @@ export async function enforceRetention(
  * Resolve effective config from env vars, with sensible defaults
  * grounded in DATABASE_PATH. Pure function — no side effects.
  */
-export function resolveBackupConfig(env: NodeJS.ProcessEnv = process.env): {
+export function resolveBackupConfig(
+  env: Record<string, string | undefined> = process.env,
+): {
   enabled: boolean;
   dbPath: string;
   backupDir: string;
@@ -211,7 +213,6 @@ export function registerBackupSchedule(getLiveDb: () => Database.Database): void
   // First backup ~30s after boot — lets migrations + any startup writes
   // settle so the first snapshot reflects a steady state, not a partial
   // one. Then every intervalHours.
-  g.__mcBootTimer = undefined;
   g.__mcBackupBoot = setTimeout(() => {
     void tick('boot');
   }, 30_000);
