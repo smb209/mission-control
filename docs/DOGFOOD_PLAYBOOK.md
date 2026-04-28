@@ -16,6 +16,7 @@ change taking out the planning surface you're using to plan the change.
 | Agent roster | `mc-pm`, `mc-builder`, … | `mc-pm-dev`, `mc-builder-dev`, … |
 | MCP server | `sc-mission-control` | `sc-mission-control-dev` |
 | Workspace dirs | `~/.openclaw/workspaces/<agent>` | `~/.openclaw/workspaces/<agent>-dev` |
+| Catalog-sync filter | `MC_AGENT_SYNC_EXCLUDE=*-dev` | `MC_AGENT_SYNC_INCLUDE=*-dev` |
 | Updated when | a tested PR merges + image rebuilds | every save (HMR) |
 
 > Port `4000` is the local LiteLLM gateway and stays put. Don't bind MC
@@ -119,12 +120,41 @@ Replace `__SET_DEV_MC_API_TOKEN__` with your dev MC token from step 2.
 Match `MC_URL` to wherever your dev MC actually listens (default
 `4010`; override via `PORT=…` in the dev MC's env).
 
-### 5. Restart openclaw
+### 5. Filter the catalog sync per instance
+
+The openclaw gateway is single-source-of-truth for the workspace
+agent roster, so without filtering each MC instance mirrors **every**
+agent the gateway exposes — meaning prod's `/agents` page shows the
+`-dev` roster and vice versa. Set one of the two env vars below per
+instance so each MC only mirrors its own subset:
+
+| Instance | env var |
+|---|---|
+| Prod (docker) | `MC_AGENT_SYNC_EXCLUDE=*-dev` |
+| Dev (`launch.json`) | `MC_AGENT_SYNC_INCLUDE=*-dev` |
+
+For dev, add `MC_AGENT_SYNC_INCLUDE=*-dev` to the env block of your
+`.claude/launch.json` (`mission-control-dev` config) — that file is
+gitignored so each operator wires it once locally. For prod, add
+`MC_AGENT_SYNC_EXCLUDE=*-dev` to whichever env source your
+`docker-compose.yml` uses.
+
+Both vars accept comma-separated lists with `*` wildcards
+(e.g. `mc-builder,mc-coordinator-dev`, `mc-*` ). When both are set,
+exclude wins for the same id. Default empty → no filter (current
+behavior).
+
+When a previously-synced agent stops matching the filter, the next
+catalog sync flips its `status` to `offline` (does **not** delete
+the row — task / mailbox FK references stay valid). Re-including it
+later flips status back to `idle` automatically.
+
+### 6. Restart openclaw
 
 Openclaw reads `openclaw.json` once at start. After the sync, restart
 the gateway so the new agent roster and MCP server are picked up.
 
-### 6. Smoke test
+### 7. Smoke test
 
 Pick `mc-project-manager-dev` in the openclaw chat surface. Ask it
 something simple ("call `whoami`"). The reply should report
