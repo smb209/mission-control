@@ -31,6 +31,7 @@ import { createTaskFromInitiative } from './promotion';
 // ─── Types ──────────────────────────────────────────────────────────
 
 export type PmProposalStatus = 'draft' | 'accepted' | 'rejected' | 'superseded';
+export type PmProposalDispatchState = 'pending_agent' | 'agent_complete' | 'synth_only';
 export type PmProposalTriggerKind =
   | 'manual'
   | 'scheduled_drift_scan'
@@ -125,6 +126,10 @@ export interface PmProposal {
   applied_by_agent_id: string | null;
   parent_proposal_id: string | null;
   target_initiative_id: string | null;
+  /** Where this row sits in the PM dispatch lifecycle (Tier 3 of the
+   *  pm-dispatch-async spec). For pre-migration rows or non-dispatched
+   *  proposals, defaults to 'agent_complete'. */
+  dispatch_state: PmProposalDispatchState;
   created_at: string;
 }
 
@@ -141,6 +146,7 @@ interface PmProposalRow {
   applied_by_agent_id: string | null;
   parent_proposal_id: string | null;
   target_initiative_id: string | null;
+  dispatch_state: PmProposalDispatchState | null;
   created_at: string;
 }
 
@@ -417,6 +423,7 @@ function rowToProposal(row: PmProposalRow): PmProposal {
     applied_by_agent_id: row.applied_by_agent_id,
     parent_proposal_id: row.parent_proposal_id,
     target_initiative_id: row.target_initiative_id ?? null,
+    dispatch_state: (row.dispatch_state ?? 'agent_complete') as PmProposalDispatchState,
     created_at: row.created_at,
   };
 }
@@ -432,6 +439,10 @@ export interface CreateProposalInput {
   plan_suggestions?: Record<string, unknown> | null;
   parent_proposal_id?: string | null;
   target_initiative_id?: string | null;
+  /** Defaults to 'agent_complete' (current behavior). Pass 'pending_agent'
+   *  when persisting a synth placeholder while the named-agent dispatch
+   *  is still in flight (Tier 3 of pm-dispatch-async). */
+  dispatch_state?: PmProposalDispatchState;
 }
 
 export function createProposal(input: CreateProposalInput): PmProposal {
@@ -454,8 +465,8 @@ export function createProposal(input: CreateProposalInput): PmProposal {
   run(
     `INSERT INTO pm_proposals (
        id, workspace_id, trigger_text, trigger_kind, impact_md,
-       proposed_changes, plan_suggestions, status, parent_proposal_id, target_initiative_id, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`,
+       proposed_changes, plan_suggestions, status, parent_proposal_id, target_initiative_id, dispatch_state, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -466,10 +477,63 @@ export function createProposal(input: CreateProposalInput): PmProposal {
       input.plan_suggestions != null ? JSON.stringify(input.plan_suggestions) : null,
       input.parent_proposal_id ?? null,
       input.target_initiative_id ?? null,
+      input.dispatch_state ?? 'agent_complete',
       now,
     ],
   );
   return getProposal(id)!;
+}
+
+/**
+ * Update a draft's dispatch_state. Used by the late-arrival reconciler
+ * (Tier 2/3 of pm-dispatch-async) when an agent's `propose_changes` lands
+ * after the synth placeholder was persisted.
+ */
+export function setDispatchState(id: string, state: PmProposalDispatchState): void {
+  run(`UPDATE pm_proposals SET dispatch_state = ? WHERE id = ?`, [state, id]);
+}
+
+/**
+ * Mark a row as superseded by another. Used when the agent's `propose_changes`
+ * lands after a synth placeholder was already persisted: the synth row is
+ * superseded, and the agent's row inherits the synth row's
+ * `target_initiative_id` / `trigger_kind` and points at it via
+ * `parent_proposal_id`.
+ */
+export function supersedeWithAgentProposal(
+  synthRowId: string,
+  agentRowId: string,
+  intent: { trigger_kind: PmProposalTriggerKind; target_initiative_id?: string | null },
+): void {
+  const db = getDb();
+  db.transaction(() => {
+    // Inherit the placeholder's trigger_text onto the agent's row. The
+    // placeholder carries the structured JSON envelope MC built (e.g.
+    // `{ mode: 'decompose_initiative', initiative_id: '…' }`), which is
+    // what the resume/lookup endpoints (e.g.
+    // `GET /api/pm/decompose-initiative?initiative_id=…`) filter on via
+    // `json_extract(trigger_text, '$.initiative_id')`. The agent's
+    // freeform `trigger_text` from `propose_changes` doesn't carry that
+    // shape, so without copying we lose the link and the panel can't
+    // refetch after supersede.
+    const synthRow = queryOne<{ trigger_text: string | null }>(
+      `SELECT trigger_text FROM pm_proposals WHERE id = ?`,
+      [synthRowId],
+    );
+    run(`UPDATE pm_proposals SET status = 'superseded' WHERE id = ?`, [synthRowId]);
+    const sets: string[] = ['parent_proposal_id = ?', 'trigger_kind = ?', 'dispatch_state = ?'];
+    const vals: unknown[] = [synthRowId, intent.trigger_kind, 'agent_complete'];
+    if (intent.target_initiative_id) {
+      sets.push('target_initiative_id = ?');
+      vals.push(intent.target_initiative_id);
+    }
+    if (synthRow?.trigger_text) {
+      sets.push('trigger_text = ?');
+      vals.push(synthRow.trigger_text);
+    }
+    vals.push(agentRowId);
+    run(`UPDATE pm_proposals SET ${sets.join(', ')} WHERE id = ?`, vals);
+  })();
 }
 
 export function getProposal(id: string): PmProposal | undefined {

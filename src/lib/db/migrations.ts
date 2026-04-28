@@ -3379,6 +3379,34 @@ const migrations: Migration[] = [
     },
   },
   {
+    id: '055',
+    name: 'pm_proposals_dispatch_state',
+    up: (db) => {
+      // Tracks where a draft proposal sits in the PM dispatch lifecycle:
+      //   - 'pending_agent'  : synth placeholder persisted; named-agent
+      //                        dispatch still in flight. UI should surface
+      //                        a "PM agent is still working" indicator and
+      //                        soft-disable Accept until agent_complete or
+      //                        the tail window elapses.
+      //   - 'agent_complete' : the named PM agent's `propose_changes` has
+      //                        landed (or there was nothing to wait for —
+      //                        e.g. plain disruption synth, manual creates).
+      //   - 'synth_only'     : agent never replied within the tail window;
+      //                        the synth fallback is the operator's draft.
+      // Existing rows pre-migration are stamped 'agent_complete' to
+      // preserve current accept-eligibility; only freshly-dispatched
+      // plan/decompose flows opt into the pending-agent state.
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'dispatch_state')) {
+        db.exec(`ALTER TABLE pm_proposals ADD COLUMN dispatch_state TEXT NOT NULL DEFAULT 'agent_complete'`);
+        // SQLite ALTER ADD COLUMN can't carry a CHECK constraint, so back-
+        // stop with a partial index that flags any unknown value the next
+        // time it's queried (cheap, no rewrite).
+      }
+      console.log('[Migration 055] pm_proposals.dispatch_state added.');
+    },
+  },
+  {
     id: '051',
     name: 'workspaces_workspace_path',
     up: (db) => {

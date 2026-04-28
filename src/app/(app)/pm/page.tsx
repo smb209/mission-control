@@ -69,6 +69,11 @@ interface PmProposal {
   trigger_kind: string;
   impact_md: string;
   proposed_changes: PmDiff[];
+  /** Structured plan-initiative suggestions; populated by `propose_changes`'s
+   *  plan_suggestions param OR by the deterministic synth path. The legacy
+   *  `<!--pm-plan-suggestions {json}-->` sidecar in impact_md is still used
+   *  as a fallback for older rows but should not be written for new ones. */
+  plan_suggestions: Record<string, unknown> | null;
   status: 'draft' | 'accepted' | 'rejected' | 'superseded';
   applied_at: string | null;
   parent_proposal_id: string | null;
@@ -853,8 +858,12 @@ function ChatMessageRow({
           as HTML comments) and render normally.
         */}
         {(() => {
+          // Prefer the structured `plan_suggestions` column (canonical since #85);
+          // fall back to the legacy `<!--pm-plan-suggestions {json}-->` sidecar
+          // for older rows that haven't been re-dispatched.
           const suggestions = proposal.trigger_kind === 'plan_initiative'
-            ? parseSuggestionsFromImpactMd(proposal.impact_md)
+            ? ((proposal.plan_suggestions as PlanSuggestionsLite | null) ??
+               parseSuggestionsFromImpactMd(proposal.impact_md))
             : null;
           const cleanContent = stripSuggestionsSidecar(message.content);
           return (
@@ -1223,9 +1232,11 @@ function ApplyPlanToInitiativeModal({
   const [applying, setApplying] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Pull the structured suggestions out of the impact_md HTML comment —
-  // same parser shape as the inline detail-page panel.
+  // Prefer the structured `plan_suggestions` column (canonical since #85);
+  // fall back to the legacy `<!--pm-plan-suggestions {json}-->` sidecar in
+  // impact_md for older rows that pre-date the column.
   const suggestions: PlanSuggestionsLite | null = (() => {
+    if (proposal.plan_suggestions) return proposal.plan_suggestions as PlanSuggestionsLite;
     const m = proposal.impact_md.match(/<!--pm-plan-suggestions\s+([\s\S]*?)\s*-->/);
     if (!m) return null;
     try {

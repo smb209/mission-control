@@ -72,13 +72,27 @@ export async function drainPendingNotes(): Promise<DrainResult> {
   for (const note of pending) {
     out.attempted++;
     try {
-      const result = await dispatchPm({
+      const result = dispatchPm({
         workspace_id: note.workspace_id,
         trigger_text: note.notes_text,
         trigger_kind: 'notes_intake',
         allowFallback: false,
       });
-      markDispatched(note.id, result.proposal.id);
+      // Wait for the full lifecycle. notes_intake requires the named
+      // agent — if no reply, we leave the row pending so the next drain
+      // tick can retry.
+      const settled = await result.completion;
+      if (!settled.used_named_agent) {
+        // Treat as failed for this attempt; cleanup the orphan placeholder.
+        out.failed++;
+        try {
+          const { run } = await import('@/lib/db');
+          run(`DELETE FROM pm_proposals WHERE id = ?`, [result.proposal.id]);
+        } catch { /* best effort */ }
+        markFailed(note.id, 'agent did not reply within tail window');
+        continue;
+      }
+      markDispatched(note.id, settled.final.id);
       out.dispatched++;
     } catch (err) {
       out.failed++;

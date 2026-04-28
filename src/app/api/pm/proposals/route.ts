@@ -32,10 +32,14 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    const result = await dispatchPm(parsed.data);
+    const result = dispatchPm(parsed.data);
     return NextResponse.json(
       {
         proposal: result.proposal,
+        awaiting_agent: result.awaiting_agent,
+        // Back-compat: flag indicates the *current* row is the synth
+        // placeholder. SSE `pm_proposal_replaced` will follow when the
+        // agent's proposal supersedes it.
         used_synthesize_fallback: result.used_synthesize_fallback,
       },
       { status: 201 },

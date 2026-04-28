@@ -33,7 +33,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-import { queryOne } from '@/lib/db';
+import { queryOne, run } from '@/lib/db';
 import {
   createInitiative,
   updateInitiative,
@@ -611,7 +611,16 @@ export function registerRoadmapTools(server: McpServer): void {
           ])
           .optional(),
         impact_md: z.string().min(1).max(20000),
-        changes: z.array(DiffSchema),
+        // Tolerate stringified-array payloads coming from agent tool-use
+        // serialization layers that occasionally JSON-stringify array args.
+        // We unwrap-then-validate so the agent doesn't have to retry just
+        // because its caller chose strings over arrays.
+        changes: z.preprocess((val) => {
+          if (typeof val === 'string') {
+            try { return JSON.parse(val); } catch { return val; }
+          }
+          return val;
+        }, z.array(DiffSchema)),
         parent_proposal_id: z.string().nullish(),
         /**
          * Structured planning suggestions for plan_initiative proposals.
@@ -620,7 +629,12 @@ export function registerRoadmapTools(server: McpServer): void {
          * Required fields: refined_description, complexity.
          * Optional: target_start, target_end, status_check_md, dependencies.
          */
-        plan_suggestions: z.record(z.string(), z.unknown()).nullish(),
+        plan_suggestions: z.preprocess((val) => {
+          if (typeof val === 'string') {
+            try { return JSON.parse(val); } catch { return val; }
+          }
+          return val;
+        }, z.record(z.string(), z.unknown()).nullish()),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
@@ -670,13 +684,31 @@ export function registerRoadmapTools(server: McpServer): void {
         return { status: 'queued' as const, pending_id: queued.id };
       }
       try {
-        const result = await dispatchPm({
+        const result = dispatchPm({
           workspace_id: args.workspace_id,
           trigger_text: args.notes_text,
           trigger_kind: 'notes_intake',
           allowFallback: false,
         });
-        return { status: 'dispatched' as const, proposal_id: result.proposal.id };
+        // Wait for the agent's reply so callers don't get back a synth
+        // placeholder that masquerades as a successful dispatch. notes_intake
+        // strictly requires the named agent (regex on freeform notes is
+        // worse than nothing).
+        const settled = await result.completion;
+        if (!settled.used_named_agent) {
+          // Agent never replied within the tail window — clean up the
+          // placeholder and queue for replay so we don't keep a misleading
+          // draft around.
+          try { run(`DELETE FROM pm_proposals WHERE id = ?`, [result.proposal.id]); } catch { /* best-effort */ }
+          const queued = enqueuePendingNote({
+            workspace_id: args.workspace_id,
+            agent_id: args.agent_id,
+            notes_text: args.notes_text,
+            scope_hint: args.scope_hint ?? null,
+          });
+          return { status: 'queued' as const, pending_id: queued.id };
+        }
+        return { status: 'dispatched' as const, proposal_id: settled.final.id };
       } catch (err) {
         if (err instanceof PmDispatchGatewayUnavailableError) {
           // Gateway dropped between the health check and dispatch — queue
@@ -719,7 +751,7 @@ export function registerRoadmapTools(server: McpServer): void {
       // Re-dispatch so the new draft has impact_md + changes filled in.
       // We do this here (instead of relying on the API route refine
       // path) so MCP-driven refines also work.
-      const result = await dispatchPm({
+      const result = dispatchPm({
         workspace_id: parent.workspace_id,
         trigger_text: args.additional_constraint,
         trigger_kind: 'manual',

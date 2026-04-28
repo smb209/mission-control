@@ -30,7 +30,7 @@ import { synthesizePlanInitiative } from '@/lib/agents/pm-agent';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { parseSuggestionsFromImpactMd } from '@/lib/pm/applyPlanInitiativeProposal';
-import { run, queryOne } from '@/lib/db';
+import { queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,7 +73,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const snapshot = getRoadmapSnapshot({ workspace_id: parsed.data.workspace_id });
-    const synth = synthesizePlanInitiative(snapshot, parsed.data.draft);
+    const synth = synthesizePlanInitiative(snapshot, parsed.data.draft, {
+      targetInitiativeId: parsed.data.target_initiative_id ?? null,
+    });
 
     // Mint a session key for this planning conversation. Each new plan gets
     // a fresh gateway session (clean context, no prior-plan bleed). Refine
@@ -133,12 +135,17 @@ export async function POST(request: NextRequest) {
     // session, the synthesized advisory proposal is persisted exactly
     // like before. proposed_changes stays an empty array for the
     // advisory plan_initiative case = nothing to apply on accept.
-    const dispatch = await dispatchPmSynthesized({
+    const dispatch = dispatchPmSynthesized({
       workspace_id: parsed.data.workspace_id,
       trigger_text: triggerText,
       trigger_kind: 'plan_initiative',
       target_initiative_id: parsed.data.target_initiative_id ?? null,
       planSessionKey,
+      // plan_initiative prompts are large (description + guidance + roadmap
+      // snapshot summary) and the PM agent often takes 60-90s to compose a
+      // structured rewrite. Default 60s is too tight; observed cold-session
+      // round trips at ~70s in the wild.
+      timeoutMs: 120_000,
       synth: { impact_md: synth.impact_md, changes: synth.changes, plan_suggestions: synth.suggestions as unknown as Record<string, unknown> },
       agent_prompt:
         `Plan an initiative draft titled "${parsed.data.draft.title}". ` +
@@ -150,25 +157,13 @@ export async function POST(request: NextRequest) {
         `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
         `See your SOUL.md for the plan_suggestions shape.`,
     });
-    let proposal = dispatch.proposal;
-
-    // Always-embed-the-sidecar guarantee: when the PM agent answered via
-    // the gateway, its impact_md is freeform — LLMs are unreliable about
-    // including arbitrary HTML-comment JSON sidecars even when SOUL.md
-    // tells them to. Without the sidecar, the chat-card Apply flow has
-    // no structured suggestions to apply. We always have synth.suggestions
-    // here, so inject it post-hoc when missing and persist the patched
-    // impact_md to the same row. The synth path naturally already
-    // includes it, so this is a no-op there.
-    if (!parseSuggestionsFromImpactMd(proposal.impact_md)) {
-      const sidecar = `\n\n<!--pm-plan-suggestions ${JSON.stringify(synth.suggestions)} -->`;
-      const patchedMd = proposal.impact_md + sidecar;
-      run(
-        'UPDATE pm_proposals SET impact_md = ? WHERE id = ?',
-        [patchedMd, proposal.id],
-      );
-      proposal = { ...proposal, impact_md: patchedMd };
-    }
+    const proposal = dispatch.proposal;
+    // Note: the synth placeholder created by `dispatchPmSynthesized` already
+    // has `plan_suggestions` populated as a structured column (canonical
+    // since #85). The legacy `<!--pm-plan-suggestions {json}-->` sidecar
+    // appender that used to live here is removed — consumers now read the
+    // column directly. The agent's superseding row, when it lands, also
+    // carries plan_suggestions via the `propose_changes` MCP param.
 
     // Best-effort chat echo for audit visibility in /pm. Use the
     // PROPOSAL's impact_md — when the named PM agent answered, that's
@@ -262,6 +257,7 @@ export async function GET(request: NextRequest) {
     applied_by_agent_id: string | null;
     parent_proposal_id: string | null;
     target_initiative_id: string | null;
+    dispatch_state: string | null;
     created_at: string;
   }>(
     `SELECT * FROM pm_proposals

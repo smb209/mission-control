@@ -58,6 +58,7 @@ interface ProposalRow {
   impact_md: string;
   proposed_changes: ChildDiff[];
   status: string;
+  dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
 }
 
 export default function DecomposeWithPmModal({
@@ -87,6 +88,7 @@ export default function DecomposeWithPmModal({
   const [refineText, setRefineText] = useState('');
   const [accepting, setAccepting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [dispatchState, setDispatchState] = useState<'pending_agent' | 'agent_complete' | 'synth_only' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,6 +107,7 @@ export default function DecomposeWithPmModal({
             setProposalId(resumeBody.proposal.id);
             setImpactMd(resumeBody.proposal.impact_md);
             setChildren(resumeBody.proposal.proposed_changes);
+            setDispatchState(resumeBody.proposal.dispatch_state ?? null);
             return;
           }
         }
@@ -123,6 +126,7 @@ export default function DecomposeWithPmModal({
         setProposalId(proposal.id);
         setImpactMd(proposal.impact_md);
         setChildren(proposal.proposed_changes);
+        setDispatchState(proposal.dispatch_state ?? null);
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : 'Decompose failed');
       } finally {
@@ -133,6 +137,51 @@ export default function DecomposeWithPmModal({
       cancelled = true;
     };
   }, [initiative.id, initiative.workspace_id, initialHint]);
+
+  // Tier 3 of pm-dispatch-async. While the synth placeholder is pending the
+  // named-agent reply, listen for `pm_proposal_replaced` SSE events. When
+  // the agent's row supersedes the placeholder, swap to the new id and
+  // refetch its content (now resolvable because supersede also copies
+  // trigger_text). Mirrors the PlanWithPmPanel hookup.
+  useEffect(() => {
+    if (!proposalId) return;
+    if (dispatchState !== 'pending_agent') return;
+    const es = new EventSource('/api/events/stream');
+    let cancelled = false;
+    const refetch = async () => {
+      try {
+        const url = `/api/pm/decompose-initiative?workspace_id=${encodeURIComponent(initiative.workspace_id)}&initiative_id=${encodeURIComponent(initiative.id)}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const body = await res.json() as { proposal?: ProposalRow | null };
+        if (cancelled || !body?.proposal) return;
+        setProposalId(body.proposal.id);
+        setImpactMd(body.proposal.impact_md);
+        setChildren(body.proposal.proposed_changes);
+        setDispatchState(body.proposal.dispatch_state ?? null);
+      } catch {
+        // Best-effort — operator can refresh manually.
+      }
+    };
+    es.onmessage = (ev) => {
+      if (cancelled) return;
+      let parsed: { type?: string; payload?: Record<string, unknown> } | null = null;
+      try { parsed = JSON.parse(ev.data); } catch { return; }
+      if (!parsed || !parsed.type) return;
+      if (parsed.type === 'pm_proposal_replaced') {
+        const oldId = parsed.payload?.old_id as string | undefined;
+        if (oldId === proposalId) void refetch();
+      } else if (parsed.type === 'pm_proposal_dispatch_state_changed') {
+        const id = parsed.payload?.proposal_id as string | undefined;
+        const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
+        if (id === proposalId && next) setDispatchState(next);
+      }
+    };
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+  }, [proposalId, dispatchState, initiative.id, initiative.workspace_id]);
 
   // Esc to close.
   useEffect(() => {
@@ -287,6 +336,20 @@ export default function DecomposeWithPmModal({
             </div>
           ) : (
             <>
+              {dispatchState === 'pending_agent' && (
+                <div
+                  className="flex items-start gap-2 rounded border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-[11px] text-mc-text-secondary"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mt-[1px] animate-spin text-mc-accent" />
+                  <div>
+                    PM agent is still composing — these are draft children from the deterministic synth.
+                    The agent's final decomposition will replace this list automatically when it lands.
+                  </div>
+                </div>
+              )}
+
               {displayMd && (
                 <div className="shrink-0 max-h-32 overflow-y-auto text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
                   {displayMd}
@@ -427,8 +490,13 @@ export default function DecomposeWithPmModal({
           </button>
           <button
             onClick={accept}
-            disabled={accepting || loading || children.length === 0 || !proposalId}
-            className="px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50"
+            disabled={accepting || loading || children.length === 0 || !proposalId || dispatchState === 'pending_agent'}
+            title={
+              dispatchState === 'pending_agent'
+                ? 'PM agent is still composing — wait for its decomposition or click Cancel.'
+                : undefined
+            }
+            className="px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {accepting ? 'Creating…' : `Accept (${children.length} children)`}
           </button>
