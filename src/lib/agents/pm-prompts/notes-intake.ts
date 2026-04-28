@@ -44,5 +44,7 @@ export function buildNotesIntakeMessage(input: BuildNotesIntakeMessageInput): st
     '- Cap proposals at ~15 diffs. Prefer the highest-signal items if the notes are long.',
     '- If the notes contain nothing actionable for the roadmap, return an empty `changes` array and explain in `impact_md`.',
     '- Never fabricate agent ids, dates, or initiative titles.',
+    '',
+    'Output discipline: call `propose_changes` FIRST. After the tool returns, your reply MUST be a single line: `Proposal {id}.` — no freeform summary. The operator UI renders only `impact_md` + structured fields; anything you say in chat after the tool call is discarded.',
   ].join('\n');
 }

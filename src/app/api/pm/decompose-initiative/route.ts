@@ -116,7 +116,9 @@ export async function POST(request: NextRequest) {
         (parsed.data.hint ? ` Operator hint: ${parsed.data.hint}.` : '') +
         ` Call \`propose_changes\` (trigger_kind='decompose_initiative') with one ` +
         `\`create_child_initiative\` diff per child. Pre-wire each child to depend on the ` +
-        `prior sibling using placeholder ids \`$0\`, \`$1\`, etc. See your SOUL.md.`,
+        `prior sibling using placeholder ids \`$0\`, \`$1\`, etc. See your SOUL.md. ` +
+        `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
+        `no freeform summary (the operator UI discards it).`,
     });
     const proposal = dispatch.proposal;
 

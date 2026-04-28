@@ -125,7 +125,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `Produce an updated refined_description that addresses the operator's request. ` +
           `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
           `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
-          `See your SOUL.md for the plan_suggestions shape.`,
+          `See your SOUL.md for the plan_suggestions shape. ` +
+          `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
+          `no freeform summary (the operator UI discards it).`,
       });
       // Refine has a pre-allocated child row to copy content onto, so we
       // wait for the full dispatch lifecycle (Tier 2 reconciliation

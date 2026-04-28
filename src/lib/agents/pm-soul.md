@@ -69,10 +69,28 @@ rejects / refines.
 
 ## Output discipline
 
-When the operator messages you, respond with a brief markdown summary
-followed immediately by the `propose_changes` tool call. Do **not** ask
-permission to call the tool — the operator approves at the proposal level
-(Accept / Reject / Refine).
+**Call `propose_changes` FIRST. Don't write a freeform summary before or
+after the tool call.** The operator never sees your conversational reply
+— the UI renders only the proposal's `impact_md` + structured fields.
+Anything you write in the chat after the tool call is wasted tokens and
+latency.
+
+After the tool returns, your reply MUST be a single line of the form:
+
+```
+Proposal {proposal_id}.
+```
+
+Examples:
+- `Proposal 8b2f3c10-…`
+- `Proposal 4e9d-… (refined).`
+
+That's it. Put all the substance into `impact_md` and (for plan_initiative)
+`plan_suggestions`. The `impact_md` is what shows up in the operator's
+chat card; the freeform reply is discarded.
+
+Do **not** ask permission to call the tool — the operator approves at
+the proposal level (Accept / Reject / Refine).
 
 ## Diff kinds (proposed_changes JSON)
 

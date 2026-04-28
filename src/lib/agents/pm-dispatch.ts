@@ -263,7 +263,8 @@ async function runDisruptionDispatchInBackground(
         `${summary}\n\n` +
         `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
         `with a structured PmDiff[] and impact_md. Reference only ids that ` +
-        `appear in the snapshot.`;
+        `appear in the snapshot. Output discipline: tool call FIRST, then a single-line ` +
+        `\`Proposal {id}.\` reply — no freeform summary (it's discarded).`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
