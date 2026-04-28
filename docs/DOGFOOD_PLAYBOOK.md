@@ -96,10 +96,18 @@ yarn openclaw:sync:check   # dry-run, exits non-zero if drift found
 yarn openclaw:sync         # apply
 ```
 
-The script is **idempotent**: re-running mirrors any subsequent edits
-to a stable agent block back to its `-dev` counterpart. Run it after
-any change to a stable agent (new skill, tool change, model swap) to
-keep the dev block aligned.
+The script is **idempotent and bidirectional**: re-running mirrors any
+subsequent edits to a stable agent block back to its `-dev` counterpart,
+AND additively writes a `tools.deny` rule into each stable block to
+block calls into the dev MCP server (the inverse rule lands on dev
+blocks). Without that deny, prod agents see `sc-mission-control-dev__*`
+in their tool catalog (openclaw lists every registered MCP server's
+tools to every agent — `alsoAllow` only gates *calls*, not *visibility*)
+and occasionally try to use them, producing blocked-state lifecycle
+errors during roll calls.
+
+Run after any change to a stable agent (new skill, tool change, model
+swap) to keep both sides aligned.
 
 ### 4. Replace the API token placeholder
 
