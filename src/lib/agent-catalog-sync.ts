@@ -24,6 +24,73 @@ const SYNC_INTERVAL_MS = Number(process.env.AGENT_CATALOG_SYNC_INTERVAL_MS || 60
 let lastSyncAt = 0;
 let syncing: Promise<number> | null = null;
 
+/**
+ * Compile a comma-separated list of glob patterns into a single matcher.
+ * Patterns support `*` only (matches any sequence). Whitespace and empty
+ * tokens are ignored. Returns `null` when no patterns were configured —
+ * caller treats null as "no filter".
+ *
+ * Used by the catalog sync to honor `MC_AGENT_SYNC_INCLUDE` /
+ * `MC_AGENT_SYNC_EXCLUDE`. The dogfood layout sets one of:
+ *   prod docker:  MC_AGENT_SYNC_EXCLUDE=*-dev
+ *   dev launch:   MC_AGENT_SYNC_INCLUDE=*-dev
+ * so each MC instance only mirrors its own roster from the gateway.
+ */
+function compileGlobList(env: string | undefined): ((id: string) => boolean) | null {
+  if (!env) return null;
+  const patterns = env
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (patterns.length === 0) return null;
+  // Translate each glob to a regex anchored to the full id. `*` becomes
+  // `.*`; everything else is escaped so dots / dashes etc. match literally.
+  const regexes = patterns.map((p) => {
+    const escaped = p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    return new RegExp(`^${escaped}$`);
+  });
+  return (id: string) => regexes.some((re) => re.test(id));
+}
+
+/**
+ * Decide which gateway agent ids should sync into the catalog. Returns
+ * the included subset and the set of gateway ids that were filtered
+ * out, so the caller can mark previously-synced excluded rows offline.
+ *
+ * Exported for tests; production callers use it through
+ * `syncGatewayAgentsToCatalog`.
+ */
+export function selectGatewayAgents(
+  gatewayAgents: GatewayAgent[],
+  env: { include?: string; exclude?: string } = {
+    include: process.env.MC_AGENT_SYNC_INCLUDE,
+    exclude: process.env.MC_AGENT_SYNC_EXCLUDE,
+  },
+): { included: GatewayAgent[]; excludedGatewayIds: Set<string> } {
+  const includeMatch = compileGlobList(env.include);
+  const excludeMatch = compileGlobList(env.exclude);
+
+  const included: GatewayAgent[] = [];
+  const excludedGatewayIds = new Set<string>();
+
+  for (const ga of gatewayAgents) {
+    const id = ga.id || ga.name;
+    if (!id) continue;
+    // Include defaults to match-all when not configured. Exclude is then
+    // applied on top — so an id can be in the include list and still be
+    // dropped if exclude matches it.
+    const isIncluded = includeMatch ? includeMatch(id) : true;
+    const isExcluded = excludeMatch ? excludeMatch(id) : false;
+    if (isIncluded && !isExcluded) {
+      included.push(ga);
+    } else {
+      excludedGatewayIds.add(id);
+    }
+  }
+
+  return { included, excludedGatewayIds };
+}
+
 function normalizeRole(name: string): string {
   const n = name.toLowerCase();
   // Order matters: more-specific patterns first. Without the research /
@@ -78,16 +145,24 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
       });
     }
 
+    // Apply MC_AGENT_SYNC_INCLUDE / MC_AGENT_SYNC_EXCLUDE before any DB
+    // writes. The gateway is single-source-of-truth for the workspace
+    // roster; this filter is purely an MC-side mirror choice (one prod
+    // and one dev MC instance can coexist against the same gateway by
+    // mirroring disjoint subsets of agents).
+    const { included, excludedGatewayIds } = selectGatewayAgents(gatewayAgents);
+
     const existing = queryAll<{ id: string; gateway_agent_id: string | null }>(
       `SELECT id, gateway_agent_id FROM agents WHERE gateway_agent_id IS NOT NULL`
     );
     const existingByGatewayId = new Map(existing.map((a) => [a.gateway_agent_id, a.id]));
 
     let changed = 0;
+    let markedOffline = 0;
     const ts = new Date().toISOString();
 
     transaction(() => {
-      for (const ga of gatewayAgents) {
+      for (const ga of included) {
         const gatewayId = ga.id || ga.name;
         if (!gatewayId) continue;
 
@@ -96,8 +171,18 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
         const existingId = existingByGatewayId.get(gatewayId) || null;
 
         if (existingId) {
+          // Update existing row. Flip status off 'offline' if a previous
+          // sync had marked it filtered-out and the operator has now
+          // included it again (env var change → restart).
           run(
-            `UPDATE agents SET name = ?, role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END, model = COALESCE(?, model), source = 'gateway', updated_at = ? WHERE id = ?`,
+            `UPDATE agents
+                SET name = ?,
+                    role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
+                    model = COALESCE(?, model),
+                    source = 'gateway',
+                    status = CASE WHEN status = 'offline' THEN 'idle' ELSE status END,
+                    updated_at = ?
+              WHERE id = ?`,
             [name, role, normaliseModel(ga.model), ts, existingId]
           );
         } else {
@@ -110,12 +195,34 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
         changed += 1;
       }
 
+      // Mark previously-synced rows whose gateway id is now filtered
+      // out as `status='offline'`. Don't touch `is_active` — that's the
+      // operator's intentional disable toggle and we don't want to
+      // overwrite it. Don't delete the row either; FK references from
+      // tasks / mailbox stay valid, and a future env-var relaxation
+      // will flip status back to 'idle' automatically (above).
+      for (const gatewayId of excludedGatewayIds) {
+        const existingId = existingByGatewayId.get(gatewayId);
+        if (!existingId) continue;
+        const result = run(
+          `UPDATE agents SET status = 'offline', updated_at = ? WHERE id = ? AND status != 'offline'`,
+          [ts, existingId]
+        );
+        if (result.changes > 0) markedOffline += 1;
+      }
+
       run(
         `INSERT INTO events (id, type, message, metadata, created_at)
          VALUES (lower(hex(randomblob(16))), 'system', ?, ?, ?)`,
         [
           `Agent catalog sync completed (${options?.reason || 'automatic'})`,
-          JSON.stringify({ changed, reason: options?.reason || 'automatic' }),
+          JSON.stringify({
+            changed,
+            marked_offline: markedOffline,
+            included: included.length,
+            excluded: excludedGatewayIds.size,
+            reason: options?.reason || 'automatic',
+          }),
           ts,
         ]
       );
