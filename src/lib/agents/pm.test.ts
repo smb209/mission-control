@@ -145,6 +145,27 @@ test('synthesizeImpactAnalysis: "Sarah out next week" → add_availability for S
   }
 });
 
+test('synthesizeImpactAnalysis: "next week" starts tomorrow (or next Monday on weekends), matching how operators talk', () => {
+  // Today's date is fixed by the test harness; we just assert that the
+  // start date is no more than 2 days after today (Sat/Sun → Monday).
+  // The pre-fix behavior would land on the Monday of the FOLLOWING ISO
+  // week, which can be 8+ days after today.
+  const ws = freshWorkspace();
+  seedNamedAgent(ws, 'Sarah');
+  const snap = getRoadmapSnapshot({ workspace_id: ws });
+  const result = synthesizeImpactAnalysis(snap, 'Sarah out next week');
+  const window = result.parsed.date_windows[0];
+  assert.ok(window, 'expected a parsed date_window');
+  const today = new Date();
+  const todayIso = today.toISOString().slice(0, 10);
+  // start should be within [today, today+2] depending on weekday.
+  const dayDiff = Math.round((Date.parse(window.start + 'T00:00:00Z') - Date.parse(todayIso + 'T00:00:00Z')) / 86400000);
+  assert.ok(dayDiff >= 0 && dayDiff <= 2, `expected next-week start within 0-2 days of today, got ${dayDiff} (start=${window.start}, today=${todayIso})`);
+  // end is start + 6 → conversational "Mon through Fri of that week" in practice.
+  const endDayDiff = Math.round((Date.parse(window.end + 'T00:00:00Z') - Date.parse(window.start + 'T00:00:00Z')) / 86400000);
+  assert.equal(endDayDiff, 6);
+});
+
 test('synthesizeImpactAnalysis: never references unknown initiative_ids', () => {
   const ws = freshWorkspace();
   const initA = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Build big feature' });
@@ -735,6 +756,71 @@ test('dispatchPmSynthesized: target_initiative_id is stamped on the agent row du
     const agentRow = getProposal(settled.final.id)!;
     assert.equal(agentRow.target_initiative_id, init.id);
     assert.equal(agentRow.trigger_kind, 'plan_initiative');
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
+test('dispatchPmSynthesized: plan_initiative — agent omits target dates → reconciler backfills from synth', async () => {
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  // Build a synth that has populated dates (always true in production —
+  // synthesizePlanInitiative inserts derived target_start / _end based on
+  // complexity).
+  const synthWithDates = {
+    impact_md: '### Synth\n- placeholder',
+    changes: [],
+    plan_suggestions: {
+      refined_description: '_(synth)_',
+      complexity: 'L' as const,
+      target_start: '2026-05-01',
+      target_end: '2026-06-15',
+      dependencies: [],
+      status_check_md: null,
+      owner_agent_id: null,
+    },
+  };
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      // Agent lands its propose_changes call with NULL dates — the
+      // observed wild behavior we're fixing.
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'agent reply',
+        trigger_kind: 'manual',
+        impact_md: '### Plan\n- something',
+        proposed_changes: [],
+        plan_suggestions: {
+          refined_description: 'agent rewrite',
+          complexity: 'L',
+          target_start: null,
+          target_end: null,
+          dependencies: [],
+          status_check_md: null,
+          owner_agent_id: null,
+        },
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(2_000);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: 'plan',
+      trigger_kind: 'plan_initiative',
+      synth: synthWithDates,
+      agent_prompt: 'plan it',
+    });
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, true);
+    const refreshed = getProposal(settled.final.id)!;
+    const ps = refreshed.plan_suggestions as { target_start?: string | null; target_end?: string | null; refined_description?: string };
+    // Dates filled from synth, but the agent's refined_description is preserved.
+    assert.equal(ps.target_start, '2026-05-01');
+    assert.equal(ps.target_end, '2026-06-15');
+    assert.equal(ps.refined_description, 'agent rewrite');
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);

@@ -76,7 +76,7 @@ The reference test data (description, refinement prompt, decompose hint) is in [
 | 2.5 | Click **Apply suggestions** (or equivalent) to populate the initiative draft. Save | the initiative's description / dates / complexity reflect the suggestions |
 | 2.6 | Back on the detail page, click **Decompose with PM**. (Optional: provide a hint such as "focus on backend first") | a draft proposal with `trigger_kind = decompose_initiative` lands; reviewing it shows 3–7 `create_child_initiative` diffs all parented to Smart Snappy |
 | 2.7 | Open the decompose proposal. Click **Accept** | proposal flips to `accepted`; child stories appear under Smart Snappy on `/initiatives`; each child has a `task_initiative_history` entry |
-| 2.8 | Pick one child. Click **Add child**, create a sub-story (e.g. "Daily checklist v0"). Save | new sub-story attaches under the child; tree view shows nested rows |
+| 2.8 | Pick one of the agent's child stories. **First** click **Convert kind** to bump it from `story` → `epic` (stories are roadmap leaves and don't expose `Add child`). Then click **Add child**, create a sub-story (e.g. "Daily checklist v0"). Save | new sub-story attaches under the converted parent; tree view shows nested rows. Skip this step if you don't want to mutate the agent's structure. |
 | 2.9 | On a child, add a dependency (Add dependency dropdown → pick a sibling). Save | sibling appears in the child's deps list |
 | 2.10 | Save checkpoint: `smart-snappy-decomposed` | `.tmp/checkpoints/smart-snappy-decomposed.db` exists |
 
@@ -118,7 +118,7 @@ The roadmap timeline lives at `/roadmap` with Week / Month / Quarter zoom. The d
 |---|---|---|
 | 4.1 | After accepting decompose in §2, navigate to `/roadmap`. Pick the **Quarter** zoom | Smart Snappy + its children render on the timeline with derived target dates; arrows show dep edges |
 | 4.2 | Click **Recompute now** | "Last computed" timestamp updates; visible target dates may shift slightly; no error toasts |
-| 4.3 | Add an owner-availability window via PM (`Sarah out 2026-05-01 to 2026-05-15`) and accept the proposal. Return to `/roadmap` and Recompute | initiatives owned by Sarah whose target windows overlap the unavailability shift later; arrow/dep chain remains consistent |
+| 4.3 | **Prerequisite**: assign owners to a few children (e.g. on `Snappy Service Architecture` → click into the OWNER column → pick a gateway agent like `mc-builder`). The agent's decompose doesn't assign owners, so cold-start workspaces have all `owner_agent_id = null` and any availability window has nothing to ripple through. Then add an owner-availability window via PM (`Researcher out 2026-05-01 to 2026-05-15` if you assigned mc-researcher), accept it, return to `/roadmap` and Recompute | initiatives owned by the unavailable agent whose target windows overlap the unavailability shift later; arrow/dep chain remains consistent. If no children have owners assigned, expect zero ripple — the test is content-dependent. |
 | 4.4 | Toggle Week ↔ Month ↔ Quarter | bars resize; nothing renders off-screen; no infinite scroll |
 | 4.5 | Save checkpoint: `roadmap-after-disruption` | `.tmp/checkpoints/roadmap-after-disruption.db` exists |
 

@@ -166,15 +166,27 @@ test('defaultWindow ignores nulls', () => {
 
 // ─── axisTicks / formatTick ────────────────────────────────────────
 
-test('axisTicks: month zoom returns month boundaries', () => {
+test('axisTicks: month zoom returns month boundaries (incl. leftmost-anchor)', () => {
+  // Includes Apr 1 (at-or-before window start) so the leftmost edge always
+  // gets a label — important on short windows that don't span a boundary.
   const t = axisTicks('2026-04-10', '2026-07-15', 'month');
-  // First-of-May, June, July.
-  assert.deepEqual(t.map(toIsoDay), ['2026-05-01', '2026-06-01', '2026-07-01']);
+  assert.deepEqual(t.map(toIsoDay), ['2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01']);
 });
 
-test('axisTicks: quarter zoom returns quarter starts', () => {
+test('axisTicks: quarter zoom returns quarter starts (incl. leftmost-anchor)', () => {
+  // Q1 boundary (Jan 1) is at-or-before window start (Feb 1), so it's the
+  // leftmost anchor.
   const t = axisTicks('2026-02-01', '2026-12-31', 'quarter');
-  assert.deepEqual(t.map(toIsoDay), ['2026-04-01', '2026-07-01', '2026-10-01']);
+  assert.deepEqual(t.map(toIsoDay), ['2026-01-01', '2026-04-01', '2026-07-01', '2026-10-01']);
+});
+
+test('axisTicks: quarter zoom on a short range still produces an anchor tick', () => {
+  // Short Apr 27 – Jun 11 window — doesn't span Apr→Jul boundary, but we
+  // still want a Q2 anchor at Apr 1 for the canvas to clamp + display.
+  // Without the fix this returned [] and the timeline rendered with no
+  // headers at all (§4.4 finding).
+  const t = axisTicks('2026-04-27', '2026-06-11', 'quarter');
+  assert.deepEqual(t.map(toIsoDay), ['2026-04-01']);
 });
 
 test('axisTicks: week zoom returns Mondays', () => {

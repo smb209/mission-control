@@ -570,6 +570,45 @@ async function runNamedAgentDispatchInBackground(
         trigger_kind: input.trigger_kind,
         target_initiative_id: input.target_initiative_id ?? null,
       });
+      // plan_initiative-specific backfill: if the agent omitted dates in
+      // its plan_suggestions, fill from the synth's (always populated)
+      // target window so the operator's Apply form has dates to apply.
+      // Observed in the wild: the agent sometimes returns
+      // `target_start: null, target_end: null` and the operator gets a
+      // suggestion card with empty date fields.
+      if (input.trigger_kind === 'plan_initiative') {
+        try {
+          const agentSuggestions = (found.plan_suggestions ?? null) as
+            | { target_start?: string | null; target_end?: string | null }
+            | null;
+          const synthSuggestions = (input.synth.plan_suggestions ?? null) as
+            | { target_start?: string | null; target_end?: string | null }
+            | null;
+          if (agentSuggestions && synthSuggestions) {
+            const merged = { ...agentSuggestions };
+            let dirty = false;
+            if (!merged.target_start && synthSuggestions.target_start) {
+              merged.target_start = synthSuggestions.target_start;
+              dirty = true;
+            }
+            if (!merged.target_end && synthSuggestions.target_end) {
+              merged.target_end = synthSuggestions.target_end;
+              dirty = true;
+            }
+            if (dirty) {
+              run(
+                `UPDATE pm_proposals SET plan_suggestions = ? WHERE id = ?`,
+                [JSON.stringify(merged), found.id],
+              );
+              console.log(
+                `[pm-dispatch] backfilled plan_suggestions dates from synth for agent row ${found.id}`,
+              );
+            }
+          }
+        } catch (err) {
+          console.warn('[pm-dispatch] plan_suggestions backfill failed:', (err as Error).message);
+        }
+      }
       const refreshed = listProposals({ workspace_id: input.workspace_id, limit: 1, since: sinceIso }).find(p => p.id === found.id) ?? found;
       broadcast({
         type: 'pm_proposal_replaced',
@@ -960,8 +999,23 @@ function thisWeekStart(d: Date): Date {
   return addDays(d, offset);
 }
 
+/**
+ * Conversational "next week" semantics: tomorrow through the Friday of
+ * the following workweek. This matches how operators (and the named PM
+ * agent) talk about the phrase — "Sarah out next week" said on a
+ * Monday means Tue-Fri-and-Mon-Fri, not the ISO-week-after-next which
+ * is what `thisWeekStart(d) + 7` would have produced.
+ *
+ * The window is anchored to "the Monday after today (or today, if today
+ * is a Sunday)". Saturdays/Sundays roll forward to the next Monday so
+ * a weekend operator saying "out next week" still means the upcoming
+ * Mon-Fri.
+ */
 function nextWeekStart(d: Date): Date {
-  return addDays(thisWeekStart(d), 7);
+  const day = d.getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0) return addDays(d, 1); // Sunday → tomorrow (Monday)
+  if (day === 6) return addDays(d, 2); // Saturday → Monday after
+  return addDays(d, 1); // Mon-Fri → tomorrow
 }
 
 function escapeRe(s: string): string {
