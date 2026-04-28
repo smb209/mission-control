@@ -65,3 +65,8 @@ db-backups/
 # Large video files
 Autensa_v2.mp4
 *.mp4
+
+# DB backups (rolling, written by yarn db:backup + scheduled tick)
+backups/
+*.db.backup
+*.db.backup-*
