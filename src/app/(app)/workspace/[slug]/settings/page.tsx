@@ -21,6 +21,7 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowLeft,
+  Download,
   Folder,
   Loader,
   Trash2,
@@ -63,6 +64,8 @@ export default function WorkspaceSettingsPage({
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showDelete, setShowDelete] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [includeTransient, setIncludeTransient] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -125,6 +128,40 @@ export default function WorkspaceSettingsPage({
   }
 
   const isDefault = workspace.id === 'default';
+
+  const exportWorkspace = async () => {
+    if (!workspace || exporting) return;
+    setExporting(true);
+    setActionError(null);
+    try {
+      const url = `/api/workspaces/${workspace.id}/export${
+        includeTransient ? '?include_transient=true' : ''
+      }`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Export failed (${res.status})`);
+      }
+      // Honor the Content-Disposition filename from the server.
+      const blob = await res.blob();
+      const disp = res.headers.get('Content-Disposition') ?? '';
+      const m = disp.match(/filename="([^"]+)"/);
+      const filename =
+        m?.[1] ?? `mc-workspace-${workspace.id}-${new Date().toISOString()}.json`;
+      const a = document.createElement('a');
+      const objectUrl = URL.createObjectURL(blob);
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-mc-bg text-mc-text">
@@ -232,6 +269,39 @@ export default function WorkspaceSettingsPage({
               )}
             </p>
           </Field>
+        </Section>
+
+        {/* Export — read-only snapshot of every workspace-scoped row,
+            useful for retaining state before a reset or copying a real
+            workspace into a checkpoint. Backed by the same lib the CLI
+            script uses (src/lib/db/workspace-export.ts). */}
+        <Section
+          title="Export"
+          description="Download a JSON snapshot of every initiative, task, agent, proposal, knowledge entry, and supporting row attached to this workspace. Useful for retention before a database reset or for staging an import elsewhere."
+        >
+          <div className="flex items-start justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs text-mc-text-secondary">
+              <input
+                type="checkbox"
+                checked={includeTransient}
+                onChange={e => setIncludeTransient(e.target.checked)}
+                className="accent-mc-accent"
+              />
+              Include transient rows
+              <span className="text-mc-text-secondary/60">
+                (mailbox, chat, sessions — large, mostly noise)
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={exportWorkspace}
+              disabled={exporting}
+              className="px-3 py-1.5 text-sm rounded border border-mc-border text-mc-text hover:bg-mc-bg-tertiary disabled:opacity-40 inline-flex items-center gap-1.5 shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {exporting ? 'Exporting…' : 'Export workspace'}
+            </button>
+          </div>
         </Section>
 
         {/* Danger Zone — GitHub-style. Red border, destructive actions

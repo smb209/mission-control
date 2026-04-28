@@ -21,7 +21,8 @@
     "db:checkpoint:list": "tsx scripts/db-checkpoint.ts list",
     "openapi:generate": "next-openapi-gen generate",
     "openclaw:sync": "node scripts/sync-openclaw-agents.mjs",
-    "openclaw:sync:check": "node scripts/sync-openclaw-agents.mjs --dry-run"
+    "openclaw:sync:check": "node scripts/sync-openclaw-agents.mjs --dry-run",
+    "workspace:export": "tsx scripts/export-workspace.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1032.0",
