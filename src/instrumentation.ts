@@ -28,4 +28,14 @@ export async function register() {
   } catch (err) {
     console.warn('[Instrumentation] pm-pending-drain registration failed:', (err as Error).message);
   }
+
+  // Register the rolling DB backup schedule. Boot tick after 30s grace,
+  // then every MC_BACKUP_INTERVAL_HOURS hours (default 24). Retains the
+  // newest MC_BACKUP_RETAIN files (default 14) and prunes the rest.
+  try {
+    const { registerBackupSchedule } = await import('@/lib/db-backup');
+    registerBackupSchedule(() => getDb());
+  } catch (err) {
+    console.warn('[Instrumentation] db-backup registration failed:', (err as Error).message);
+  }
 }

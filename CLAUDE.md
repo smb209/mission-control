@@ -66,6 +66,20 @@ See [docs/DOGFOOD_PLAYBOOK.md](docs/DOGFOOD_PLAYBOOK.md) for how the
 stable (`:4001`) and dev (`:4010`) instances coexist with separate
 openclaw agent rosters.
 
+## Database backups
+
+A scheduled task in `instrumentation.ts` writes a rolling backup every
+`MC_BACKUP_INTERVAL_HOURS` (default 24h) to `${dirname(DATABASE_PATH)}/backups/`,
+retaining the newest `MC_BACKUP_RETAIN` files (default 14). First backup
+runs ~30s after boot. Manual: `yarn db:backup` (one-off + retention),
+`yarn db:backup:list` (enumerate). Off switch: `MC_BACKUP_DISABLED=1`.
+
+WAL on macOS bind mounts has bitten us once with a transient
+`SQLITE_CORRUPT` that disappeared on container restart — the file
+itself was fine. Real corruption is rare; auto-backups exist mainly to
+recover from operator mistakes (a bad migration, a wrong `db:reset`,
+etc.) rather than file-level loss.
+
 ## Verification (MCP Preview)
 
 After multi-file changes that touch UI or MCP tool surfaces, verify before opening a PR:
