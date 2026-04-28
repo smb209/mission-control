@@ -57,7 +57,14 @@ Watch for **loopback URL drift**: services inside Docker can't reach `localhost`
 
 The user often browses the dev server from a different machine on the LAN. Next 15+ requires those origins to be listed in `next.config.mjs` under `allowedDevOrigins` (already configured for `192.168.50.95` and `*.local`) — without it, HMR/fonts return 403 and hydration hangs. If a new LAN host needs access, extend that array rather than chasing HMR or browser-cache theories.
 
-Default dev port is `4000` (`yarn dev` honors `$PORT`).
+**Ports.** Default dev port is `4010` (`yarn dev` honors `$PORT`).
+Docker stable runs on `4001`. Port `4000` is reserved for the local
+LiteLLM gateway — don't bind MC to it. Older docs may still reference
+`4000` for dev; treat those as stale until scrubbed.
+
+See [docs/DOGFOOD_PLAYBOOK.md](docs/DOGFOOD_PLAYBOOK.md) for how the
+stable (`:4001`) and dev (`:4010`) instances coexist with separate
+openclaw agent rosters.
 
 ## Verification (MCP Preview)
 
