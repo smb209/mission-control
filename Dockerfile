@@ -14,7 +14,7 @@ COPY package.json yarn.lock ./
 # BuildKit cache mount: a warm yarn cache survives across rebuilds, so
 # even when this layer is invalidated by a package.json change yarn
 # pulls from cache instead of re-downloading every dep.
-RUN --mount=type=cache,target=/root/.cache/yarn \
+RUN --mount=type=cache,target=/root/.cache/yarn,sharing=locked \
     yarn install --frozen-lockfile
 
 FROM base AS prod-deps
@@ -22,7 +22,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json yarn.lock ./
-RUN --mount=type=cache,target=/root/.cache/yarn \
+RUN --mount=type=cache,target=/root/.cache/yarn,sharing=locked \
     yarn install --frozen-lockfile --production
 
 FROM base AS builder
