@@ -258,7 +258,45 @@ export function getRoadmapSnapshot(filters: RoadmapFilters): RoadmapSnapshot {
     else if (ACTIVE_STATUSES.has(t.status)) c.active += 1;
   }
 
-  const initiatives: RoadmapInitiative[] = visibleRows.map(r => ({
+  // Tree-walk ordering: parent → its children → next parent, depth-first,
+  // so the timeline grid renders nested under the correct parent rather
+  // than as flat kind-buckets. Without this, accepting a decompose
+  // proposal that creates 8 stories under one epic interleaves all 22
+  // stories below their three epic rows, severing the visual hierarchy.
+  //
+  // The SQL ORDER BY i.sort_order, i.created_at gives within-sibling
+  // order; we just need to walk the parent→children tree to emit rows
+  // in tree-DFS order. Children of an unknown / filtered-out parent are
+  // treated as roots (their .depth=0 already reflects this).
+  const childrenByParent = new Map<string | null, RawInitiativeRow[]>();
+  for (const r of visibleRows) {
+    const parentKey = r.parent_initiative_id && byId.has(r.parent_initiative_id)
+      ? r.parent_initiative_id
+      : null; // Treat orphans as roots.
+    const bucket = childrenByParent.get(parentKey) ?? [];
+    bucket.push(r);
+    childrenByParent.set(parentKey, bucket);
+  }
+  // Children inherit the SQL ORDER BY (sort_order, created_at) since the
+  // bucket is filled in row order. No re-sort needed.
+  const orderedRows: RawInitiativeRow[] = [];
+  function emit(parentKey: string | null) {
+    const kids = childrenByParent.get(parentKey);
+    if (!kids) return;
+    for (const k of kids) {
+      orderedRows.push(k);
+      emit(k.id);
+    }
+  }
+  emit(null);
+  // Safety net: if anything was somehow missed (cycle, dropped lookup),
+  // append it at the end. A bad ordering is better than a missing row.
+  if (orderedRows.length !== visibleRows.length) {
+    const seen = new Set(orderedRows.map(r => r.id));
+    for (const r of visibleRows) if (!seen.has(r.id)) orderedRows.push(r);
+  }
+
+  const initiatives: RoadmapInitiative[] = orderedRows.map(r => ({
     id: r.id,
     parent_initiative_id: r.parent_initiative_id,
     product_id: r.product_id,
