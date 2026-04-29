@@ -43,6 +43,10 @@ interface WorkspaceWithDefault {
   description?: string | null;
   icon: string;
   workspace_path?: string | null;
+  /** Markdown rules-of-the-road prepended to every dispatched task's prompt.
+   *  v0 of org-scope memory grounding — see docs/specs and the
+   *  Ground-agents theme on the roadmap. */
+  context_md?: string | null;
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
   created_at: string;
@@ -268,6 +272,37 @@ export default function WorkspaceSettingsPage({
                 </span>
               )}
             </p>
+          </Field>
+        </Section>
+
+        {/* Workspace conventions — rules-of-the-road prepended to every
+            dispatched agent's task prompt. v0 of org-scope memory
+            grounding (precursor to the memory-layer epic). Operator
+            writes once and every dispatched mc-builder / mc-coordinator
+            inherits the workspace's testing / git / package-manager /
+            push rules without having to rediscover them per task. */}
+        <Section
+          title="Workspace conventions"
+          description={
+            <>
+              Markdown that gets prepended to every dispatched task&apos;s
+              prompt as a <code className="text-mc-text">## Workspace conventions</code>
+              {' '}block. Use this for repo URLs, testing patterns, push/PR rules,
+              package manager — whatever a fresh agent needs to ground its
+              work. Leave blank to skip the block entirely.
+            </>
+          }
+        >
+          <Field label="Conventions (markdown)">
+            <InlineTextarea
+              value={workspace.context_md ?? ''}
+              onSave={next =>
+                patch({ context_md: next.length > 0 ? next : null })
+              }
+              placeholder={`# Repos\n- ...\n\n# Testing\n- yarn test\n\n# Git rules\n- Never push to main\n- ...`}
+              minRows={8}
+              label="Edit workspace conventions"
+            />
           </Field>
         </Section>
 

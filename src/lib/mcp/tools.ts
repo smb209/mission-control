@@ -190,6 +190,54 @@ export function registerAllTools(server: McpServer): void {
     }),
   );
 
+  // get_workspace_context ─────────────────────────────────────────
+  // Lets an in-flight agent re-read the workspace's "rules of the road"
+  // markdown without re-dispatch. The same blob is prepended to every
+  // task dispatch as a "## Workspace conventions" section, so this tool
+  // is mostly useful when an agent forks a subtask and wants to keep
+  // the conventions in scope, or for debugging what the operator wrote.
+  server.registerTool(
+    'get_workspace_context',
+    {
+      title: 'Get workspace conventions',
+      description:
+        "Returns the markdown 'rules of the road' the operator wrote for this workspace (repos, testing, git/PR rules, package manager, etc). Same content prepended to every task dispatch's prompt; call this when you need to re-read it mid-session or surface it to a delegated subagent.",
+      inputSchema: {
+        agent_id: z
+          .string()
+          .min(1)
+          .describe(
+            "Your MC agent_id (UUID) or gateway_agent_id. Either form works — looked up the same way as whoami.",
+          ),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    trace('get_workspace_context', async ({ agent_id }) => {
+      const me = queryOne<{ workspace_id: string }>(
+        `SELECT workspace_id FROM agents WHERE id = ? OR gateway_agent_id = ? LIMIT 1`,
+        [agent_id, agent_id],
+      );
+      if (!me) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `agent ${agent_id} not found` }],
+          structuredContent: { error: 'agent_not_found', agent_id },
+        };
+      }
+      const ws = queryOne<{ id: string; name: string; context_md: string | null }>(
+        `SELECT id, name, context_md FROM workspaces WHERE id = ?`,
+        [me.workspace_id],
+      );
+      const payload = {
+        workspace_id: me.workspace_id,
+        workspace_name: ws?.name ?? null,
+        context_md: ws?.context_md ?? null,
+        present: typeof ws?.context_md === 'string' && ws.context_md.trim().length > 0,
+      };
+      return textResult(JSON.stringify(payload, null, 2), payload);
+    }),
+  );
+
   // list_peers ────────────────────────────────────────────────────
   server.registerTool(
     'list_peers',

@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
   -- env-derived default" (see resolveWorkspacePath()). Stored as a raw
   -- string with optional ~ that the server expands at access time.
   workspace_path TEXT,
+  -- Markdown rules-of-the-road prepended to every dispatched task's
+  -- prompt as a "## Workspace conventions" block. v0 of org-scope
+  -- memory grounding (precursor to the memory-layer epic). NULL → no
+  -- block prepended. See migration 056.
+  context_md TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

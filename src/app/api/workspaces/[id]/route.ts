@@ -56,7 +56,7 @@ export async function PATCH(
 
   try {
     const body = await request.json();
-    const { name, description, icon, workspace_path } = body;
+    const { name, description, icon, workspace_path, context_md } = body;
 
     const db = getDb();
 
@@ -87,6 +87,14 @@ export async function PATCH(
       // any other value persists as the explicit path.
       updates.push('workspace_path = ?');
       const trimmed = typeof workspace_path === 'string' ? workspace_path.trim() : null;
+      values.push(trimmed && trimmed.length > 0 ? trimmed : null);
+    }
+    if (context_md !== undefined) {
+      // Markdown blob holding the operator's "rules of the road" for
+      // dispatched agents. Read at task dispatch time and prepended as
+      // a "## Workspace conventions" block. Empty string clears it.
+      updates.push('context_md = ?');
+      const trimmed = typeof context_md === 'string' ? context_md : null;
       values.push(trimmed && trimmed.length > 0 ? trimmed : null);
     }
 
