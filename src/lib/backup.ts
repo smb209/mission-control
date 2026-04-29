@@ -1,19 +1,41 @@
 /**
  * Database Backup Service
- * 
- * Handles on-demand backup creation, listing, restoration, and optional S3 upload
- * for the Mission Control SQLite database.
- * 
- * Backup naming convention: mc-backup-{ISO-timestamp}-v{migration-version}.db
- * Timestamps use dashes instead of colons for filesystem safety.
- * 
- * Safety: restore always creates a pre-restore safety backup first.
+ *
+ * Single source of truth for SQLite backups: on-demand via the admin API,
+ * scheduled via instrumentation.ts, manual via `yarn db:backup`. All
+ * three paths land in the same directory with the same filename
+ * convention so the operator never has to wonder which system wrote a
+ * particular file.
+ *
+ * Filename: mc-backup-{ISO-timestamp}-v{migration-version}.db
+ * Timestamps use dashes instead of colons (filesystem-safe + sortable).
+ * Migration version is the highest applied id at backup time so a
+ * restore-across-schema-changes is recognizable from the filename alone.
+ *
+ * Path: {dirname(DATABASE_PATH)}/backups/. In docker that resolves to
+ * /app/data/backups, which is bind-mounted to the host — backups are
+ * always visible from the host filesystem. (Earlier the path defaulted
+ * to process.cwd()/backups which lived inside the container only.)
+ *
+ * Atomicity: createBackup() uses better-sqlite3's online .backup() API
+ * (page-by-page copy, doesn't block readers/writers, internally
+ * consistent regardless of WAL state). We `wal_checkpoint(TRUNCATE)`
+ * first so the resulting file is self-contained (no -shm/-wal sidecars).
+ *
+ * Retention: enforceRetention(N) keeps the newest N matching files.
+ * Recognizes both the canonical mc-backup-* pattern AND the legacy
+ * mission-control-* pattern from PR #96 so transitional rolling files
+ * roll off cleanly instead of accumulating forever.
+ *
+ * Safety: restoreBackup() always creates a pre-restore-* safety backup
+ * before overwriting the live DB.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { getDb, closeDb } from '@/lib/db';
 import { getMigrationStatus } from '@/lib/db/migrations';
+import type Database from 'better-sqlite3';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +71,13 @@ function getDbPath(): string {
 }
 
 function getBackupDir(): string {
-  return path.join(process.cwd(), 'backups');
+  // Co-locate with the DB so docker bind mounts pick the directory up
+  // automatically. Override via MC_BACKUP_DIR for testing or unusual
+  // deployments. Earlier this defaulted to process.cwd()/backups which
+  // lived inside the container only — admin-API backups vanished from
+  // the host's POV.
+  if (process.env.MC_BACKUP_DIR) return process.env.MC_BACKUP_DIR;
+  return path.join(path.dirname(path.resolve(getDbPath())), 'backups');
 }
 
 function ensureBackupDir(): string {
@@ -62,14 +90,32 @@ function ensureBackupDir(): string {
 // Backup filename parsing
 // ---------------------------------------------------------------------------
 
+// Canonical filename: mc-backup-{ISO-ts}-v{migration-version}.db
 const BACKUP_PATTERN = /^mc-backup-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-v(\d+)\.db$/;
+// Legacy filename from PR #96 — recognized so rolling files written
+// before the consolidation roll off via retention instead of leaking.
+const LEGACY_PATTERN = /^mission-control-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})Z\.db$/;
+// Pre-restore safety backups, written by restoreBackup().
+const PRE_RESTORE_PATTERN = /^pre-restore-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.db$/;
 
 function parseBackupFilename(filename: string): { timestamp: string; version: string } | null {
-  const match = filename.match(BACKUP_PATTERN);
-  if (!match) return null;
-  // Convert dashes back to colons for valid ISO timestamp
-  const timestamp = match[1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
-  return { timestamp, version: match[2] };
+  const m = filename.match(BACKUP_PATTERN);
+  if (m) {
+    // Convert dashes back to colons for valid ISO timestamp.
+    const timestamp = m[1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+    return { timestamp, version: m[2] };
+  }
+  const legacy = filename.match(LEGACY_PATTERN);
+  if (legacy) {
+    const timestamp = legacy[1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3') + 'Z';
+    return { timestamp, version: 'legacy' };
+  }
+  return null;
+}
+
+/** True for any filename that the retention pass should consider. */
+function isManagedBackup(filename: string): boolean {
+  return BACKUP_PATTERN.test(filename) || LEGACY_PATTERN.test(filename);
 }
 
 function formatTimestamp(date: Date): string {
@@ -86,21 +132,26 @@ export async function createBackup(): Promise<BackupResult> {
   const db = getDb();
   const backupDir = ensureBackupDir();
 
-  // 1. WAL checkpoint to flush all pending writes
-  db.pragma('wal_checkpoint(TRUNCATE)');
+  // 1. Checkpoint WAL so the snapshot is self-contained (no -shm/-wal
+  //    sidecars). Best-effort — a failed checkpoint doesn't make the
+  //    backup unsafe; .backup() still produces a consistent snapshot.
+  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* ignore */ }
 
-  // 2. Determine current migration version
+  // 2. Determine current migration version for the filename suffix.
   const { applied } = getMigrationStatus(db);
   const currentVersion = applied.length > 0 ? applied[applied.length - 1] : '000';
 
-  // 3. Build filename
+  // 3. Build filename.
   const timestamp = formatTimestamp(new Date());
   const filename = `mc-backup-${timestamp}-v${currentVersion}.db`;
   const filepath = path.join(backupDir, filename);
 
-  // 4. Copy database file
-  const dbPath = getDbPath();
-  fs.copyFileSync(dbPath, filepath);
+  // 4. Atomic online backup. Earlier this used `fs.copyFileSync(dbPath,
+  //    filepath)` which races with WAL writers and can corrupt the
+  //    snapshot. better-sqlite3's .backup() does a page-by-page copy
+  //    that doesn't block readers/writers and produces an internally
+  //    consistent file regardless of WAL state.
+  await db.backup(filepath);
 
   // 5. Stat the backup
   const stat = fs.statSync(filepath);
@@ -394,4 +445,141 @@ export function formatBytes(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+// ---------------------------------------------------------------------------
+// Retention + scheduling (rolling daily backups)
+// ---------------------------------------------------------------------------
+
+export interface RetentionResult {
+  kept: string[];
+  deleted: string[];
+}
+
+export interface ScheduledBackupResult extends RetentionResult {
+  backup: BackupMetadata;
+}
+
+interface BackupConfig {
+  enabled: boolean;
+  backupDir: string;
+  intervalHours: number;
+  retain: number;
+}
+
+/**
+ * Resolve env-driven schedule + retention config. Pure function — no
+ * side effects. Defaults: 24h interval, retain newest 14, dir co-located
+ * with the DB. Disable the schedule via MC_BACKUP_DISABLED=1 (or by
+ * setting MC_BACKUP_INTERVAL_HOURS to a non-positive number).
+ */
+export function resolveBackupConfig(
+  env: Record<string, string | undefined> = process.env,
+): BackupConfig {
+  const intervalHours = Number(env.MC_BACKUP_INTERVAL_HOURS ?? 24);
+  return {
+    enabled: env.MC_BACKUP_DISABLED !== '1' && intervalHours > 0,
+    backupDir: env.MC_BACKUP_DIR ?? path.join(
+      path.dirname(path.resolve(env.DATABASE_PATH ?? './mission-control.db')),
+      'backups',
+    ),
+    intervalHours,
+    retain: Number(env.MC_BACKUP_RETAIN ?? 14),
+  };
+}
+
+/**
+ * Keep the newest `retain` managed backups in `backupDir`; delete the
+ * rest. Recognizes both the canonical mc-backup-* filename and the
+ * legacy mission-control-* filename so transitional rolling files roll
+ * off cleanly. Pre-restore safety backups and operator-managed copies
+ * are left untouched.
+ */
+export async function enforceRetention(
+  backupDir: string,
+  retain: number,
+): Promise<RetentionResult> {
+  if (!fs.existsSync(backupDir)) return { kept: [], deleted: [] };
+
+  // Sort newest-first by *parsed* timestamp, not raw filename — lex
+  // sort puts legacy `mission-control-…` ahead of canonical
+  // `mc-backup-…` (`i` > `c`) which would prune the wrong rows.
+  const all = fs
+    .readdirSync(backupDir)
+    .filter(isManagedBackup)
+    .sort((a, b) => {
+      const ta = parseBackupFilename(a)?.timestamp ?? '';
+      const tb = parseBackupFilename(b)?.timestamp ?? '';
+      // Descending — newest first.
+      return tb.localeCompare(ta);
+    });
+  const cap = Math.max(0, retain);
+  const kept = all.slice(0, cap);
+  const toDelete = all.slice(cap);
+  for (const name of toDelete) {
+    try { fs.unlinkSync(path.join(backupDir, name)); } catch { /* ignore */ }
+  }
+  return { kept, deleted: toDelete };
+}
+
+/**
+ * One-shot backup + retention pass. Used by both the scheduled cron
+ * and the `yarn db:backup` CLI so manual + scheduled runs produce
+ * identical artifacts and respect retention.
+ */
+export async function runScheduledBackup(retain?: number): Promise<ScheduledBackupResult> {
+  const cfg = resolveBackupConfig();
+  const result = await createBackup();
+  const retention = await enforceRetention(cfg.backupDir, retain ?? cfg.retain);
+  return { backup: result.backup, ...retention };
+}
+
+/**
+ * Register the periodic backup tick. Idempotent (safe across HMR /
+ * multi-import). No-ops in tests and when MC_BACKUP_DISABLED=1.
+ *
+ * First backup runs ~30s after boot — lets migrations + any startup
+ * writes settle so the first snapshot reflects a steady state. Then
+ * every intervalHours.
+ */
+export function registerBackupSchedule(getLiveDb: () => Database.Database): void {
+  if (process.env.NODE_ENV === 'test') return;
+  const cfg = resolveBackupConfig();
+  if (!cfg.enabled) {
+    console.log('[Backup] disabled (MC_BACKUP_DISABLED or interval ≤ 0)');
+    return;
+  }
+
+  const g = globalThis as unknown as {
+    __mcBackupTimer?: NodeJS.Timeout;
+    __mcBackupBoot?: NodeJS.Timeout;
+  };
+  if (g.__mcBackupTimer) return;
+
+  // Touch the live DB once during init to make sure migrations etc.
+  // are evaluated before the first backup runs. We don't keep the
+  // reference; createBackup() pulls a fresh handle via getDb().
+  try { getLiveDb(); } catch { /* swallow — backup tick will surface it */ }
+
+  const tick = async (reason: 'boot' | 'scheduled') => {
+    try {
+      const result = await runScheduledBackup(cfg.retain);
+      console.log(
+        `[Backup] ${reason}: wrote ${result.backup.filename} ` +
+          `(${formatBytes(result.backup.size)}); kept=${result.kept.length}, pruned=${result.deleted.length}`,
+      );
+    } catch (err) {
+      console.warn(`[Backup] ${reason} failed:`, (err as Error).message);
+    }
+  };
+
+  g.__mcBackupBoot = setTimeout(() => { void tick('boot'); }, 30_000);
+  g.__mcBackupTimer = setInterval(
+    () => { void tick('scheduled'); },
+    cfg.intervalHours * 60 * 60 * 1000,
+  );
+
+  console.log(
+    `[Backup] scheduled: dir=${cfg.backupDir}, every ${cfg.intervalHours}h, retain=${cfg.retain}`,
+  );
 }
