@@ -77,6 +77,11 @@ export interface ResearchDoneEnvelope {
  * for initial plan emission and post-tweak regeneration — the phase column on
  * the task tells the caller which it is.
  */
+export interface PlanFollowUp {
+  title: string;
+  rationale?: string;
+}
+
 export interface PlanEnvelope {
   kind: 'plan';
   spec: {
@@ -84,6 +89,10 @@ export interface PlanEnvelope {
     summary: string;
     deliverables: Array<SpecDeliverable | string>;
     success_criteria: Array<SpecSuccessCriterion | string>;
+    /** Related-but-out-of-scope work the planner spotted. Persisted with the
+     * spec so an operator/PM can triage these into new tasks, but stripped
+     * from the dispatch brief so the builder doesn't treat them as todos. */
+    follow_ups?: PlanFollowUp[];
     constraints?: Record<string, unknown>;
   };
   agents: Array<{
@@ -258,6 +267,19 @@ function tryBuildPlan(raw: Record<string, unknown>): PlanEnvelope | null {
   const success_criteria = Array.isArray(spec.success_criteria) ? spec.success_criteria : [];
   const agents = Array.isArray(raw.agents) ? raw.agents : [];
 
+  const follow_ups: PlanFollowUp[] = Array.isArray(spec.follow_ups)
+    ? spec.follow_ups.flatMap((entry): PlanFollowUp[] => {
+        if (typeof entry === 'string') {
+          return entry.trim() ? [{ title: entry }] : [];
+        }
+        if (!isRecord(entry)) return [];
+        const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+        if (!title) return [];
+        const rationale = typeof entry.rationale === 'string' ? entry.rationale : undefined;
+        return [{ title, rationale }];
+      })
+    : [];
+
   return {
     kind: 'plan',
     spec: {
@@ -265,6 +287,7 @@ function tryBuildPlan(raw: Record<string, unknown>): PlanEnvelope | null {
       summary: spec.summary,
       deliverables: deliverables as Array<SpecDeliverable | string>,
       success_criteria: success_criteria as Array<SpecSuccessCriterion | string>,
+      follow_ups: follow_ups.length > 0 ? follow_ups : undefined,
       constraints: isRecord(spec.constraints) ? (spec.constraints as Record<string, unknown>) : undefined,
     },
     agents: agents.filter(isRecord).map((a) => {

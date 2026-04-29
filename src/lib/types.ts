@@ -286,6 +286,9 @@ export interface OpenClawSession {
   status: string;
   session_type: 'persistent' | 'subagent';
   task_id?: string;
+  /** Workflow stage that owns this session (e.g. 'in_progress', 'testing').
+   * NULL for non-workflow dispatches (planner, coordinator). */
+  stage?: string | null;
   ended_at?: string;
   created_at: string;
   updated_at: string;

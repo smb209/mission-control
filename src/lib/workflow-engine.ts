@@ -10,6 +10,7 @@ import { pickDynamicAgent, escalateFailureIfNeeded, recordLearnerOnTransition } 
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { broadcast } from '@/lib/events';
 import { saveCheckpointThrottled } from '@/lib/checkpoint';
+import { createNote } from '@/lib/task-notes';
 import type { Task, WorkflowTemplate, WorkflowStage, TaskRole } from '@/lib/types';
 
 interface StageTransitionResult {
@@ -143,24 +144,34 @@ export async function handleStageTransition(
     return { success: true, handedOff: false };
   }
 
-  // Find the agent assigned to this role (task_roles first, then fall back to assigned_agent_id)
+  // Find the agent assigned to this role. Resolution order:
+  //   1. task_roles row matching the stage role — explicit assignment wins.
+  //   2. assigned_agent_id, BUT only if its role matches the stage role.
+  //      Re-using a role-mismatched assignee (e.g. dispatching the Builder
+  //      to the Test stage because no Tester is wired up) silently breaks
+  //      Build/Test/Review isolation: the same agent picks up its own
+  //      handoff and reviews its own code. We refuse that fallback now and
+  //      let dynamic routing or a hard error surface the gap.
+  //   3. pickDynamicAgent — planner+rules pick by role over the workspace
+  //      roster.
   let roleAgent = getAgentForRole(taskId, targetStage.role);
   let resolution: 'task_role' | 'assigned_fallback' | 'dynamic' = 'task_role';
   if (!roleAgent) {
-    // Fall back to the task's directly assigned agent
     const task = queryOne<{ assigned_agent_id: string | null }>(
       'SELECT assigned_agent_id FROM tasks WHERE id = ?',
       [taskId]
     );
     if (task?.assigned_agent_id) {
-      const agent = queryOne<{ id: string; name: string }>(
-        'SELECT id, name FROM agents WHERE id = ?',
+      const agent = queryOne<{ id: string; name: string; role: string | null }>(
+        'SELECT id, name, role FROM agents WHERE id = ?',
         [task.assigned_agent_id]
       );
-      if (agent) {
-        console.log(`[Workflow] task=${taskId} no task_role for "${targetStage.role}" — using assigned agent "${agent.name}" (${agent.id})`);
-        roleAgent = agent;
+      if (agent && agent.role && agent.role.toLowerCase() === targetStage.role.toLowerCase()) {
+        console.log(`[Workflow] task=${taskId} no task_role for "${targetStage.role}" — using assigned agent "${agent.name}" (${agent.id}) (role match)`);
+        roleAgent = { id: agent.id, name: agent.name };
         resolution = 'assigned_fallback';
+      } else if (agent) {
+        console.log(`[Workflow] task=${taskId} assigned agent "${agent.name}" has role "${agent.role}" but stage requires "${targetStage.role}" — refusing role-mismatched fallback, attempting dynamic routing`);
       }
     }
   }
@@ -303,6 +314,25 @@ export async function handleStageFailure(
     [crypto.randomUUID(), taskId, `Stage failed: ${currentStatus} → ${targetStatus} (reason: ${failReason})`, now]
   );
 
+  // Compose a Prior-stage report and queue it as a pending task_note. The
+  // dispatch route picks up pending notes via getPendingNotesForDispatch
+  // and inlines them into the next agent's brief — that's the channel by
+  // which the Tester's findings reach the Builder on loopback. Just the
+  // failReason string isn't enough; include the most recent deliverables
+  // and any agent activity messages logged during the failing stage so
+  // the next agent has the actual report to act on.
+  try {
+    const reportBody = composePriorStageReport(taskId, currentStatus, targetStatus, failReason);
+    if (reportBody) {
+      createNote(taskId, reportBody, 'note', 'user');
+    }
+  } catch (err) {
+    // Non-fatal: a failed report assembly shouldn't block the loopback
+    // dispatch. The failReason still lands in status_reason and the
+    // dispatch activity log.
+    console.warn('[Workflow] composePriorStageReport failed:', err);
+  }
+
   // Update task status to the fail target
   run(
     'UPDATE tasks SET status = ?, status_reason = ?, updated_at = ? WHERE id = ?',
@@ -326,6 +356,98 @@ export async function handleStageFailure(
 }
 
 /**
+ * Build a markdown report describing what the failing stage produced and
+ * why it failed. Read by the loopback dispatch via the pending-notes
+ * mechanism. Returns null if there's nothing useful to say beyond the
+ * failReason itself (caller can skip the note in that case).
+ */
+function composePriorStageReport(
+  taskId: string,
+  failingStatus: string,
+  targetStatus: string,
+  failReason: string,
+): string | null {
+  // Find the timestamp the task entered the failing stage so we only
+  // report on what THIS stage did — not history from earlier loops.
+  const entry = queryOne<{ created_at: string }>(
+    `SELECT created_at FROM task_activities
+       WHERE task_id = ? AND activity_type = 'status_changed'
+         AND message LIKE ?
+       ORDER BY created_at DESC LIMIT 1`,
+    [taskId, `%→ ${failingStatus}%`],
+  );
+  const since = entry?.created_at ?? null;
+
+  // Deliverables produced during the failing stage. The role='output'
+  // filter excludes inputs the agent was handed.
+  const deliverables = queryAll<{ title: string; path: string | null; description: string | null; deliverable_type: string }>(
+    since
+      ? `SELECT title, path, description, deliverable_type
+           FROM task_deliverables
+          WHERE task_id = ? AND role = 'output' AND created_at >= ?
+          ORDER BY created_at ASC`
+      : `SELECT title, path, description, deliverable_type
+           FROM task_deliverables
+          WHERE task_id = ? AND role = 'output'
+          ORDER BY created_at DESC LIMIT 10`,
+    since ? [taskId, since] : [taskId],
+  );
+
+  // Activity messages from the failing stage — log_activity calls and
+  // similar narrate the agent's findings (e.g. Tester's verification
+  // notes). Cap to avoid blowing up the next agent's brief.
+  const activities = queryAll<{ message: string; activity_type: string; created_at: string }>(
+    since
+      ? `SELECT message, activity_type, created_at
+           FROM task_activities
+          WHERE task_id = ? AND created_at >= ?
+            AND activity_type IN ('agent_message', 'progress_update', 'log_activity', 'verification_failed', 'review_failed')
+          ORDER BY created_at ASC LIMIT 15`
+      : `SELECT message, activity_type, created_at
+           FROM task_activities
+          WHERE task_id = ?
+            AND activity_type IN ('agent_message', 'progress_update', 'log_activity', 'verification_failed', 'review_failed')
+          ORDER BY created_at DESC LIMIT 15`,
+    since ? [taskId, since] : [taskId],
+  );
+
+  if (deliverables.length === 0 && activities.length === 0) {
+    // Nothing concrete to add — failReason will reach the next agent via
+    // status_reason on the task row anyway.
+    return null;
+  }
+
+  const lines: string[] = [];
+  lines.push(`Prior stage report — \`${failingStatus}\` → \`${targetStatus}\``);
+  lines.push('');
+  lines.push(`**Reason for loopback:** ${failReason}`);
+
+  if (deliverables.length > 0) {
+    lines.push('');
+    lines.push(`**Deliverables registered during the failing stage (${deliverables.length}):**`);
+    for (const d of deliverables) {
+      const pathPart = d.path ? ` → \`${d.path}\`` : '';
+      const desc = d.description ? `\n      ${d.description.slice(0, 500)}` : '';
+      lines.push(`- (${d.deliverable_type}) **${d.title}**${pathPart}${desc}`);
+    }
+  }
+
+  if (activities.length > 0) {
+    lines.push('');
+    lines.push(`**Agent activity from the failing stage:**`);
+    for (const a of activities) {
+      const msg = (a.message || '').slice(0, 600);
+      lines.push(`- _${a.activity_type}_: ${msg}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('Address each finding before re-submitting. Do not rebuild from scratch — patch the existing deliverables.');
+
+  return lines.join('\n');
+}
+
+/**
  * Auto-populate task_roles from planning agents when a workflow template is assigned.
  * Maps agent roles to workflow stage roles using fuzzy matching.
  */
@@ -333,8 +455,12 @@ export function populateTaskRolesFromAgents(taskId: string, workspaceId: string)
   const workflow = getTaskWorkflow(taskId);
   if (!workflow) return;
 
-  const existingRoles = getTaskRoles(taskId);
-  if (existingRoles.length > 0) return; // Already populated
+  // Fill gaps only — preserve any explicit assignments the caller made
+  // before invoking this helper. Skip stage roles that already have an
+  // entry; previously this returned early on the first existing row,
+  // which silently blocked spawn-time role propagation from finishing
+  // the job.
+  const existingRoles = new Set(getTaskRoles(taskId).map(r => r.role.toLowerCase()));
 
   // Get all agents in the workspace
   const agents = queryAll<{ id: string; name: string; role: string }>(
@@ -345,7 +471,7 @@ export function populateTaskRolesFromAgents(taskId: string, workspaceId: string)
   // For each stage that requires a role, try to find a matching agent
   const roleMap: Record<string, string> = {};
   for (const stage of workflow.stages) {
-    if (!stage.role || roleMap[stage.role]) continue;
+    if (!stage.role || roleMap[stage.role] || existingRoles.has(stage.role.toLowerCase())) continue;
 
     // Try exact match on role name, then fuzzy match
     const match = agents.find(a =>
@@ -361,7 +487,7 @@ export function populateTaskRolesFromAgents(taskId: string, workspaceId: string)
 
   // Learner fallback: the 'learner' role isn't in any workflow stage,
   // so it won't be matched above. Find a learner agent and assign it.
-  if (!roleMap['learner']) {
+  if (!roleMap['learner'] && !existingRoles.has('learner')) {
     const learner = agents.find(a =>
       a.role.toLowerCase() === 'learner' ||
       a.name.toLowerCase().includes('learner')
