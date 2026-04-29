@@ -719,7 +719,29 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
       }
     }
 
-    const taskMessage = `${priorityEmoji} **${headline}**
+    // Workspace conventions block — markdown the operator wrote on the
+    // workspace settings page (workspaces.context_md), prepended to
+    // every dispatch so the agent has rules-of-the-road grounding it
+    // can't get from the task row alone (repo URLs, testing patterns,
+    // git/PR rules, package manager, etc). v0 of org-scope memory
+    // grounding (precursor to the memory-layer epic). Empty / null →
+    // no block at all so we don't render an empty placeholder.
+    let workspaceConventionsSection = '';
+    try {
+      const wsRow = queryOne<{ context_md: string | null }>(
+        `SELECT context_md FROM workspaces WHERE id = ?`,
+        [task.workspace_id],
+      );
+      const ctx = wsRow?.context_md;
+      if (typeof ctx === 'string' && ctx.trim().length > 0) {
+        workspaceConventionsSection =
+          `## Workspace conventions\n\n${ctx.trim()}\n\n---\n\n`;
+      }
+    } catch (err) {
+      console.warn('[Dispatch] workspace context lookup failed:', (err as Error).message);
+    }
+
+    const taskMessage = `${workspaceConventionsSection}${priorityEmoji} **${headline}**
 
 **Title:** ${task.title}
 ${task.description ? `**Description:** ${task.description}\n` : ''}

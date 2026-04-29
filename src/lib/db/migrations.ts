@@ -3422,6 +3422,29 @@ const migrations: Migration[] = [
       console.log('[Migration 051] workspaces.workspace_path added.');
     },
   },
+  {
+    id: '056',
+    name: 'workspaces_context_md',
+    up: (db) => {
+      // Per-workspace markdown blob holding the operator's "rules of
+      // the road" for dispatched agents — repo URLs, testing
+      // conventions, push/PR rules, package manager, etc. Read at task
+      // dispatch time and prepended as a "## Workspace conventions"
+      // block before the task description so workers have grounding
+      // context they can't get from the task row alone.
+      //
+      // v0 of org-scope memory grounding — precursor to the memory-layer
+      // epic. When that epic lands, this column gets absorbed: the
+      // value migrates into a synthetic org-scope memory entry and the
+      // dispatch-injection point swaps from `read column` to
+      // `getRelevantMemory()`. The column itself stays for back-compat.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'context_md')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN context_md TEXT`);
+      }
+      console.log('[Migration 056] workspaces.context_md added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
