@@ -31,6 +31,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={jetbrainsMono.variable}>
       <body className={`${jetbrainsMono.className} bg-mc-bg text-mc-text min-h-screen`}>
+        <AlertDialog />
         <ToastProvider>
           <DemoBanner />
           <ChatProvider>

@@ -285,7 +285,7 @@ export default function AgentsPage() {
       const res = await fetch('/api/openclaw/sessions', { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
-        showAlertDialog(data.error || 'Failed to reset sessions');
+        showAlertDialog('Reset failed', data.error || 'Failed to reset sessions');
         return;
       }
       for (const agent of agents) setAgentOpenClawSession(agent.id, null);
@@ -301,7 +301,7 @@ export default function AgentsPage() {
         lines.push("Fall back: run `/reset` in those agents' OpenClaw chats directly.");
       }
       if (data.gateway_error) lines.push(`Gateway unreachable: ${data.gateway_error}`);
-      showAlertDialog(lines.join('\n').length > 80 ? lines.join('\n') : '', lines.join('\n'));
+      showAlertDialog('Session reset results', lines.join('\n'));
     } catch (err) {
       showAlertDialog('Reset failed', `Failed to reset sessions: ${(err as Error).message}`);
     } finally {
@@ -327,7 +327,7 @@ export default function AgentsPage() {
         if (!res.ok) {
           updateAgent(agent);
           const err = await res.json().catch(() => ({}));
-          showAlertDialog(err.error || 'Failed to update agent');
+          showAlertDialog('Update failed', err.error || 'Failed to update agent');
           return false;
         }
         const fresh = (await res.json()) as Agent;
@@ -369,17 +369,17 @@ export default function AgentsPage() {
       const res = await fetch(`/api/agents/${agent.id}/reset`, { method: 'POST' });
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.sent) {
-        showAlertDialog(`Reset sent — gateway re-init in flight (cleared ${body.deleted ?? 0} session row(s)).`);
+        showAlertDialog('Reset sent', `Gateway re-init in flight (cleared ${body.deleted ?? 0} session row(s)).`);
       } else if (res.ok && !body.sent) {
         showAlertDialog(
           `Gateway didn't ack`,
           `MC-side cleared (${body.deleted ?? 0} row(s)) but gateway didn't ack: ${body.error ?? body.gateway_error ?? 'send failed'}.`,
         );
       } else {
-        showAlertDialog(body.error || `Reset failed (${res.status})`);
+        showAlertDialog('Reset failed', body.error || `Reset failed (${res.status})`);
       }
     } catch (err) {
-      showAlertDialog((err as Error).message || 'Reset failed');
+      showAlertDialog('Reset failed', (err as Error).message || 'Reset failed');
     } finally {
       setResettingAgentId(null);
     }
@@ -399,7 +399,7 @@ export default function AgentsPage() {
           setAgentOpenClawSession(agent.id, data.session as OpenClawSession);
         } else {
           const error = await res.json();
-          showAlertDialog(`Failed to connect: ${error.error || 'Unknown error'}`);
+          showAlertDialog('Connect failed', `Failed to connect: ${error.error || 'Unknown error'}`);
         }
       }
     } catch (error) {
