@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowLeft, Trash2, Play, Pause, Users, ListX, Activity, Download, ChevronDown } from 'lucide-react';
 import type { DebugEvent, DebugEventType, DebugEventDirection } from '@/lib/debug-log';
 import { DebugEventRow } from '@/components/debug/DebugEventRow';
+import { showAlertDialog } from '@/lib/show-alert';
 
 const EVENT_TYPE_OPTIONS: Array<{ value: '' | DebugEventType; label: string }> = [
   { value: '', label: 'All event types' },
@@ -178,12 +179,12 @@ export default function DebugConsolePage() {
       const res = await fetch('/api/agents/local', { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Failed to clear local agents');
+        showAlertDialog(data.error || 'Failed to clear local agents');
         return;
       }
-      alert(`Cleared ${data.deleted} local agent(s).`);
+      showAlertDialog(`Cleared ${data.deleted} local agent(s)`);
     } catch (err) {
-      alert(`Failed to clear local agents: ${(err as Error).message}`);
+      showAlertDialog('Clear failed', `Failed to clear local agents: ${(err as Error).message}`);
     }
   };
 
@@ -193,12 +194,12 @@ export default function DebugConsolePage() {
       const res = await fetch('/api/tasks/clear', { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Failed to clear tasks');
+        showAlertDialog(data.error || 'Failed to clear tasks');
         return;
       }
-      alert(`Cleared ${data.deleted} task(s).`);
+      showAlertDialog(`Cleared ${data.deleted} task(s)`);
     } catch (err) {
-      alert(`Failed to clear tasks: ${(err as Error).message}`);
+      showAlertDialog('Clear failed', `Failed to clear tasks: ${(err as Error).message}`);
     }
   };
 

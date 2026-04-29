@@ -24,6 +24,7 @@ import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
 import PlanWithPmPanel, { type PlanInitiativeSuggestions } from '@/components/PlanWithPmPanel';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
+import { showAlertDialog } from '@/lib/show-alert';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -156,12 +157,12 @@ export default function InitiativesPage() {
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          alert(body.error || 'Detach failed');
+          showAlertDialog('Detach failed', body.error || 'Detach failed');
           return;
         }
         refresh();
       } catch (e) {
-        alert(e instanceof Error ? e.message : 'Detach failed');
+        showAlertDialog('Detach failed', e instanceof Error ? e.message : 'Detach failed');
       }
     },
     [refresh],
@@ -219,7 +220,7 @@ export default function InitiativesPage() {
                   const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
                   if (!res.ok) {
                     const body = await res.json().catch(() => ({}));
-                    alert(body.error || 'Delete failed');
+                    showAlertDialog('Delete failed', body.error || 'Delete failed');
                     return;
                   }
                   refresh();
