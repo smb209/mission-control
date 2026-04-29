@@ -10,22 +10,7 @@ import {
   stripSuggestionsSidecar,
   parseSuggestionsFromImpactMd,
 } from '@/lib/pm/planSuggestionsSidecar';
-
-interface PmDiff {
-  kind: string;
-  initiative_id?: string;
-  agent_id?: string;
-  status?: string;
-  target_start?: string;
-  target_end?: string;
-  start?: string;
-  end?: string;
-  reason?: string;
-  depends_on_initiative_id?: string;
-  dependency_id?: string;
-  parent_id?: string | null;
-  child_ids_in_order?: string[];
-}
+import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
 
 interface PmProposal {
   id: string;
@@ -58,30 +43,8 @@ const TRIGGER_BADGE: Record<string, { label: string; cls: string }> = {
   decompose_initiative: { label: 'decompose', cls: 'bg-pink-500/15 text-pink-300 border-pink-500/30' },
 };
 
-function summarizeDiff(c: PmDiff): string {
-  switch (c.kind) {
-    case 'shift_initiative_target':
-      return `shift ${short(c.initiative_id)}: ${c.target_start ?? '∅'} → ${c.target_end ?? '∅'}`;
-    case 'add_availability':
-      return `availability ${short(c.agent_id)}: ${c.start} – ${c.end}`;
-    case 'set_initiative_status':
-      return `${short(c.initiative_id)} → ${c.status}`;
-    case 'add_dependency':
-      return `dep ${short(c.initiative_id)} blocks on ${short(c.depends_on_initiative_id)}`;
-    case 'remove_dependency':
-      return `remove dep ${short(c.dependency_id)}`;
-    case 'reorder_initiatives':
-      return `reorder under ${short(c.parent_id) || 'root'} (${c.child_ids_in_order?.length ?? 0})`;
-    case 'update_status_check':
-      return `status_check ${short(c.initiative_id)}`;
-    default:
-      return c.kind ?? '?';
-  }
-}
-
-function short(id: string | null | undefined): string {
-  return id ? id.slice(0, 8) : '∅';
-}
+// summarizeDiff lives in @/components/pm/ProposalDiffsList — both
+// /pm and the standalone detail page render through the same component.
 
 export default function ProposalDetailPage({
   params,
@@ -257,13 +220,15 @@ export default function ProposalDetailPage({
                 </div>
               )}
 
-              {/* Proposed changes */}
+              {/* Proposed changes — shared component with /pm. The
+                  detail page has more vertical room than the inline
+                  chat card, so we ask for the full list (no fold). */}
               {proposal.proposed_changes.length > 0 && (
-                <div className="px-4 py-3 border-b border-amber-500/20 space-y-1 text-xs text-mc-text-secondary font-mono">
-                  {proposal.proposed_changes.map((c, i) => (
-                    <div key={i}>· {summarizeDiff(c)}</div>
-                  ))}
-                </div>
+                <ProposalDiffsList
+                  diffs={proposal.proposed_changes}
+                  showAll
+                  className="px-4 py-3 border-b border-amber-500/20 space-y-1"
+                />
               )}
 
               {/* Actions */}
