@@ -159,9 +159,74 @@ export function transitionTaskStatus(
   }
 
   const task = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+
+  // Convoy + workflow side effects. These used to live only in the
+  // /api/tasks/[id] PATCH route, so MCP-driven status changes
+  // (`update_task_status`, `accept_subtask`) bypassed them entirely. The
+  // Builder marking a subtask done would update the row but never bump
+  // the parent convoy's completed_subtasks, so checkConvoyCompletion
+  // never ran and the parent stayed in convoy_active until the stall
+  // scanner flagged it. Run them here so every status mutation gets
+  // consistent treatment regardless of caller.
+  runPostStatusChangeSideEffects({
+    taskId,
+    previousStatus: existing.status,
+    newStatus,
+    workspaceId: existing.workspace_id,
+    convoyId: existing.convoy_id ?? null,
+  });
+
   return {
     ok: true,
     task: task ?? existing,
     previousStatus: existing.status,
   };
+}
+
+/**
+ * Convoy + drain hooks that must fire on every status change, regardless
+ * of whether the source is an API PATCH or an MCP tool. Idempotent —
+ * safe to call from multiple call sites if a future refactor stacks them.
+ */
+export function runPostStatusChangeSideEffects(input: {
+  taskId: string;
+  previousStatus: string;
+  newStatus: string;
+  workspaceId: string;
+  convoyId: string | null;
+}): void {
+  const { taskId, previousStatus, newStatus, workspaceId, convoyId } = input;
+  if (newStatus === previousStatus) return;
+
+  // Lazy imports to avoid pulling convoy + workflow engine into modules
+  // that only import the type signatures of task-status.
+  if (convoyId) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const convoy = require('@/lib/convoy') as typeof import('@/lib/convoy');
+      convoy.updateConvoyProgress(convoyId);
+      if (newStatus === 'done') {
+        const wasFinal = convoy.checkConvoyCompletion(convoyId);
+        if (!wasFinal) {
+          convoy.dispatchReadyConvoySubtasks(convoyId).catch((err: unknown) => {
+            console.error('[Convoy] auto-dispatch on subtask done failed:', err);
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[Convoy] progress update failed:', err);
+    }
+  }
+
+  if (newStatus === 'done') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const wf = require('@/lib/workflow-engine') as typeof import('@/lib/workflow-engine');
+      wf.drainQueue(taskId, workspaceId).catch((err: unknown) => {
+        console.error('[Workflow] drainQueue after done failed:', err);
+      });
+    } catch (err) {
+      console.error('[Workflow] drainQueue failed:', err);
+    }
+  }
 }

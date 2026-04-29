@@ -4,6 +4,7 @@ import { broadcast } from '@/lib/events';
 import { notifyLearner } from '@/lib/learner';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { pickDynamicAgent } from '@/lib/task-governance';
+import { getTaskWorkflow, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import type { Convoy, ConvoySubtask, Task, ConvoyStatus, DecompositionStrategy } from '@/lib/types';
 
 /**
@@ -636,6 +637,64 @@ export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelega
       `UPDATE convoys SET total_subtasks = total_subtasks + 1, updated_at = ? WHERE id = ?`,
       [now, convoy.id]
     );
+
+    // Propagate workflow role assignments to the child. Without this the
+    // child inherits a multi-stage workflow (Build/Test/Review) but only
+    // has assigned_agent_id set to the spawned peer — every other stage
+    // role has no assignment, and the workflow engine's old fallback
+    // would silently re-dispatch the same peer as Tester/Reviewer in its
+    // own session. Now we wire the child's task_roles up front:
+    //   1. The stage role matching the spawned peer's role → the peer.
+    //   2. Every other stage role inherits from the parent's task_roles
+    //      when present (so a Tester/Reviewer the operator wired up at
+    //      the parent level cascades to spawned children).
+    //   3. populateTaskRolesFromAgents fills any remaining gaps via fuzzy
+    //      match against the workspace roster.
+    const childWorkflow = getTaskWorkflow(childTaskId);
+    if (childWorkflow) {
+      const peerRoleKey = (input.suggestedRole || '').toLowerCase();
+      const inserted = new Set<string>();
+
+      // Stage role matching the peer agent's role
+      for (const stage of childWorkflow.stages) {
+        if (!stage.role) continue;
+        if (stage.role.toLowerCase() === peerRoleKey) {
+          run(
+            `INSERT OR IGNORE INTO task_roles (id, task_id, role, agent_id, created_at)
+             VALUES (?, ?, ?, ?, datetime('now'))`,
+            [uuidv4(), childTaskId, stage.role, input.peerAgentId],
+          );
+          inserted.add(stage.role);
+        }
+      }
+
+      // Inherit remaining stage roles from the parent's task_roles
+      const parentRoles = queryAll<{ role: string; agent_id: string }>(
+        'SELECT role, agent_id FROM task_roles WHERE task_id = ?',
+        [parent.id],
+      );
+      const parentRoleMap = new Map<string, string>();
+      for (const pr of parentRoles) {
+        parentRoleMap.set(pr.role.toLowerCase(), pr.agent_id);
+      }
+      for (const stage of childWorkflow.stages) {
+        if (!stage.role || inserted.has(stage.role)) continue;
+        const parentAgentId = parentRoleMap.get(stage.role.toLowerCase());
+        if (parentAgentId) {
+          run(
+            `INSERT OR IGNORE INTO task_roles (id, task_id, role, agent_id, created_at)
+             VALUES (?, ?, ?, ?, datetime('now'))`,
+            [uuidv4(), childTaskId, stage.role, parentAgentId],
+          );
+          inserted.add(stage.role);
+        }
+      }
+
+      // Fall back to fuzzy matching for any role still unassigned. The
+      // helper is a no-op when task_roles already has rows for every
+      // stage role, so calling it after our explicit inserts is safe.
+      populateTaskRolesFromAgents(childTaskId, parent.workspace_id);
+    }
 
     return {
       subtaskId,

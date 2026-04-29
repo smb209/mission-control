@@ -208,6 +208,12 @@ CREATE TABLE IF NOT EXISTS openclaw_sessions (
   status TEXT DEFAULT 'active',
   session_type TEXT DEFAULT 'persistent',
   task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+  -- Workflow stage owning this session (e.g. 'in_progress', 'testing').
+  -- NULL for non-workflow dispatches (planner, coordinator). The lookup
+  -- in the dispatch route keys on (agent_id, task_id, stage) so distinct
+  -- stages get distinct gateway-side conversations even when routed to
+  -- the same agent.
+  stage TEXT,
   ended_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -967,6 +973,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deliverables_task ON task_deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task ON openclaw_sessions(task_id);
+CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task_agent_stage ON openclaw_sessions(task_id, agent_id, stage);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_workflow_templates_workspace ON workflow_templates(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_task_roles_task ON task_roles(task_id);

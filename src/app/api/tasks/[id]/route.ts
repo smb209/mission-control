@@ -3,9 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { internalDispatch } from '@/lib/internal-dispatch';
-import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
+import { handleStageTransition, handleStageFailure, getTaskWorkflow, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
+import { runPostStatusChangeSideEffects } from '@/lib/services/task-status';
 import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
-import { updateConvoyProgress, checkConvoyCompletion, dispatchReadyConvoySubtasks } from '@/lib/convoy';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
 import { UpdateTaskSchema } from '@/lib/validation';
@@ -464,24 +464,18 @@ export async function PATCH(
       );
     }
 
-    // If this is a sub-task, update convoy progress and check completion
-    if (nextStatus && nextStatus !== existing.status && existing.convoy_id) {
-      try {
-        updateConvoyProgress(existing.convoy_id);
-        if (nextStatus === 'done') {
-          const wasFinal = checkConvoyCompletion(existing.convoy_id);
-          // If the convoy still has work left, promote any sub-tasks whose
-          // dependencies just cleared. Without this the convoy stalls with
-          // dependent sub-tasks permanently stuck in inbox.
-          if (!wasFinal) {
-            dispatchReadyConvoySubtasks(existing.convoy_id).catch(err =>
-              console.error('[Convoy] auto-dispatch on subtask done failed:', err)
-            );
-          }
-        }
-      } catch (err) {
-        console.error('[Convoy] progress update failed:', err);
-      }
+    // Convoy progress + completion + drainQueue side effects. The shared
+    // helper (also called from MCP-driven transitions in transitionTaskStatus)
+    // is the single source of truth so a status change behaves the same
+    // whether it came from this route or update_task_status / accept_subtask.
+    if (nextStatus && nextStatus !== existing.status) {
+      runPostStatusChangeSideEffects({
+        taskId: id,
+        previousStatus: existing.status,
+        newStatus: nextStatus,
+        workspaceId: existing.workspace_id,
+        convoyId: existing.convoy_id ?? null,
+      });
     }
 
     // Extract skills from completed task (non-blocking, async)
@@ -493,18 +487,12 @@ export async function PATCH(
       );
     }
 
-    // Drain the review queue when a task reaches 'done' (frees the verification slot)
-    if (nextStatus === 'done') {
-      drainQueue(id, existing.workspace_id).catch(err =>
-        console.error('[Workflow] drainQueue after done failed:', err)
+    // Trigger workspace merge if task has an isolated workspace.
+    // (drainQueue is now handled by runPostStatusChangeSideEffects above.)
+    if (nextStatus === 'done' && existing.workspace_path) {
+      triggerWorkspaceMerge(id).catch(err =>
+        console.error('[Workspace] merge after done failed:', err)
       );
-
-      // Trigger workspace merge if task has an isolated workspace
-      if (existing.workspace_path) {
-        triggerWorkspaceMerge(id).catch(err =>
-          console.error('[Workspace] merge after done failed:', err)
-        );
-      }
     }
 
     return NextResponse.json(task);

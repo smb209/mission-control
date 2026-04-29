@@ -127,23 +127,42 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // Get or create OpenClaw session for this agent + task combination
+    // Resolve the workflow stage that owns this dispatch. Sessions are
+    // keyed on (agent_id, task_id, stage) so the same agent landing in
+    // two stages (e.g. via fallback routing) gets two distinct gateway
+    // conversations rather than appending to a shared context. NULL =
+    // no workflow stage (planner / coordinator / legacy paths) — the
+    // lookup matches NULL-stage sessions for those callers.
+    const dispatchWorkflow = getTaskWorkflow(id);
+    const dispatchStage: string | null = dispatchWorkflow
+      ? (dispatchWorkflow.stages.find(s => s.status === task.status)?.id ?? null)
+      : null;
+
+    // Get or create OpenClaw session for this agent + task + stage. The
+    // NULL-aware predicate means a missing stage parameter only matches
+    // a row that was also written with NULL stage — so workflow
+    // dispatches and non-workflow dispatches don't cross-pollinate.
     let session = queryOne<OpenClawSession>(
-      'SELECT * FROM openclaw_sessions WHERE agent_id = ? AND task_id = ? AND status = ?',
-      [agent.id, id, 'active']
+      `SELECT * FROM openclaw_sessions
+         WHERE agent_id = ? AND task_id = ? AND status = 'active'
+           AND ((stage IS NULL AND ? IS NULL) OR stage = ?)`,
+      [agent.id, id, dispatchStage, dispatchStage]
     );
 
     const now = new Date().toISOString();
 
     if (!session) {
-      // Create session record
+      // Create session record. The session id encodes the stage so the
+      // gateway-side conversation is observably distinct in debug logs
+      // even before we look at the row.
       const sessionId = uuidv4();
-      const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}-${id}`;
+      const stageSlug = dispatchStage ? `-${dispatchStage}` : '';
+      const openclawSessionId = `mission-control-${agent.name.toLowerCase().replace(/\s+/g, '-')}-${id}${stageSlug}`;
 
       run(
-        `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, task_id, channel, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [sessionId, agent.id, openclawSessionId, id, 'mission-control', 'active', now, now]
+        `INSERT INTO openclaw_sessions (id, agent_id, openclaw_session_id, task_id, stage, channel, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [sessionId, agent.id, openclawSessionId, id, dispatchStage, 'mission-control', 'active', now, now]
       );
 
       session = queryOne<OpenClawSession>(
@@ -256,6 +275,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (rawTask.planning_spec) {
       try {
         const spec = JSON.parse(rawTask.planning_spec);
+        // follow_ups are persisted alongside the spec for operator triage but
+        // must NOT bleed into the builder's brief — they describe work that
+        // is intentionally out of scope for THIS task.
+        if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+          delete (spec as Record<string, unknown>).follow_ups;
+        }
         // planning_spec may be an object with spec_markdown, or a raw string
         const specText = typeof spec === 'string' ? spec : (spec.spec_markdown || JSON.stringify(spec, null, 2));
         planningSpecSection = `\n---\n**📋 PLANNING SPECIFICATION:**\n${specText}\n`;

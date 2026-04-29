@@ -3445,6 +3445,29 @@ const migrations: Migration[] = [
       console.log('[Migration 056] workspaces.context_md added.');
     },
   },
+  {
+    id: '057',
+    name: 'openclaw_sessions_stage',
+    up: (db) => {
+      // Stage-scope the session lookup so a workflow's Build/Test/Review
+      // stages each get a distinct gateway-side conversation, even when
+      // they happen to be assigned to the same agent (e.g. fallback paths
+      // that re-pick the builder for a missing tester role). Without this
+      // column the lookup keys on (agent_id, task_id) only, which causes
+      // context append-bleed when the workflow loops the same agent
+      // across stages — see the AlertDialog dispatch where the Builder
+      // ended up role-playing Tester and Reviewer in its own session.
+      const cols = db.prepare(`PRAGMA table_info(openclaw_sessions)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'stage')) {
+        db.exec(`ALTER TABLE openclaw_sessions ADD COLUMN stage TEXT`);
+      }
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task_agent_stage
+           ON openclaw_sessions(task_id, agent_id, stage)`,
+      );
+      console.log('[Migration 057] openclaw_sessions.stage added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
