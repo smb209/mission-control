@@ -58,6 +58,18 @@ rather than deleting — the trail is useful retrospectively.
 
 ## Memory / PM
 
+- [ ] **`refine_proposal` for `decompose_initiative` is LLM-less.** At
+  `src/app/api/pm/proposals/[id]/refine/route.ts:163-180`, the
+  decompose branch only calls `synthesizeDecompose(init, combinedHint)`
+  and skips the named-agent path entirely. Same shape as the
+  `plan_initiative` branch already does (lines 80-162) via
+  `dispatchPmSynthesized` + `await dispatch.completion` — that's the
+  template to mirror. Surfaced during dogfood: a refine on the
+  memory-layer epic produced 3 generic Discovery/Implementation/
+  Verification stories instead of an actual refinement of the 8
+  agent-generated stories. Promote to a real fix soon — refine is
+  load-bearing for the planning loop.
+
 - [ ] **`import-workspace` to reload from JSON export.** Out of scope
   on PR #93 (export-only). Output is INSERT-shaped, so an importer
   iterates `tables` in dependency order. Open question: workspace_id
