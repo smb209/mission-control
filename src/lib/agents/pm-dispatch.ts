@@ -571,6 +571,22 @@ async function runNamedAgentDispatchInBackground(
         trigger_kind: input.trigger_kind,
         target_initiative_id: input.target_initiative_id ?? null,
       });
+      // Re-echo the agent's impact_md as a fresh chat message anchored
+      // to the new (agent-generated) proposal id. Without this the chat
+      // thread keeps pointing at the placeholder — which is now
+      // `superseded` — and the operator never sees the richer agent
+      // breakdown in the inline thread (only in the Recent proposals
+      // rail). Mirrors the disruption path's behavior.
+      try {
+        postPmChatMessage({
+          workspace_id: input.workspace_id,
+          content: found.impact_md,
+          proposal_id: found.id,
+          role: 'assistant',
+        });
+      } catch (err) {
+        console.warn('[pm-dispatch] agent chat re-echo failed:', (err as Error).message);
+      }
       // plan_initiative-specific backfill: if the agent omitted dates in
       // its plan_suggestions, fill from the synth's (always populated)
       // target window so the operator's Apply form has dates to apply.
