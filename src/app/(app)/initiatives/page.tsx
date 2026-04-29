@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
   Plus,
@@ -18,6 +18,7 @@ import {
   Network,
   FileText,
   CalendarRange,
+  ExternalLink,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
@@ -357,14 +358,38 @@ function InitiativeRow({
   onDelete: (init: Initiative) => void;
   onDecompose: (init: Initiative) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // Two independent expansion states. Earlier the single `expanded`
+  // controlled the details panel AND children stayed always-rendered,
+  // which made the tree exhausting to navigate (collapsing a parent
+  // didn't actually collapse the subtree below). Splitting into two
+  // gestures:
+  //   1. Chevron toggles CHILDREN visibility (default: expanded).
+  //      Collapsing shows a compact "(N direct, M total)" summary.
+  //   2. Clicking the title toggles the DETAILS panel inline (description
+  //      + dependencies + parent-history). Default: collapsed.
+  // Plus an explicit ExternalLink icon next to the title that navigates
+  // to /initiatives/[id] for the full-page edit UI.
+  const [childrenExpanded, setChildrenExpanded] = useState(true);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const counts = taskCounts[node.id];
   const isStory = node.kind === 'story';
   const isContainer = node.kind !== 'story';
   const hasParent = !!node.parent_initiative_id;
   const isDecomposable = node.kind === 'epic' || node.kind === 'milestone';
 
-  // The carat for expand/collapse stays as its own affordance per the spec.
+  // Direct + total descendant counts for the collapsed-children summary.
+  // useMemo keeps the recursion off the render hot path; node identity
+  // changes when the parent reflows after a CRUD operation.
+  const directChildrenCount = node.children.length;
+  const totalDescendantCount = useMemo(() => {
+    function walk(n: TreeNode): number {
+      let total = n.children.length;
+      for (const c of n.children) total += walk(c);
+      return total;
+    }
+    return walk(node);
+  }, [node]);
+
   // High-frequency actions ("Promote to task" for stories, "Add child" for
   // containers) get inline labelled buttons; everything else is in the ⋮
   // overflow menu.
@@ -407,25 +432,50 @@ function InitiativeRow({
         style={{ marginLeft: depth * 24 }}
       >
         <button
-          title={expanded ? 'Hide details' : 'Show details (history + dependencies)'}
-          onClick={() => setExpanded(v => !v)}
-          aria-label={expanded ? 'Collapse' : 'Expand'}
-          aria-expanded={expanded}
-          className="p-1 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
+          title={
+            childrenExpanded
+              ? `Collapse subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
+              : `Expand subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
+          }
+          onClick={() => setChildrenExpanded(v => !v)}
+          aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
+          aria-expanded={childrenExpanded}
+          disabled={directChildrenCount === 0}
+          className="p-1 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent"
         >
-          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          {childrenExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
           {node.kind}
         </span>
-        <Link
-          href={`/initiatives/${node.id}`}
-          className="font-medium text-mc-text hover:text-mc-accent"
-          title="Open initiative detail"
+        <button
+          type="button"
+          onClick={() => setDetailsExpanded(v => !v)}
+          aria-expanded={detailsExpanded}
+          aria-label={detailsExpanded ? `Hide details for ${node.title}` : `Show details for ${node.title}`}
+          title={detailsExpanded ? 'Hide details (description + dependencies + history)' : 'Show details (description + dependencies + history)'}
+          className="font-medium text-mc-text hover:text-mc-accent text-left cursor-pointer"
         >
           {node.title}
+        </button>
+        <Link
+          href={`/initiatives/${node.id}`}
+          title="Open the full initiative page (edit UI, full description, etc.)"
+          aria-label={`Open ${node.title} detail page`}
+          className="text-mc-text-secondary hover:text-mc-accent inline-flex items-center"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
         </Link>
         <span className="text-xs text-mc-text-secondary">{node.status}</span>
+        {!childrenExpanded && directChildrenCount > 0 && (
+          <span
+            className="text-[11px] text-mc-text-secondary/80"
+            title={`${directChildrenCount} direct children, ${totalDescendantCount} total descendants in collapsed subtree`}
+          >
+            · {directChildrenCount} direct
+            {totalDescendantCount > directChildrenCount && `, ${totalDescendantCount} total`}
+          </span>
+        )}
         {counts && counts.total > 0 && (
           <span
             className="text-[11px] text-mc-text-secondary"
@@ -465,33 +515,42 @@ function InitiativeRow({
           <ActionMenu items={menuItems} ariaLabel={`Actions for ${node.title}`} />
         </div>
       </li>
-      {expanded && (
+      {detailsExpanded && (
         <li
           className="rounded-lg bg-mc-bg border border-mc-border/60 px-3 py-2 -mt-1 text-sm"
           style={{ marginLeft: depth * 24 + 12 }}
         >
           <DetailsPanel initiative={node} allInitiatives={allInitiatives} />
+          <div className="mt-2 pt-2 border-t border-mc-border/60 flex justify-end">
+            <Link
+              href={`/initiatives/${node.id}`}
+              className="text-xs text-mc-text-secondary hover:text-mc-accent inline-flex items-center gap-1"
+            >
+              <ExternalLink className="w-3 h-3" /> Open full page
+            </Link>
+          </div>
         </li>
       )}
-      {node.children.map(c => (
-        <InitiativeRow
-          key={c.id}
-          node={c}
-          depth={depth + 1}
-          allInitiatives={allInitiatives}
-          taskCounts={taskCounts}
-          onEdit={onEdit}
-          onAddChild={onAddChild}
-          onMove={onMove}
-          onConvert={onConvert}
-          onPromote={onPromote}
-          onShowHistory={onShowHistory}
-          onAddDependency={onAddDependency}
-          onDetach={onDetach}
-          onDecompose={onDecompose}
-          onDelete={onDelete}
-        />
-      ))}
+      {childrenExpanded &&
+        node.children.map(c => (
+          <InitiativeRow
+            key={c.id}
+            node={c}
+            depth={depth + 1}
+            allInitiatives={allInitiatives}
+            taskCounts={taskCounts}
+            onEdit={onEdit}
+            onAddChild={onAddChild}
+            onMove={onMove}
+            onConvert={onConvert}
+            onPromote={onPromote}
+            onShowHistory={onShowHistory}
+            onAddDependency={onAddDependency}
+            onDetach={onDetach}
+            onDecompose={onDecompose}
+            onDelete={onDelete}
+          />
+        ))}
     </>
   );
 }
