@@ -21,6 +21,7 @@ import {
   type PlanInitiativeSuggestionsBlob,
 } from '@/lib/pm/planSuggestionsSidecar';
 import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
+import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -80,21 +81,9 @@ const STATUS_BADGE: Record<PmProposal['status'], string> = {
 // Trigger-kind badge palette. Distinct colors so the operator can tell at a
 // glance whether a card was operator-initiated (manual), scheduled (drift),
 // or a disruption response.
-const TRIGGER_BADGE: Record<string, { label: string; cls: string }> = {
-  manual: { label: 'manual', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
-  scheduled_drift_scan: {
-    label: 'scheduled',
-    cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
-  },
-  disruption_event: {
-    label: 'disruption',
-    cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
-  },
-  status_check_investigation: {
-    label: 'status check',
-    cls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-  },
-};
+// Trigger-kind badge map factored to @/components/pm/triggerBadge so
+// /pm and /pm/proposals/[id] can't drift again (this map used to be
+// missing plan/decompose/notes — all three rendered as blue "manual").
 
 export default function PmChatPage() {
   // useSearchParams() requires a Suspense boundary during static prerender
@@ -806,7 +795,7 @@ function ChatMessageRow({
   }
 
   // Proposal card
-  const trigger = TRIGGER_BADGE[proposal.trigger_kind] ?? TRIGGER_BADGE.manual;
+  const trigger = triggerBadgeFor(proposal.trigger_kind);
   return (
     <div className="mr-12">
       <div

@@ -11,6 +11,7 @@ import {
   parseSuggestionsFromImpactMd,
 } from '@/lib/pm/planSuggestionsSidecar';
 import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
+import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 
 interface PmProposal {
   id: string;
@@ -34,17 +35,8 @@ const STATUS_BADGE: Record<PmProposal['status'], string> = {
   superseded: 'bg-zinc-500/20 text-zinc-300',
 };
 
-const TRIGGER_BADGE: Record<string, { label: string; cls: string }> = {
-  manual: { label: 'manual', cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
-  scheduled_drift_scan: { label: 'scheduled', cls: 'bg-violet-500/15 text-violet-300 border-violet-500/30' },
-  disruption_event: { label: 'disruption', cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30' },
-  status_check_investigation: { label: 'status check', cls: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30' },
-  plan_initiative: { label: 'plan', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
-  decompose_initiative: { label: 'decompose', cls: 'bg-pink-500/15 text-pink-300 border-pink-500/30' },
-};
-
-// summarizeDiff lives in @/components/pm/ProposalDiffsList — both
-// /pm and the standalone detail page render through the same component.
+// Trigger badge map + summarizeDiff both live in @/components/pm — both
+// pages render through the same components/helpers, no parallel maps.
 
 export default function ProposalDetailPage({
   params,
@@ -141,7 +133,7 @@ export default function ProposalDetailPage({
     }
   };
 
-  const trigger = proposal ? (TRIGGER_BADGE[proposal.trigger_kind] ?? TRIGGER_BADGE.manual) : null;
+  const trigger = proposal ? triggerBadgeFor(proposal.trigger_kind) : null;
   const displayMd = proposal ? stripSuggestionsSidecar(proposal.impact_md).trim() : '';
   const suggestions = proposal?.trigger_kind === 'plan_initiative'
     ? parseSuggestionsFromImpactMd(proposal.impact_md)
