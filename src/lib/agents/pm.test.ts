@@ -635,6 +635,73 @@ test('dispatchPmSynthesized: returns synth placeholder synchronously when gatewa
   }
 });
 
+test('dispatchPmSynthesized: agent supersede re-echoes a chat message anchored to the new proposal id', async () => {
+  // Without this re-echo the chat thread keeps anchoring to the
+  // (now superseded) synth placeholder and the operator never sees
+  // the agent's richer breakdown inline. The right-rail proposals
+  // list still surfaces the new row; the chat does not. Mirrors the
+  // disruption-path behavior in dispatchPm.
+  const ws = freshWorkspace();
+  ensurePmAgent(ws);
+  const agentImpactMd = '### Agent reply\n- 8-story decomposition with deps';
+  const { client } = makeFakeClient({
+    onChatSend: () => {
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'agent reply',
+        trigger_kind: 'decompose_initiative',
+        impact_md: agentImpactMd,
+        proposed_changes: [],
+      });
+    },
+  });
+  __setOpenClawClientForTests(client);
+  __setNamedAgentTimeoutForTests(2_000);
+  try {
+    const dispatch = dispatchPmSynthesized({
+      workspace_id: ws,
+      trigger_text: JSON.stringify({ mode: 'decompose_initiative' }),
+      trigger_kind: 'decompose_initiative',
+      synth: baseSynth,
+      agent_prompt: 'decompose it',
+    });
+    const settled = await dispatch.completion;
+    assert.equal(settled.used_named_agent, true);
+    const agentRowId = settled.final.id;
+    assert.notEqual(agentRowId, dispatch.proposal.id);
+
+    // Note: dispatchPmSynthesized doesn't post the placeholder chat
+    // anchor itself — that's the API route caller's job (see e.g.
+    // /api/pm/decompose-initiative). What this test asserts is that
+    // dispatchPmSynthesized DOES post a re-echo anchored to the
+    // agent's superseding row, mirroring dispatchPm's behavior.
+    const pm = queryOne<{ id: string }>(
+      `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm'`,
+      [ws],
+    );
+    assert.ok(pm);
+    const messages = queryAll<{ role: string; metadata: string | null; content: string }>(
+      `SELECT role, metadata, content FROM agent_chat_messages WHERE agent_id = ? ORDER BY created_at`,
+      [pm!.id],
+    );
+    const reEcho = messages.find(m => {
+      if (m.role !== 'assistant' || !m.metadata) return false;
+      try {
+        const meta = JSON.parse(m.metadata) as { proposal_id?: string };
+        return meta.proposal_id === agentRowId;
+      } catch { return false; }
+    });
+    assert.ok(
+      reEcho,
+      `expected a chat message anchored to agent row ${agentRowId}; messages: ${JSON.stringify(messages)}`,
+    );
+    assert.equal(reEcho!.content, agentImpactMd);
+  } finally {
+    __setOpenClawClientForTests(null);
+    __setNamedAgentTimeoutForTests(null);
+  }
+});
+
 test('dispatchPmSynthesized: timeoutMs is honored — bumping it lets a slow agent win', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
