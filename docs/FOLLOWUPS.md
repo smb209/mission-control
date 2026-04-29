@@ -56,6 +56,22 @@ rather than deleting — the trail is useful retrospectively.
   cosmetic. Worth doing only if the OFFLINE clutter starts to bug us
   in practice.
 
+## Planning UX
+
+- [ ] **Roadmap-style preview on proposal review cards.** Today the
+  `create_child_initiative` diff list (PR #101) shows a structured
+  per-row view with $N + complexity badge + dep arrow. That's good
+  for triage. What it doesn't show is the *shape* of the resulting
+  work: critical-path depth, parallelism opportunities, where an XL
+  decomposition is going to bottleneck. A speculative Gantt view
+  that forecasts story duration from complexity (M = N days, L = M
+  days, etc.) and chains via `depends_on_initiative_ids` would
+  catch "this is too sequential" or "you XL'd everything" before
+  accept. Plugs into the same derivation engine that drives real
+  initiatives (\`derived_*\` fields). Epic-sized — naive forecast
+  is one PR, velocity-driven (per agent/role/availability) is
+  several. Surfaced during the dogfood theme decompose review.
+
 ## Memory / PM
 
 - [ ] **`refine_proposal` for `decompose_initiative` is LLM-less.** At

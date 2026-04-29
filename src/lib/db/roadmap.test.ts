@@ -159,6 +159,35 @@ function buildFixture(): Fixture {
   };
 }
 
+test('snapshot orders rows by tree-walk (parent then its children) — not by kind', () => {
+  // Regression: before the tree-walk fix, the snapshot returned rows
+  // ordered by sort_order + created_at flat, so accepting a
+  // decompose proposal that creates N stories under one epic
+  // interleaved every story below all epics, severing the visual
+  // hierarchy on /roadmap. The fix: emit parent → children DFS so
+  // each child appears immediately after its parent.
+  const f = buildFixture();
+  const snap = getRoadmapSnapshot({ workspace_id: f.workspace });
+  const order = snap.initiatives.map(i => i.id);
+
+  function indexOf(id: string): number {
+    const idx = order.indexOf(id);
+    assert.ok(idx >= 0, `expected ${id} in order`);
+    return idx;
+  }
+  // milestone → epicA → storyA → epicB → storyB. storyOrphan is a root
+  // (its parent is unknown / missing) so it appears at the top level.
+  // Each child must come immediately after its parent; siblings (epicA,
+  // epicB) preserve sort_order/created_at among themselves.
+  assert.equal(indexOf(f.epicAId), indexOf(f.milestoneId) + 1);
+  assert.equal(indexOf(f.storyAId), indexOf(f.epicAId) + 1);
+  assert.equal(indexOf(f.epicBId), indexOf(f.storyAId) + 1);
+  assert.equal(indexOf(f.storyBId), indexOf(f.epicBId) + 1);
+  // storyA sits between its parent (epicA) and its uncle (epicB) —
+  // i.e. children flow before sibling subtrees.
+  assert.ok(indexOf(f.storyAId) < indexOf(f.epicBId));
+});
+
 test('snapshot returns all initiatives in workspace with correct depth', () => {
   const f = buildFixture();
   const snap = getRoadmapSnapshot({ workspace_id: f.workspace });
