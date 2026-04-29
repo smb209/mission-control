@@ -20,6 +20,7 @@ import {
   stripSuggestionsSidecar,
   type PlanInitiativeSuggestionsBlob,
 } from '@/lib/pm/planSuggestionsSidecar';
+import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -42,24 +43,6 @@ interface AgentChatMessage {
   status: 'pending' | 'delivered';
   metadata?: string;
   created_at: string;
-}
-
-interface PmDiff {
-  kind: string;
-  initiative_id?: string;
-  agent_id?: string;
-  status?: string;
-  target_start?: string;
-  target_end?: string;
-  start?: string;
-  end?: string;
-  reason?: string;
-  status_check_md?: string;
-  depends_on_initiative_id?: string;
-  dependency_id?: string;
-  parent_id?: string | null;
-  child_ids_in_order?: string[];
-  note?: string;
 }
 
 interface PmProposal {
@@ -879,18 +862,7 @@ function ChatMessageRow({
             </>
           );
         })()}
-        {proposal.proposed_changes.length > 0 && (
-          <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
-            {proposal.proposed_changes.slice(0, 6).map((c, idx) => (
-              <div key={idx} className="font-mono">
-                · {summarizeDiff(c)}
-              </div>
-            ))}
-            {proposal.proposed_changes.length > 6 && (
-              <div className="font-mono">…and {proposal.proposed_changes.length - 6} more</div>
-            )}
-          </div>
-        )}
+        <ProposalDiffsList diffs={proposal.proposed_changes} />
         {proposal.status === 'draft' && (
           <div className="px-3 py-2 border-t border-amber-500/30 bg-amber-500/5 flex items-center gap-2">
             {refining === proposal.id ? (
@@ -950,26 +922,9 @@ function ChatMessageRow({
   );
 }
 
-function summarizeDiff(c: PmDiff): string {
-  switch (c.kind) {
-    case 'shift_initiative_target':
-      return `shift ${shortId(c.initiative_id)}: ${c.target_start ?? '∅'} → ${c.target_end ?? '∅'}`;
-    case 'add_availability':
-      return `availability ${shortId(c.agent_id)}: ${c.start} – ${c.end}`;
-    case 'set_initiative_status':
-      return `${shortId(c.initiative_id)} → ${c.status}`;
-    case 'add_dependency':
-      return `dep ${shortId(c.initiative_id)} blocks on ${shortId(c.depends_on_initiative_id)}`;
-    case 'remove_dependency':
-      return `remove dep ${shortId(c.dependency_id)}`;
-    case 'reorder_initiatives':
-      return `reorder under ${shortId(c.parent_id ?? null) || 'root'} (${c.child_ids_in_order?.length ?? 0})`;
-    case 'update_status_check':
-      return `status_check ${shortId(c.initiative_id)}`;
-    default:
-      return c.kind ?? '?';
-  }
-}
+// Diff rendering (DiffRow, ProposalDiffsList, summarizeDiff, complexity
+// badges) moved to @/components/pm/ProposalDiffsList so the standalone
+// /pm/proposals/[id] detail page renders identically.
 
 function shortId(id: string | null | undefined): string {
   if (!id) return '∅';
@@ -1029,20 +984,7 @@ function PinnedStandupCard({
       <div className="p-3">
         <ChatMarkdown content={stripSuggestionsSidecar(proposal.impact_md)} />
       </div>
-      {proposal.proposed_changes.length > 0 && (
-        <div className="px-3 pb-3 space-y-1 text-xs text-mc-text-secondary">
-          {proposal.proposed_changes.slice(0, 6).map((c, idx) => (
-            <div key={idx} className="font-mono">
-              · {summarizeDiff(c)}
-            </div>
-          ))}
-          {proposal.proposed_changes.length > 6 && (
-            <div className="font-mono">
-              …and {proposal.proposed_changes.length - 6} more
-            </div>
-          )}
-        </div>
-      )}
+      <ProposalDiffsList diffs={proposal.proposed_changes} />
       <div className="px-3 py-2 border-t border-violet-500/30 bg-violet-500/5 flex items-center gap-2">
         <button
           type="button"
