@@ -404,10 +404,26 @@ export function registerAllTools(server: McpServer): void {
           WHERE task_id = ?`,
         [args.task_id],
       );
+      // Read post-write count back so the agent's mental model can't drift
+      // from reality. A confidently-wrong "I've registered 2 deliverables"
+      // status report (when the DB has 8) erodes coordinator trust — the
+      // agent should reconcile against this number on every write.
+      const totals = queryOne<{ output_count: number; total_count: number }>(
+        `SELECT
+           SUM(CASE WHEN role = 'output' THEN 1 ELSE 0 END) as output_count,
+           COUNT(*) as total_count
+         FROM task_deliverables WHERE task_id = ?`,
+        [args.task_id],
+      );
       const summary = {
         deliverable: result.deliverable,
         file_exists: result.fileExists,
         normalized_path: result.normalizedPath,
+        // Authoritative post-write counts on this task — use these to
+        // self-check before reporting status. The "output" count is what
+        // the evidence gate reads.
+        total_output_deliverables_on_task: Number(totals?.output_count ?? 0),
+        total_deliverables_on_task: Number(totals?.total_count ?? 0),
       };
       return textResult(JSON.stringify(summary, null, 2), summary);
     }),
@@ -491,7 +507,22 @@ export function registerAllTools(server: McpServer): void {
         message: args.message,
         metadata: args.metadata ? JSON.stringify(args.metadata) : undefined,
       });
-      return textResult(JSON.stringify(activity, null, 2), { activity });
+      // Read post-write counts back. The "evidence" count matches what
+      // the evidence gate inspects (completed / file_created / updated)
+      // so the agent can see whether it's met the bar without guessing.
+      const totals = queryOne<{ total_count: number; evidence_count: number }>(
+        `SELECT
+           COUNT(*) as total_count,
+           SUM(CASE WHEN activity_type IN ('completed','file_created','updated') THEN 1 ELSE 0 END) as evidence_count
+         FROM task_activities WHERE task_id = ?`,
+        [args.task_id],
+      );
+      const summary = {
+        activity,
+        total_activities_on_task: Number(totals?.total_count ?? 0),
+        evidence_qualifying_activities_on_task: Number(totals?.evidence_count ?? 0),
+      };
+      return textResult(JSON.stringify(summary, null, 2), summary);
     }),
   );
 
