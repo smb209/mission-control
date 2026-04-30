@@ -1,0 +1,24 @@
+{
+  "_comment": "Per-repo prescribed-command templates for the autonomous flow. See specs/autonomous-flow-tightening-spec.md and src/lib/gates/config.ts. ${CHANGED_FILES} is interpolated by MC at dispatch time.",
+  "gates": {
+    "build_fast": {
+      "commands": [
+        "yarn tsc --noEmit",
+        "yarn eslint ${CHANGED_FILES}"
+      ],
+      "budget_ms": 60000
+    },
+    "test_full": {
+      "commands": [
+        "yarn test"
+      ],
+      "budget_ms": 120000
+    },
+    "runtime_smoke": {
+      "commands": [
+        "yarn mcp:smoke"
+      ],
+      "budget_ms": 60000
+    }
+  }
+}
