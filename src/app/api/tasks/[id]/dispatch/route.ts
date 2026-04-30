@@ -17,6 +17,13 @@ import { formatMailForDispatch } from '@/lib/mailbox';
 import { getPendingNotesForDispatch } from '@/lib/task-notes';
 import { createTaskWorkspace, determineIsolationStrategy } from '@/lib/workspace-isolation';
 import { parsePlanningSpec } from '@/lib/planning-spec';
+import {
+  getPrescribedCommandsForRole,
+  formatPrescribedCommandsSection,
+  type RoleName,
+} from '@/lib/gates/config';
+import { formatRoleSoulSection } from '@/lib/agents/role-souls';
+import { execSync } from 'child_process';
 import type { Task, Agent, Product, OpenClawSession, WorkflowStage, TaskImage } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -390,6 +397,50 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const isVerifier = !isCoordinator && (currentStage?.role === 'verifier' || currentStage?.role === 'reviewer');
     const nextStatus = nextStage?.status || 'review';
     const failEndpoint = `POST ${missionControlUrl}/api/tasks/${task.id}/fail`;
+
+    // Prescribed verification commands (slice 2 of the autonomous-flow
+    // tightening). The role's gate set comes from `.mc/gates.json` in the
+    // workspace, falling back to package.json auto-discovery. Tester /
+    // reviewer get the changed-files list interpolated into ${CHANGED_FILES}
+    // placeholders; for builder we leave the placeholder literal because
+    // there's no committed diff yet — they'll resolve it at evidence-
+    // submission time against their current diff.
+    let prescribedCommandsSection = '';
+    let roleSoulSection = '';
+    const role: RoleName | null = isBuilder
+      ? 'builder'
+      : isTester
+        ? 'tester'
+        : isVerifier
+          ? 'reviewer'
+          : null;
+    if (role) {
+      roleSoulSection = formatRoleSoulSection(role);
+    }
+    if (role && taskProjectDir) {
+      let changedFiles: string[] = [];
+      if ((isTester || isVerifier) && workspaceBranchName) {
+        try {
+          const baseBranch = (task as Task & { repo_branch?: string }).repo_branch || 'main';
+          const out = execSync(
+            `git diff --name-only ${baseBranch}...HEAD`,
+            { cwd: taskProjectDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+          );
+          changedFiles = out.split('\n').map((s) => s.trim()).filter(Boolean);
+        } catch {
+          // best-effort; gate config still emits commands without the placeholder filled
+        }
+      }
+      try {
+        const prescribed = getPrescribedCommandsForRole(taskProjectDir, role, { changedFiles });
+        prescribedCommandsSection = formatPrescribedCommandsSection(prescribed, {
+          agentId: agent.id,
+          taskId: task.id,
+        });
+      } catch (err) {
+        console.warn('[Dispatch] prescribed-command resolution failed:', (err as Error).message);
+      }
+    }
 
     // For coordinator dispatches, enumerate the persistent gateway-synced
     // agents so the coordinator can delegate via `sessions_send` rather than
@@ -773,7 +824,7 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-${callHomeSection}${delegationContractSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}
+${callHomeSection}${delegationContractSection}${roleSoulSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}${prescribedCommandsSection}
 ${isBuilder ? (workspaceIsolated
   ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
   : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)
