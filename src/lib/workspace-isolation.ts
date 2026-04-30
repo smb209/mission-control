@@ -123,6 +123,138 @@ export function determineIsolationStrategy(task: Task): IsolationStrategy | null
   return null;
 }
 
+// ─── Strict resolution for dispatch ──────────────────────────────────
+
+export type DispatchRole = 'builder' | 'tester_or_reviewer' | 'other';
+
+export interface ResolvedWorkspace {
+  ok: true;
+  path: string;
+  isolated: boolean;
+  port?: number;
+  branch?: string;
+  /** True when path was reused; false when freshly created. */
+  reused: boolean;
+}
+
+export interface WorkspaceResolutionError {
+  ok: false;
+  code: 'workspace_isolation_failed' | 'no_workspace_for_quality_stage';
+  detail: string;
+  http_status: 503 | 409;
+}
+
+/**
+ * Resolve the project directory a dispatch should land in. Slice 3 of
+ * the autonomous-flow tightening: when a product is repo-backed
+ * (`determineIsolationStrategy` returns a strategy), failure is fatal
+ * rather than silently falling back to the shared working tree. That
+ * fallback is what put the AlertDialog Builder on `main` in the
+ * post-mortem run.
+ *
+ * Behavior matrix (`strategy` from `determineIsolationStrategy`):
+ *
+ *   strategy   role           workspace_path  → result
+ *   ────────── ────────────── ─────────────── ──────────────────────────
+ *   null       any            *               not isolated, shared dir
+ *   set        builder        existing on FS  reuse (no recreate)
+ *   set        builder        unset/missing   create fresh; throws → 503
+ *   set        tester/reviewer set            reuse Builder's workspace
+ *   set        tester/reviewer unset          409: builder skipped iso
+ *   set        other          *               not isolated, shared dir
+ *
+ * Pure-ish — takes injectable IO so tests can drive without a real
+ * worktree. Production callers pass `existsSync` and
+ * `createTaskWorkspace`.
+ */
+export async function resolveDispatchWorkspace(
+  task: Task & {
+    workspace_path?: string | null;
+    workspace_port?: number | null;
+  },
+  role: DispatchRole,
+  io: {
+    existsSync: (p: string) => boolean;
+    createTaskWorkspace: (t: Task) => Promise<WorkspaceInfo>;
+  },
+): Promise<ResolvedWorkspace | WorkspaceResolutionError> {
+  const strategy = determineIsolationStrategy(task);
+  if (!strategy) {
+    // Non-repo-backed product: existing fallback path is fine.
+    return {
+      ok: true,
+      path: getProductProjectDir(task),
+      isolated: false,
+      reused: false,
+    };
+  }
+
+  if (role === 'builder') {
+    if (task.workspace_path && io.existsSync(task.workspace_path)) {
+      return {
+        ok: true,
+        path: task.workspace_path,
+        isolated: true,
+        port: task.workspace_port ?? undefined,
+        reused: true,
+      };
+    }
+    try {
+      const ws = await io.createTaskWorkspace(task);
+      return {
+        ok: true,
+        path: ws.path,
+        isolated: true,
+        branch: ws.branch,
+        port: ws.port,
+        reused: false,
+      };
+    } catch (err) {
+      const message = (err as Error).message || 'unknown error';
+      return {
+        ok: false,
+        code: 'workspace_isolation_failed',
+        http_status: 503,
+        detail:
+          `Could not create an isolated workspace for this task: ${message}. ` +
+          `The product is repo-backed (strategy=${strategy}); dispatching to ` +
+          `the shared working tree could let the Builder commit on main. ` +
+          `Resolve the underlying cause and retry.`,
+      };
+    }
+  }
+
+  if (role === 'tester_or_reviewer') {
+    if (task.workspace_path) {
+      return {
+        ok: true,
+        path: task.workspace_path,
+        isolated: true,
+        port: task.workspace_port ?? undefined,
+        reused: true,
+      };
+    }
+    return {
+      ok: false,
+      code: 'no_workspace_for_quality_stage',
+      http_status: 409,
+      detail:
+        `Task is in a quality stage but has no recorded workspace_path. ` +
+        `The Builder dispatched without workspace isolation, which means ` +
+        `downstream stages would exercise the shared working tree. ` +
+        `Re-dispatch the build stage or set workspace_path manually.`,
+    };
+  }
+
+  // Coordinator or other role: shared dir is fine.
+  return {
+    ok: true,
+    path: getProductProjectDir(task),
+    isolated: false,
+    reused: false,
+  };
+}
+
 // ─── Project Path Resolution ─────────────────────────────────────────
 
 function getProductProjectDir(task: Task): string {

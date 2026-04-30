@@ -15,7 +15,7 @@ import { clearStallFlag } from '@/lib/stall-detection';
 import { logDebugEvent } from '@/lib/debug-log';
 import { formatMailForDispatch } from '@/lib/mailbox';
 import { getPendingNotesForDispatch } from '@/lib/task-notes';
-import { createTaskWorkspace, determineIsolationStrategy } from '@/lib/workspace-isolation';
+import { createTaskWorkspace, resolveDispatchWorkspace } from '@/lib/workspace-isolation';
 import { parsePlanningSpec } from '@/lib/planning-spec';
 import {
   getPrescribedCommandsForRole,
@@ -24,6 +24,7 @@ import {
 } from '@/lib/gates/config';
 import { formatRoleSoulSection } from '@/lib/agents/role-souls';
 import { execSync } from 'child_process';
+import { existsSync } from 'fs';
 import type { Task, Agent, Product, OpenClawSession, WorkflowStage, TaskImage } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -246,24 +247,54 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       'host'
     );
 
-    // Create isolated workspace if parallel builds are possible
-    // Only for builder dispatches (assigned/in_progress), not tester/reviewer
+    // Create isolated workspace if parallel builds are possible.
+    //
+    // Slice 3 of the autonomous-flow tightening tightens this:
+    //   1. Builder: hard-fail dispatch when the product is repo-backed
+    //      (`determineIsolationStrategy` returned a strategy) but workspace
+    //      creation throws. The previous behavior — warn-and-continue with
+    //      the shared `${projectsPath}/${slug}` directory — is what put the
+    //      AlertDialog Builder on `main` (see PR #117 spec post-mortem).
+    //   2. Tester / Reviewer: read back the workspace the Builder created
+    //      (persisted on `task.workspace_path` by createTaskWorkspace) so
+    //      downstream stages exercise the SAME tree the build happened in,
+    //      rather than the shared default path.
+    //   3. Non-repo-backed products (no isolation strategy) keep the shared
+    //      dir — the strict mode only triggers when isolation was supposed
+    //      to be available.
     let workspaceIsolated = false;
     let workspaceBranchName: string | undefined;
     let workspacePort: number | undefined;
-    const isolationStrategy = determineIsolationStrategy(task as Task);
     const isBuilderDispatch = task.status === 'assigned' || task.status === 'in_progress' || task.status === 'inbox';
-    if (isolationStrategy && isBuilderDispatch) {
-      try {
-        const workspace = await createTaskWorkspace(task as Task);
-        taskProjectDir = workspace.path;
-        workspaceIsolated = true;
-        workspaceBranchName = workspace.branch;
-        workspacePort = workspace.port;
-        console.log(`[Dispatch] Created ${workspace.strategy} workspace for task ${task.id}: ${workspace.path}`);
-      } catch (err) {
-        console.warn(`[Dispatch] Workspace isolation failed, using default path:`, (err as Error).message);
-      }
+    const isTesterOrReviewerDispatch = task.status === 'testing' || task.status === 'review' || task.status === 'verification';
+    const dispatchRole = isBuilderDispatch
+      ? 'builder'
+      : isTesterOrReviewerDispatch
+        ? 'tester_or_reviewer'
+        : 'other';
+
+    const wsResolution = await resolveDispatchWorkspace(
+      task as Task & { workspace_path?: string | null; workspace_port?: number | null },
+      dispatchRole,
+      { existsSync, createTaskWorkspace },
+    );
+    if (!wsResolution.ok) {
+      console.error(
+        `[Dispatch] ${wsResolution.code} for task ${task.id}: ${wsResolution.detail}`,
+      );
+      return NextResponse.json(
+        { error: wsResolution.code, detail: wsResolution.detail },
+        { status: wsResolution.http_status },
+      );
+    }
+    taskProjectDir = wsResolution.path;
+    workspaceIsolated = wsResolution.isolated;
+    workspaceBranchName = wsResolution.branch;
+    workspacePort = wsResolution.port;
+    if (workspaceIsolated) {
+      console.log(
+        `[Dispatch] ${dispatchRole} ${wsResolution.reused ? 'reusing' : 'created'} workspace for ${task.id}: ${taskProjectDir}`,
+      );
     }
 
     // Parse planning_spec and planning_agents if present (stored as JSON text on the task row)
@@ -825,10 +856,11 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
 ${callHomeSection}${delegationContractSection}${roleSoulSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}${prescribedCommandsSection}
-${isBuilder ? (workspaceIsolated
-  ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. Other agents may be working on the same project in parallel. All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
-  : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`)
-: isCoordinator ? `**DELIVERABLES DIR:** ${deliverablesDir}\nAggregated deliverables registered via the deliverables endpoint should be written to this directory so they become web-downloadable.\n` : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\nFinal deliverables should be saved to ${deliverablesDir} so they become web-downloadable.\n`}
+${isCoordinator
+  ? `**DELIVERABLES DIR:** ${deliverablesDir}\nAggregated deliverables registered via the deliverables endpoint should be written to this directory so they become web-downloadable.\n`
+  : workspaceIsolated
+    ? `**\u{1F512} ISOLATED WORKSPACE:** ${taskProjectDir}\n- **Port:** ${workspacePort || 'default'} (use this for dev server, NOT the default)\n${workspaceBranchName ? `- **Branch:** ${workspaceBranchName}\n` : ''}- **IMPORTANT:** Do NOT modify files outside this workspace directory. ${isBuilder ? 'Other agents may be working on the same project in parallel.' : 'This is the same tree the Builder produced — exercise the change here, do NOT cd into the shared project root.'} All your work must stay within: ${taskProjectDir}\n**DELIVERABLES DIR (separate):** ${deliverablesDir}\nCreate ${deliverablesDir} and save final deliverables there so they become web-downloadable from Mission Control.\n`
+    : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n**DELIVERABLES DIR:** ${deliverablesDir}\n${isBuilder ? 'Create' : 'Final deliverables should be saved to'} ${deliverablesDir}${isBuilder ? ' and save final deliverables there so they become web-downloadable from Mission Control.' : ' so they become web-downloadable.'}\n`}
 ${completionInstructions}
 
 If you need help or clarification, ask the orchestrator.`;
