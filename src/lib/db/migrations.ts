@@ -3468,6 +3468,46 @@ const migrations: Migration[] = [
       console.log('[Migration 057] openclaw_sessions.stage added.');
     },
   },
+  {
+    id: '058',
+    name: 'task_evidence',
+    up: (db) => {
+      // Run-and-forward evidence model: agents submit raw stdout from
+      // prescribed commands (typecheck/lint/tests/runtime), and the
+      // server parses pass/fail. Replaces self-attested "≥1 deliverable
+      // + ≥1 activity" as the verification bar for stage transitions
+      // on tasks that carry a prescribed gate set. See
+      // specs/autonomous-flow-tightening-spec.md.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_evidence (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          agent_id TEXT,
+          gate TEXT NOT NULL CHECK (gate IN (
+            'build_fast', 'test_full', 'review_static', 'runtime_ui', 'runtime_smoke'
+          )),
+          command TEXT NOT NULL,
+          stdout TEXT NOT NULL DEFAULT '',
+          stderr TEXT NOT NULL DEFAULT '',
+          exit_code INTEGER NOT NULL,
+          duration_ms INTEGER,
+          diff_sha TEXT,
+          artifact_paths TEXT,
+          parsed_summary TEXT,
+          passed INTEGER NOT NULL CHECK (passed IN (0, 1)),
+          reject_reason TEXT,
+          stdout_hash TEXT NOT NULL,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_evidence_task ON task_evidence(task_id)`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_task_evidence_gate
+           ON task_evidence(task_id, gate, created_at DESC)`,
+      );
+      console.log('[Migration 058] task_evidence created.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

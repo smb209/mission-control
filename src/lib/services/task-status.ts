@@ -114,7 +114,7 @@ export function transitionTaskStatus(
 
   // Evidence gate for forward moves into quality stages.
   if (QUALITY_STAGES.has(newStatus) && !boardOverride) {
-    const evidence = checkStageEvidence(taskId);
+    const evidence = checkStageEvidence(taskId, newStatus);
     if (!evidence.ok) {
       return {
         ok: false,

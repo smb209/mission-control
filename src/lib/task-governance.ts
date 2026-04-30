@@ -1,7 +1,12 @@
 import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { notifyLearner } from '@/lib/learner';
 import { parsePlanningSpec } from '@/lib/planning-spec';
-import type { Task } from '@/lib/types';
+import {
+  hasAnyEvidence,
+  getLatestEvidence,
+  type EvidenceGate,
+} from '@/lib/services/task-evidence';
+import type { Task, TaskStatus } from '@/lib/types';
 
 const ACTIVE_STATUSES = ['assigned', 'in_progress', 'convoy_active', 'testing', 'review', 'verification'];
 const TERMINAL_STATUSES = ['done', 'cancelled'];
@@ -27,7 +32,50 @@ export interface StageEvidenceResult {
  * task_deliverables row carrying the matching spec_deliverable_id, otherwise
  * the gate rejects and lists the missing ones.
  */
-export function checkStageEvidence(taskId: string): StageEvidenceResult {
+/**
+ * Evidence gates required when transitioning forward INTO a quality stage.
+ * Once a task carries any task_evidence rows (i.e. has been routed through
+ * the prescribed-command flow), these are required and the legacy
+ * deliverable-count check is bypassed. Tasks without any evidence rows
+ * still satisfy the legacy bar — slice 2 will inject prescribed commands
+ * at dispatch which is what populates this table.
+ */
+const STAGE_REQUIRED_EVIDENCE: Partial<Record<TaskStatus, EvidenceGate[]>> = {
+  testing: ['build_fast'],
+  review: ['test_full'],
+  // `verification` and `done` reuse `review`'s artifacts; no new gate added
+  // here so we don't break any operator-driven completions.
+};
+
+export function checkStageEvidence(
+  taskId: string,
+  newStatus?: TaskStatus,
+): StageEvidenceResult {
+  // Strict path: when the task has any evidence rows, enforce the gate
+  // map for the target stage. Falling back to the legacy bar when no
+  // evidence has been recorded keeps existing flows unbroken until the
+  // dispatch path starts prescribing commands (slice 2).
+  if (newStatus && hasAnyEvidence(taskId)) {
+    const required = STAGE_REQUIRED_EVIDENCE[newStatus] ?? [];
+    for (const gate of required) {
+      const latest = getLatestEvidence(taskId, gate);
+      if (!latest) {
+        return {
+          ok: false,
+          reason: `Evidence gate: ${gate} required to enter ${newStatus}. Submit raw command output via submit_evidence.`,
+        };
+      }
+      if (latest.passed !== 1) {
+        return {
+          ok: false,
+          reason: `Evidence gate: latest ${gate} run did not pass${latest.reject_reason ? ` (${latest.reject_reason})` : ''}. Re-run and resubmit.`,
+        };
+      }
+    }
+    // Strict path satisfied — skip legacy deliverable bar.
+    return { ok: true };
+  }
+
   // role='output' filter: operator-attached inputs on task creation don't
   // count as evidence that the agent did any work.
   const deliverableCount = Number(

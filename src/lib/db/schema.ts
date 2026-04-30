@@ -285,6 +285,37 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Task evidence: structured pass/fail records produced by running a
+-- prescribed command (typecheck / lint / tests / runtime smoke) and
+-- forwarding the raw output. The server parses stdout and computes
+-- whether the gate passed; the agent never self-reports a boolean.
+-- Replaces "at least one deliverable + at least one activity" self-
+-- attestation as the bar for forward stage transitions when a task
+-- carries a prescribed gate set.
+CREATE TABLE IF NOT EXISTS task_evidence (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  agent_id TEXT,
+  gate TEXT NOT NULL CHECK (gate IN (
+    'build_fast', 'test_full', 'review_static', 'runtime_ui', 'runtime_smoke'
+  )),
+  command TEXT NOT NULL,
+  stdout TEXT NOT NULL DEFAULT '',
+  stderr TEXT NOT NULL DEFAULT '',
+  exit_code INTEGER NOT NULL,
+  duration_ms INTEGER,
+  diff_sha TEXT,
+  artifact_paths TEXT,        -- JSON array of paths
+  parsed_summary TEXT,        -- JSON: {ts_errors, eslint_errors, tests_passed, tests_failed, ...}
+  passed INTEGER NOT NULL CHECK (passed IN (0, 1)),
+  reject_reason TEXT,
+  stdout_hash TEXT NOT NULL,  -- sha256(stdout) for tamper-evidence
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_task_evidence_task ON task_evidence(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_evidence_gate
+  ON task_evidence(task_id, gate, created_at DESC);
+
 -- Convoys: parallel task groups.
 -- parent_task_id is NOT unique: a task may have multiple convoys over time
 -- (e.g. an agent coordinator appends further delegation rounds). Readers
