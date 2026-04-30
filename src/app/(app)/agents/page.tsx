@@ -40,6 +40,7 @@ import { DiscoverAgentsModal } from '@/components/DiscoverAgentsModal';
 import { HealthIndicator } from '@/components/HealthIndicator';
 import { AgentPingIndicator } from '@/components/AgentPingIndicator';
 import { RollCallResultsPanel, type RollCallResultView } from '@/components/AgentsSidebar';
+import { showAlertDialog } from '@/lib/show-alert';
 
 type FilterTab = 'all' | 'working' | 'standby';
 
@@ -284,7 +285,7 @@ export default function AgentsPage() {
       const res = await fetch('/api/openclaw/sessions', { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Failed to reset sessions');
+        showAlertDialog('Reset failed', data.error || 'Failed to reset sessions');
         return;
       }
       for (const agent of agents) setAgentOpenClawSession(agent.id, null);
@@ -300,9 +301,9 @@ export default function AgentsPage() {
         lines.push("Fall back: run `/reset` in those agents' OpenClaw chats directly.");
       }
       if (data.gateway_error) lines.push(`Gateway unreachable: ${data.gateway_error}`);
-      alert(lines.join('\n'));
+      showAlertDialog('Session reset results', lines.join('\n'));
     } catch (err) {
-      alert(`Failed to reset sessions: ${(err as Error).message}`);
+      showAlertDialog('Reset failed', `Failed to reset sessions: ${(err as Error).message}`);
     } finally {
       setResetSessionsBusy(false);
     }
@@ -326,7 +327,7 @@ export default function AgentsPage() {
         if (!res.ok) {
           updateAgent(agent);
           const err = await res.json().catch(() => ({}));
-          alert(err.error || 'Failed to update agent');
+          showAlertDialog('Update failed', err.error || 'Failed to update agent');
           return false;
         }
         const fresh = (await res.json()) as Agent;
@@ -334,7 +335,7 @@ export default function AgentsPage() {
         return true;
       } catch (err) {
         updateAgent(agent);
-        alert(`Failed to update agent: ${(err as Error).message}`);
+        showAlertDialog('Update failed', `Failed to update agent: ${(err as Error).message}`);
         return false;
       }
     },
@@ -350,7 +351,7 @@ export default function AgentsPage() {
 
   const resetAgentSession = (agent: Agent) => {
     if (!agent.gateway_agent_id) {
-      alert('This agent has no gateway_agent_id; nothing to reset on the gateway side.');
+      showAlertDialog('No gateway ID', 'This agent has no gateway_agent_id; nothing to reset on the gateway side.');
       return;
     }
     setPendingConfirm({
@@ -368,16 +369,17 @@ export default function AgentsPage() {
       const res = await fetch(`/api/agents/${agent.id}/reset`, { method: 'POST' });
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.sent) {
-        alert(`Reset sent — gateway re-init in flight (cleared ${body.deleted ?? 0} session row(s)).`);
+        showAlertDialog('Reset sent', `Gateway re-init in flight (cleared ${body.deleted ?? 0} session row(s)).`);
       } else if (res.ok && !body.sent) {
-        alert(
+        showAlertDialog(
+          `Gateway didn't ack`,
           `MC-side cleared (${body.deleted ?? 0} row(s)) but gateway didn't ack: ${body.error ?? body.gateway_error ?? 'send failed'}.`,
         );
       } else {
-        alert(body.error || `Reset failed (${res.status})`);
+        showAlertDialog('Reset failed', body.error || `Reset failed (${res.status})`);
       }
     } catch (err) {
-      alert((err as Error).message || 'Reset failed');
+      showAlertDialog('Reset failed', (err as Error).message || 'Reset failed');
     } finally {
       setResettingAgentId(null);
     }
@@ -397,7 +399,7 @@ export default function AgentsPage() {
           setAgentOpenClawSession(agent.id, data.session as OpenClawSession);
         } else {
           const error = await res.json();
-          alert(`Failed to connect: ${error.error || 'Unknown error'}`);
+          showAlertDialog('Connect failed', `Failed to connect: ${error.error || 'Unknown error'}`);
         }
       }
     } catch (error) {
