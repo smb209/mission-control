@@ -57,6 +57,30 @@ test('task cannot be done when status_reason indicates failure', () => {
   assert.equal(taskCanBeDone(taskId), false);
 });
 
+test('ignoreStaleFailureReason forgives canonical "Failed:" prefix only', () => {
+  const taskId = crypto.randomUUID();
+  seedTask(taskId);
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'x.ts', 'output', datetime('now'))`,
+    [taskId]
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'completed', 'did thing', datetime('now'))`,
+    [taskId]
+  );
+
+  // Canonical handleStageFailure prefix — recovery path should forgive it.
+  run(`UPDATE tasks SET status_reason = 'Failed: CRITICAL — old reviewer finding' WHERE id = ?`, [taskId]);
+  assert.equal(taskCanBeDone(taskId), false, 'still blocks without the option');
+  assert.equal(taskCanBeDone(taskId, { ignoreStaleFailureReason: true }), true, 'option forgives canonical prefix');
+
+  // Non-canonical "fail" reason — option must NOT forgive (still blocks).
+  run(`UPDATE tasks SET status_reason = 'Validation failed: CSS broken' WHERE id = ?`, [taskId]);
+  assert.equal(taskCanBeDone(taskId, { ignoreStaleFailureReason: true }), false, 'option still rejects non-canonical failures');
+});
+
 test('ensureFixerExists creates fixer when missing', () => {
   const fixer = ensureFixerExists('default');
   assert.equal(fixer.created, true);
