@@ -21,6 +21,7 @@ import { authzErrorToToolResult, internalErrorToToolResult } from './errors';
 import { logMcpToolCall } from './debug';
 
 import { registerDeliverable } from '@/lib/services/task-deliverables';
+import { submitEvidence, ALL_EVIDENCE_GATES } from '@/lib/services/task-evidence';
 import { logActivity } from '@/lib/services/task-activities';
 import { transitionTaskStatus } from '@/lib/services/task-status';
 import { failTask } from '@/lib/services/task-failure';
@@ -407,6 +408,54 @@ export function registerAllTools(server: McpServer): void {
         deliverable: result.deliverable,
         file_exists: result.fileExists,
         normalized_path: result.normalizedPath,
+      };
+      return textResult(JSON.stringify(summary, null, 2), summary);
+    }),
+  );
+
+  // submit_evidence ────────────────────────────────────────────────
+  server.registerTool(
+    'submit_evidence',
+    {
+      title: 'Submit raw command output as evidence for a stage gate',
+      description:
+        'Run-and-forward verification: paste the EXACT command you ran plus its raw stdout/stderr/exit_code. The server parses pass/fail (TS errors, ESLint counts, test totals, artifact presence). Never self-report a boolean — submit the output. Required to transition into testing/review on tasks that carry a prescribed gate set.',
+      inputSchema: {
+        agent_id: agentIdArg,
+        task_id: taskIdArg,
+        gate: z.enum(ALL_EVIDENCE_GATES as [string, ...string[]]),
+        command: z.string().min(1).describe('Exact command line you ran'),
+        stdout: z.string().default('').describe('Raw stdout, untrimmed'),
+        stderr: z.string().default(''),
+        exit_code: z.number().int(),
+        duration_ms: z.number().int().optional(),
+        diff_sha: z.string().optional().describe('git rev-parse HEAD at run time'),
+        artifact_paths: z
+          .array(z.string())
+          .optional()
+          .describe('Required for runtime_ui: screenshot/trace/HAR paths'),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('submit_evidence', async (args) => {
+      const result = submitEvidence({
+        taskId: args.task_id,
+        actingAgentId: args.agent_id,
+        gate: args.gate as Parameters<typeof submitEvidence>[0]['gate'],
+        command: args.command,
+        stdout: args.stdout,
+        stderr: args.stderr,
+        exitCode: args.exit_code,
+        durationMs: args.duration_ms,
+        diffSha: args.diff_sha,
+        artifactPaths: args.artifact_paths,
+      });
+      const summary = {
+        evidence_id: result.evidenceId,
+        gate: args.gate,
+        passed: result.passed,
+        parsed_summary: result.parsedSummary,
+        reject_reason: result.rejectReason,
       };
       return textResult(JSON.stringify(summary, null, 2), summary);
     }),
