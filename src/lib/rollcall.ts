@@ -265,6 +265,72 @@ export function getRollCallStatus(rollcallId: string): {
 }
 
 /**
+ * Pending roll-call entries the agent must answer. Read directly from
+ * `rollcall_entries` (durable) rather than `agent_mailbox` (one-shot
+ * deliveries that get cleaned up by formatMailForDispatch). This is the
+ * fix for FM3 from the autonomous-flow tightening: a stage-isolated
+ * session that's freshly created has no mail history, but the rollcall
+ * entry for the agent persists and we can surface it on every dispatch.
+ *
+ * Returns rows for which:
+ *   - target_agent_id = agent
+ *   - replied_at IS NULL
+ *   - session is not expired (now < expires_at)
+ *   - delivery_status != 'failed' / 'skipped' (don't badger an agent
+ *     about a roll-call we never managed to deliver)
+ */
+export interface PendingRollcall {
+  rollcall_id: string;
+  initiator_agent_id: string;
+  initiator_agent_name: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export function getPendingRollcallsForAgent(agentId: string): PendingRollcall[] {
+  return queryAll<PendingRollcall>(
+    `SELECT rs.id as rollcall_id,
+            rs.initiator_agent_id,
+            ia.name as initiator_agent_name,
+            rs.expires_at,
+            rs.created_at
+       FROM rollcall_entries re
+       JOIN rollcall_sessions rs ON rs.id = re.rollcall_id
+       LEFT JOIN agents ia ON ia.id = rs.initiator_agent_id
+      WHERE re.target_agent_id = ?
+        AND re.replied_at IS NULL
+        AND re.delivery_status IN ('pending', 'sent')
+        AND datetime(rs.expires_at) > datetime('now')
+      ORDER BY rs.created_at ASC`,
+    [agentId],
+  );
+}
+
+/**
+ * Render the pending roll-calls as a dispatch-ready section. Empty
+ * string when there are none.
+ */
+export function formatPendingRollcallsForDispatch(agentId: string): string {
+  const pending = getPendingRollcallsForAgent(agentId);
+  if (pending.length === 0) return '';
+  const lines: string[] = [];
+  lines.push('---');
+  lines.push('**📣 PENDING ROLL-CALLS — reply to each before doing other work:**');
+  lines.push('');
+  for (const rc of pending) {
+    const initiator = rc.initiator_agent_name || rc.initiator_agent_id;
+    lines.push(
+      `- From **${initiator}** (id \`${rc.rollcall_id}\`, expires ${rc.expires_at}). Reply with subject \`roll_call_reply:${rc.rollcall_id}\`.`,
+    );
+  }
+  lines.push('');
+  lines.push(
+    'Use `send_mail` with the exact subject above so the orchestrator records your reply. A short status sentence in the body is enough.',
+  );
+  return '\n' + lines.join('\n') + '\n';
+}
+
+/**
  * Try to record a mail message as the reply to an open roll-call entry.
  * Called from the mail POST handler when `subject` starts with
  * "roll_call_reply" or "roll_call:<id>" — matches by (rollcall_id,
