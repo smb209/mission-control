@@ -463,19 +463,78 @@ function rowCounts(dbPath: string, tables: string[]): Record<string, number> {
   return out;
 }
 
+/**
+ * Pretty-print source → target row counts side by side. -1 means the
+ * table doesn't exist (e.g. a newer table that the older source DB
+ * pre-dates — `task_evidence` is the canonical example).
+ */
+function printDiffTable(
+  source: Record<string, number>,
+  target: Record<string, number>,
+  label: string,
+): void {
+  const tables = Object.keys(source);
+  const longest = Math.max(...tables.map((t) => t.length));
+  console.log(`\n[import] ${label}`);
+  console.log(`[import]   ${'table'.padEnd(longest)}   source     target   delta`);
+  for (const t of tables) {
+    const s = source[t] ?? -1;
+    const x = target[t] ?? -1;
+    const sStr = s === -1 ? '   —' : String(s).padStart(7);
+    const xStr = x === -1 ? '   —' : String(x).padStart(7);
+    const dStr =
+      s === -1 || x === -1 ? '    —' : (x - s >= 0 ? `+${x - s}` : String(x - s)).padStart(6);
+    console.log(`[import]   ${t.padEnd(longest)}  ${sStr}    ${xStr}   ${dStr}`);
+  }
+}
+
+/**
+ * Tables we explicitly summarize so the operator can see at a glance
+ * what came across. Anything not in this list still gets imported (the
+ * tool does a file-level copy of the source DB), but won't show up in
+ * the printed before/after counts. Keep this set broad enough to
+ * communicate "yes, the substantive content moved" — initiatives, PM
+ * artifacts, knowledge, deliverables, ideas, etc.
+ */
 const SUMMARY_TABLES = [
-  'agents',
+  // Identity & structure
   'workspaces',
+  'agents',
   'products',
+  'businesses',
+  // Roadmap & PM
+  'initiatives',
+  'initiative_dependencies',
+  'pm_proposals',
+  'pm_pending_notes',
+  'owner_availability',
+  'ideas',
+  'maybe_pool',
+  // Tasks & execution
   'tasks',
   'task_deliverables',
   'task_evidence',
+  'task_activities',
+  'task_roles',
+  'task_notes',
+  'work_checkpoints',
+  // Convoy / workflow
   'convoys',
   'convoy_subtasks',
-  'planning_specs',
-  'knowledge_entries',
-  'rollcall_sessions',
   'workflow_templates',
+  'planning_specs',
+  'planning_questions',
+  // Knowledge / agent state
+  'knowledge_entries',
+  'agent_chat_messages',
+  'agent_mailbox',
+  'agent_health',
+  'rollcall_sessions',
+  'rollcall_entries',
+  // Conversations / history
+  'conversations',
+  'messages',
+  'events',
 ];
 
 async function main(): Promise<void> {
@@ -515,8 +574,9 @@ async function main(): Promise<void> {
       }
     }
 
-    console.log('[import] source row counts:', rowCounts(sourcePath, SUMMARY_TABLES));
-    console.log('[import] target row counts (before):', rowCounts(args.target, SUMMARY_TABLES));
+    const sourceCounts = rowCounts(sourcePath, SUMMARY_TABLES);
+    const targetBefore = rowCounts(args.target, SUMMARY_TABLES);
+    printDiffTable(sourceCounts, targetBefore, 'BEFORE — source vs target');
 
     if (args.dryRun) {
       console.log('[import] --dry-run set, exiting before any writes.');
@@ -582,8 +642,9 @@ async function main(): Promise<void> {
       }
     }
 
-    console.log('[import] target row counts (after):', rowCounts(args.target, SUMMARY_TABLES));
-    console.log('[import] done.');
+    const targetAfter = rowCounts(args.target, SUMMARY_TABLES);
+    printDiffTable(sourceCounts, targetAfter, 'AFTER — source vs new target');
+    console.log('\n[import] done.');
   } finally {
     cleanup?.();
   }

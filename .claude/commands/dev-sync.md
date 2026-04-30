@@ -65,8 +65,21 @@ End state:
 
 ## Report
 
-End with one line summarizing: agents preserved, tasks imported, FK fixups, integrity status. Example:
+The import tool prints a side-by-side BEFORE/AFTER table covering all
+the substantive surfaces — initiatives, PM proposals, ideas, tasks,
+deliverables, evidence, knowledge, agent_chat_messages, agent_mailbox,
+rollcalls, events, etc. **Surface this table verbatim in your reply
+so the operator can see exactly what came across — not a hand-picked
+slice.**
 
-> Synced. 9 dev agents preserved, 2 tasks + 11 deliverables + 7 rollcalls remapped to dev agents. PRAGMA foreign_key_check clean. Migrations through 060.
+After the table, end with one line summarizing the agent remap,
+FK-fixup counts, and integrity status. Example:
 
-Do not start MC at the end — leave the operator to start it when they're ready to validate.
+> Synced. 9 dev agents preserved (8 mc-*-dev + main), 9/9 source agents
+> remapped, all FKs rewritten (no NULLed columns, no deleted bridge
+> rows). 71 initiatives, 15 PM proposals, 49 rollcall entries, 42
+> mailbox rows, 25 agent chat messages, 1379 events imported.
+> PRAGMA foreign_key_check clean. Migrations through 060.
+
+Do not start MC at the end — leave the operator to start it when
+they're ready to validate.
