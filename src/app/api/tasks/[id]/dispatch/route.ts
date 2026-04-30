@@ -14,6 +14,7 @@ import { buildCheckpointContext, saveCheckpoint, getLatestCheckpoint } from '@/l
 import { clearStallFlag } from '@/lib/stall-detection';
 import { logDebugEvent } from '@/lib/debug-log';
 import { formatMailForDispatch } from '@/lib/mailbox';
+import { formatPendingRollcallsForDispatch } from '@/lib/rollcall';
 import { getPendingNotesForDispatch } from '@/lib/task-notes';
 import { createTaskWorkspace, resolveDispatchWorkspace } from '@/lib/workspace-isolation';
 import { parsePlanningSpec } from '@/lib/planning-spec';
@@ -855,7 +856,7 @@ ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-${callHomeSection}${delegationContractSection}${roleSoulSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${repoSection}${delegationRosterSection}${prescribedCommandsSection}
+${callHomeSection}${delegationContractSection}${roleSoulSection}${deliverablesLead}${criteriaLead}${planningSpecSection}${agentInstructionsSection}${skillsSection}${knowledgeSection}${imagesSection}${buildCheckpointContext(task.id) || ''}${formatMailForDispatch(agent.id) || ''}${formatPendingRollcallsForDispatch(agent.id)}${repoSection}${delegationRosterSection}${prescribedCommandsSection}
 ${isCoordinator
   ? `**DELIVERABLES DIR:** ${deliverablesDir}\nAggregated deliverables registered via the deliverables endpoint should be written to this directory so they become web-downloadable.\n`
   : workspaceIsolated
