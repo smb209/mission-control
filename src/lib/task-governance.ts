@@ -185,10 +185,20 @@ export async function recordLearnerOnTransition(taskId: string, previousStatus: 
   await notifyLearner(taskId, { previousStatus, newStatus, passed, failReason });
 }
 
-export function taskCanBeDone(taskId: string): boolean {
+export function taskCanBeDone(
+  taskId: string,
+  opts: { ignoreStaleFailureReason?: boolean } = {},
+): boolean {
   const task = queryOne<{ status: string; status_reason?: string }>('SELECT status, status_reason FROM tasks WHERE id = ?', [taskId]);
   if (!task) return false;
-  const hasValidationFailure = (task.status_reason || '').toLowerCase().includes('fail');
+  const reason = (task.status_reason || '').trim();
+  // The caller (transitionTaskStatus) detected a stale "Failed: …" reason
+  // that is about to be cleared by the same UPDATE — don't block the
+  // transition on the very reason we're erasing in the next statement.
+  // Only the canonical handleStageFailure prefix is forgiven; other
+  // failure-shaped reasons still block.
+  const isStaleAutoFailure = opts.ignoreStaleFailureReason && /^failed:/i.test(reason);
+  const hasValidationFailure = !isStaleAutoFailure && reason.toLowerCase().includes('fail');
   return !hasValidationFailure && hasStageEvidence(taskId);
 }
 

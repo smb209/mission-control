@@ -255,8 +255,24 @@ export async function PATCH(
         return NextResponse.json({ error: 'status_reason is required when failing a stage' }, { status: 400 });
       }
 
-      if (nextStatus === 'done' && !boardOverrideAllowed && !taskCanBeDone(id)) {
+      // Self-clear stale "Failed: …" reasons on successful recovery (mirror
+      // of the same check in services/task-status.ts:transitionTaskStatus).
+      // Without this, a task that was bounced by a prior reviewer and has
+      // since been re-tested + re-reviewed successfully still has the old
+      // failure text on the row, and taskCanBeDone's substring-includes-fail
+      // check rejects the final transition.
+      const existingReason = (existing as { status_reason?: string }).status_reason ?? '';
+      const shouldClearStaleFailure =
+        !failingBackwards &&
+        validatedData.status_reason === undefined &&
+        /^failed:/i.test(existingReason.trim());
+
+      if (nextStatus === 'done' && !boardOverrideAllowed && !taskCanBeDone(id, { ignoreStaleFailureReason: shouldClearStaleFailure })) {
         return NextResponse.json({ error: 'Cannot mark done: validation/evidence requirements not met' }, { status: 400 });
+      }
+
+      if (shouldClearStaleFailure) {
+        updates.push('status_reason = NULL');
       }
 
       updates.push('status = ?');

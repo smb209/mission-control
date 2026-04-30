@@ -136,7 +136,23 @@ export function transitionTaskStatus(
     };
   }
 
-  if (newStatus === 'done' && !boardOverride && !taskCanBeDone(taskId)) {
+  // Self-clear stale failure reasons on successful recovery. handleStageFailure
+  // writes status_reason = "Failed: <text>" when bouncing a task back. If the
+  // work is later re-tested + re-reviewed and progresses forward again, that
+  // old reason is still on the row — and `taskCanBeDone` blocks the final
+  // transition to `done` because its substring check sees "fail". Clear the
+  // stale reason whenever the caller didn't explicitly set one AND we're
+  // moving forward (not failing-backwards), and only when the existing reason
+  // matches the canonical "Failed:" prefix produced by handleStageFailure —
+  // operator-set or other-source reasons (e.g. legacy "Validation failed:")
+  // are left alone.
+  const shouldClearStaleFailure =
+    !failingBackwards &&
+    statusReason === undefined &&
+    typeof existing.status_reason === 'string' &&
+    /^failed:/i.test(existing.status_reason.trim());
+
+  if (newStatus === 'done' && !boardOverride && !taskCanBeDone(taskId, { ignoreStaleFailureReason: shouldClearStaleFailure })) {
     return {
       ok: false,
       code: 'cannot_mark_done',
@@ -150,6 +166,8 @@ export function transitionTaskStatus(
   if (statusReason !== undefined) {
     updates.push('status_reason = ?');
     values.push(statusReason);
+  } else if (shouldClearStaleFailure) {
+    updates.push('status_reason = NULL');
   }
   values.push(taskId);
   run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, values);
