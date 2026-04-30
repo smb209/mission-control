@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   planning_agents TEXT,
   planning_dispatch_error TEXT,
   status_reason TEXT,
+  -- Set to 1 by handleStageFailure when a task is bounced back from a
+  -- quality stage. Cleared by transitionTaskStatus on the next successful
+  -- forward transition. Read by taskCanBeDone — replaces the legacy
+  -- substring check on status_reason that false-positived on free text.
+  is_failed INTEGER NOT NULL DEFAULT 0,
   images TEXT,
   convoy_id TEXT,
   is_subtask INTEGER DEFAULT 0,

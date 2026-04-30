@@ -333,9 +333,12 @@ export async function handleStageFailure(
     console.warn('[Workflow] composePriorStageReport failed:', err);
   }
 
-  // Update task status to the fail target
+  // Update task status to the fail target. Set the structured failure
+  // flag — this is the canonical source of truth read by taskCanBeDone.
+  // The "Failed: " prefix on status_reason is kept for human readability
+  // and audit timeline rendering, but the gate no longer parses it.
   run(
-    'UPDATE tasks SET status = ?, status_reason = ?, updated_at = ? WHERE id = ?',
+    'UPDATE tasks SET status = ?, status_reason = ?, is_failed = 1, updated_at = ? WHERE id = ?',
     [targetStatus, `Failed: ${failReason}`, now, taskId]
   );
 

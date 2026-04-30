@@ -29,7 +29,7 @@
 import { queryOne, run } from '@/lib/db';
 import {
   checkStageEvidence,
-  taskCanBeDone,
+  whyCannotBeDone,
   isTerminalStatus,
   auditBoardOverride,
 } from '@/lib/task-governance';
@@ -136,28 +136,32 @@ export function transitionTaskStatus(
     };
   }
 
-  // Self-clear stale failure reasons on successful recovery. handleStageFailure
-  // writes status_reason = "Failed: <text>" when bouncing a task back. If the
-  // work is later re-tested + re-reviewed and progresses forward again, that
-  // old reason is still on the row — and `taskCanBeDone` blocks the final
-  // transition to `done` because its substring check sees "fail". Clear the
-  // stale reason whenever the caller didn't explicitly set one AND we're
-  // moving forward (not failing-backwards), and only when the existing reason
-  // matches the canonical "Failed:" prefix produced by handleStageFailure —
-  // operator-set or other-source reasons (e.g. legacy "Validation failed:")
-  // are left alone.
+  // Forward (non-failing) transitions clear the structured `is_failed` flag
+  // and any stale "Failed:" status_reason from a prior loop. The flag is
+  // the single source of truth read by `taskCanBeDone` — keeping it in sync
+  // with the actual stage progression replaces the brittle substring check
+  // we used to do on status_reason.
+  const isExistingRow = existing as Task & { is_failed?: number; status_reason?: string };
+  const wasMarkedFailed = Number(isExistingRow.is_failed ?? 0) === 1;
   const shouldClearStaleFailure =
     !failingBackwards &&
     statusReason === undefined &&
-    typeof existing.status_reason === 'string' &&
-    /^failed:/i.test(existing.status_reason.trim());
+    typeof isExistingRow.status_reason === 'string' &&
+    /^failed:/i.test(isExistingRow.status_reason.trim());
 
-  if (newStatus === 'done' && !boardOverride && !taskCanBeDone(taskId, { ignoreStaleFailureReason: shouldClearStaleFailure })) {
-    return {
-      ok: false,
-      code: 'cannot_mark_done',
-      error: 'Cannot mark done: validation/evidence requirements not met',
-    };
+  if (newStatus === 'done' && !boardOverride) {
+    const reason = whyCannotBeDone(taskId, {
+      // The same UPDATE that performs this transition will clear is_failed,
+      // so don't block on it here.
+      ignoreFailureFlag: !failingBackwards && wasMarkedFailed,
+    });
+    if (reason) {
+      return {
+        ok: false,
+        code: 'cannot_mark_done',
+        error: `Cannot mark done: ${reason}`,
+      };
+    }
   }
 
   const now = new Date().toISOString();
@@ -168,6 +172,9 @@ export function transitionTaskStatus(
     values.push(statusReason);
   } else if (shouldClearStaleFailure) {
     updates.push('status_reason = NULL');
+  }
+  if (!failingBackwards && wasMarkedFailed) {
+    updates.push('is_failed = 0');
   }
   values.push(taskId);
   run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, values);

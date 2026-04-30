@@ -4,6 +4,7 @@ import { run, queryOne } from './db';
 import {
   hasStageEvidence,
   taskCanBeDone,
+  whyCannotBeDone,
   ensureFixerExists,
   getFailureCountInStage,
 } from './task-governance';
@@ -38,14 +39,17 @@ test('evidence gate requires deliverable + activity', () => {
   assert.equal(hasStageEvidence(taskId), true);
 });
 
-test('task cannot be done when status_reason indicates failure', () => {
+test('task cannot be done when is_failed flag is set', () => {
   const taskId = crypto.randomUUID();
   seedTask(taskId);
 
-  run(`UPDATE tasks SET status_reason = 'Validation failed: CSS broken' WHERE id = ?`, [taskId]);
+  // Free-text status_reason that legitimately contains "fail" no longer
+  // blocks — the structured flag is the source of truth. Set both to make
+  // the intent explicit.
+  run(`UPDATE tasks SET is_failed = 1, status_reason = 'Validation failed: CSS broken' WHERE id = ?`, [taskId]);
   run(
-    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, created_at)
-     VALUES (lower(hex(randomblob(16))), ?, 'file', 'index.html', datetime('now'))`,
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'index.html', 'output', datetime('now'))`,
     [taskId]
   );
   run(
@@ -54,12 +58,17 @@ test('task cannot be done when status_reason indicates failure', () => {
     [taskId]
   );
 
-  assert.equal(taskCanBeDone(taskId), false);
+  assert.equal(taskCanBeDone(taskId), false, 'is_failed=1 blocks');
 });
 
-test('ignoreStaleFailureReason forgives canonical "Failed:" prefix only', () => {
+test('descriptive status_reason containing "fail" no longer blocks (post is_failed flag)', () => {
   const taskId = crypto.randomUUID();
   seedTask(taskId);
+  // Common false-positive: descriptive text that mentions failure handling
+  // without actually being a failure — e.g. a successful task summarising
+  // its coverage. Pre-flag this would be rejected; now it's allowed because
+  // is_failed = 0.
+  run(`UPDATE tasks SET status_reason = 'all failure paths covered, fail-loud on missing config' WHERE id = ?`, [taskId]);
   run(
     `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
      VALUES (lower(hex(randomblob(16))), ?, 'file', 'x.ts', 'output', datetime('now'))`,
@@ -71,14 +80,66 @@ test('ignoreStaleFailureReason forgives canonical "Failed:" prefix only', () => 
     [taskId]
   );
 
-  // Canonical handleStageFailure prefix — recovery path should forgive it.
-  run(`UPDATE tasks SET status_reason = 'Failed: CRITICAL — old reviewer finding' WHERE id = ?`, [taskId]);
-  assert.equal(taskCanBeDone(taskId), false, 'still blocks without the option');
-  assert.equal(taskCanBeDone(taskId, { ignoreStaleFailureReason: true }), true, 'option forgives canonical prefix');
+  assert.equal(taskCanBeDone(taskId), true);
+});
 
-  // Non-canonical "fail" reason — option must NOT forgive (still blocks).
-  run(`UPDATE tasks SET status_reason = 'Validation failed: CSS broken' WHERE id = ?`, [taskId]);
-  assert.equal(taskCanBeDone(taskId, { ignoreStaleFailureReason: true }), false, 'option still rejects non-canonical failures');
+test('ignoreFailureFlag bypasses is_failed for the same-UPDATE recovery path', () => {
+  const taskId = crypto.randomUUID();
+  seedTask(taskId);
+  run(`UPDATE tasks SET is_failed = 1 WHERE id = ?`, [taskId]);
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'x.ts', 'output', datetime('now'))`,
+    [taskId]
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'completed', 'did thing', datetime('now'))`,
+    [taskId]
+  );
+
+  assert.equal(taskCanBeDone(taskId), false, 'flag still blocks by default');
+  assert.equal(taskCanBeDone(taskId, { ignoreFailureFlag: true }), true, 'option lets the same-UPDATE recovery proceed');
+});
+
+test('whyCannotBeDone returns specific code-prefixed reasons', () => {
+  // Missing evidence path
+  const noEvidenceId = crypto.randomUUID();
+  seedTask(noEvidenceId);
+  const noEvidence = whyCannotBeDone(noEvidenceId);
+  assert.ok(noEvidence?.startsWith('code:evidence_gate'), `expected code:evidence_gate, got: ${noEvidence}`);
+
+  // is_failed flag path
+  const failedId = crypto.randomUUID();
+  seedTask(failedId);
+  run(`UPDATE tasks SET is_failed = 1 WHERE id = ?`, [failedId]);
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'x.ts', 'output', datetime('now'))`,
+    [failedId]
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'completed', 'did thing', datetime('now'))`,
+    [failedId]
+  );
+  const flagged = whyCannotBeDone(failedId);
+  assert.ok(flagged?.startsWith('code:task_marked_failed'), `expected code:task_marked_failed, got: ${flagged}`);
+
+  // Happy path returns null
+  const okId = crypto.randomUUID();
+  seedTask(okId);
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'x.ts', 'output', datetime('now'))`,
+    [okId]
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'completed', 'did thing', datetime('now'))`,
+    [okId]
+  );
+  assert.equal(whyCannotBeDone(okId), null);
 });
 
 test('ensureFixerExists creates fixer when missing', () => {

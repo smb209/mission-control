@@ -233,21 +233,48 @@ export async function recordLearnerOnTransition(taskId: string, previousStatus: 
   await notifyLearner(taskId, { previousStatus, newStatus, passed, failReason });
 }
 
+/**
+ * Return the specific reason a task cannot be marked done, or null if it
+ * can. Centralises the four distinct rejection paths so callers
+ * (transitionTaskStatus, the API PATCH route, MCP `update_task_status`)
+ * can surface the precise cause to the agent rather than the legacy
+ * generic "validation/evidence requirements not met". Each reason starts
+ * with a stable `code: …` prefix so smart callers can branch without
+ * parsing prose.
+ *
+ * The `ignoreFailureFlag` option is for transition paths that are about
+ * to clear `is_failed` in the same UPDATE — they shouldn't be blocked by
+ * the very flag they're erasing.
+ */
+export function whyCannotBeDone(
+  taskId: string,
+  opts: { ignoreFailureFlag?: boolean } = {},
+): string | null {
+  const task = queryOne<{ status: string; is_failed?: number }>(
+    'SELECT status, is_failed FROM tasks WHERE id = ?',
+    [taskId],
+  );
+  if (!task) return 'code:not_found — task does not exist';
+
+  const isFailed = !opts.ignoreFailureFlag && Number(task.is_failed ?? 0) === 1;
+  if (isFailed) {
+    return 'code:task_marked_failed — a prior stage flagged this task as failed; address the cause and clear the flag (a successful forward transition does so automatically)';
+  }
+
+  const evidence = checkStageEvidence(taskId);
+  if (!evidence.ok) {
+    // checkStageEvidence already produces a precise reason — surface it.
+    return `code:evidence_gate — ${evidence.reason || 'evidence requirements not met'}`;
+  }
+
+  return null;
+}
+
 export function taskCanBeDone(
   taskId: string,
-  opts: { ignoreStaleFailureReason?: boolean } = {},
+  opts: { ignoreFailureFlag?: boolean } = {},
 ): boolean {
-  const task = queryOne<{ status: string; status_reason?: string }>('SELECT status, status_reason FROM tasks WHERE id = ?', [taskId]);
-  if (!task) return false;
-  const reason = (task.status_reason || '').trim();
-  // The caller (transitionTaskStatus) detected a stale "Failed: …" reason
-  // that is about to be cleared by the same UPDATE — don't block the
-  // transition on the very reason we're erasing in the next statement.
-  // Only the canonical handleStageFailure prefix is forgiven; other
-  // failure-shaped reasons still block.
-  const isStaleAutoFailure = opts.ignoreStaleFailureReason && /^failed:/i.test(reason);
-  const hasValidationFailure = !isStaleAutoFailure && reason.toLowerCase().includes('fail');
-  return !hasValidationFailure && hasStageEvidence(taskId);
+  return whyCannotBeDone(taskId, opts) === null;
 }
 
 export function isActiveStatus(status: string): boolean {
