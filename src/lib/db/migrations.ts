@@ -3535,6 +3535,29 @@ const migrations: Migration[] = [
       console.log('[Migration 059] tasks.is_failed added + backfilled.');
     },
   },
+  {
+    id: '060',
+    name: 'agents_runtime_kind',
+    up: (db) => {
+      // Disambiguate the path scheme MC uses when computing the
+      // deliverables-root surfaced in dispatch. Slice 7 of the
+      // autonomous-flow tightening: the AlertDialog Tester wrote
+      // screenshots to `/app/workspace/...` (container path) on a host
+      // runtime, getting ENOENT, because the dispatch doesn't differentiate
+      // host vs container. With this column the dispatch picks the right
+      // perspective per agent — and the role souls can call out the
+      // container/host distinction unambiguously.
+      const cols = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'runtime_kind')) {
+        db.exec(
+          `ALTER TABLE agents ADD COLUMN runtime_kind TEXT
+             NOT NULL DEFAULT 'host'
+             CHECK (runtime_kind IN ('host', 'container'))`,
+        );
+      }
+      console.log('[Migration 060] agents.runtime_kind added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

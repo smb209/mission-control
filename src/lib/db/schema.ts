@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
 );
 
 -- Agents table
+-- Note: agents.runtime_kind ("host" or "container") disambiguates the path
+-- perspective the agent sees. MC uses it to pick host- vs container-rooted
+-- deliverables paths at dispatch time so an agent running in a Docker
+-- container gets a /app/... path and a host agent gets a /Users/... path.
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -50,6 +54,7 @@ CREATE TABLE IF NOT EXISTS agents (
   is_active INTEGER DEFAULT 1,
   total_cost_usd REAL DEFAULT 0,
   total_tokens_used INTEGER DEFAULT 0,
+  runtime_kind TEXT NOT NULL DEFAULT 'host' CHECK (runtime_kind IN ('host', 'container')),
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
