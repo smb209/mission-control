@@ -20,6 +20,7 @@
     "db:checkpoint": "tsx scripts/db-checkpoint.ts save",
     "db:checkpoint:restore": "tsx scripts/db-checkpoint.ts restore",
     "db:checkpoint:list": "tsx scripts/db-checkpoint.ts list",
+    "db:import-from-prod": "tsx scripts/db-import-from-prod.ts",
     "openapi:generate": "next-openapi-gen generate",
     "openclaw:sync": "node scripts/sync-openclaw-agents.mjs",
     "openclaw:sync:check": "node scripts/sync-openclaw-agents.mjs --dry-run",
