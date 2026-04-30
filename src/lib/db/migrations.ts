@@ -3508,6 +3508,33 @@ const migrations: Migration[] = [
       console.log('[Migration 058] task_evidence created.');
     },
   },
+  {
+    id: '059',
+    name: 'tasks_is_failed_flag',
+    up: (db) => {
+      // Replace the brittle `status_reason.toLowerCase().includes('fail')`
+      // gate in `taskCanBeDone` with a structured boolean. PR #112 narrowly
+      // forgave the canonical "Failed:" prefix on recovery, but free-text
+      // status_reason values that legitimately contain "fail" (e.g. "all
+      // failure paths covered") still false-positive. With this flag,
+      // status_reason becomes purely descriptive — handleStageFailure sets
+      // is_failed=1, and successful forward transitions clear it.
+      const cols = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'is_failed')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN is_failed INTEGER NOT NULL DEFAULT 0`);
+      }
+      // Backfill: tasks currently carrying the canonical "Failed:" reason
+      // are the same set the substring check was rejecting. Marking them
+      // is_failed=1 preserves the prior block-on-done behavior; the next
+      // forward transition will clear both fields.
+      db.exec(
+        `UPDATE tasks SET is_failed = 1 WHERE is_failed = 0
+           AND status_reason IS NOT NULL
+           AND status_reason LIKE 'Failed:%'`,
+      );
+      console.log('[Migration 059] tasks.is_failed added + backfilled.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

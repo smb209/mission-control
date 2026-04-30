@@ -5,7 +5,7 @@ import { broadcast } from '@/lib/events';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { runPostStatusChangeSideEffects } from '@/lib/services/task-status';
-import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, taskCanBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
+import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, whyCannotBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
 import { UpdateTaskSchema } from '@/lib/validation';
@@ -255,24 +255,33 @@ export async function PATCH(
         return NextResponse.json({ error: 'status_reason is required when failing a stage' }, { status: 400 });
       }
 
-      // Self-clear stale "Failed: …" reasons on successful recovery (mirror
-      // of the same check in services/task-status.ts:transitionTaskStatus).
-      // Without this, a task that was bounced by a prior reviewer and has
-      // since been re-tested + re-reviewed successfully still has the old
-      // failure text on the row, and taskCanBeDone's substring-includes-fail
-      // check rejects the final transition.
-      const existingReason = (existing as { status_reason?: string }).status_reason ?? '';
+      // Forward (non-failing) transitions clear the structured `is_failed`
+      // flag set by handleStageFailure on the prior loop, plus any stale
+      // "Failed: …" status_reason kept around for human readability. The
+      // flag is the source of truth read by taskCanBeDone — keeping it in
+      // sync replaces the substring check we used to do here.
+      const existingRow = existing as { status_reason?: string; is_failed?: number };
+      const existingReason = existingRow.status_reason ?? '';
+      const wasMarkedFailed = Number(existingRow.is_failed ?? 0) === 1;
       const shouldClearStaleFailure =
         !failingBackwards &&
         validatedData.status_reason === undefined &&
         /^failed:/i.test(existingReason.trim());
 
-      if (nextStatus === 'done' && !boardOverrideAllowed && !taskCanBeDone(id, { ignoreStaleFailureReason: shouldClearStaleFailure })) {
-        return NextResponse.json({ error: 'Cannot mark done: validation/evidence requirements not met' }, { status: 400 });
+      if (nextStatus === 'done' && !boardOverrideAllowed) {
+        const reason = whyCannotBeDone(id, {
+          ignoreFailureFlag: !failingBackwards && wasMarkedFailed,
+        });
+        if (reason) {
+          return NextResponse.json({ error: `Cannot mark done: ${reason}` }, { status: 400 });
+        }
       }
 
       if (shouldClearStaleFailure) {
         updates.push('status_reason = NULL');
+      }
+      if (!failingBackwards && wasMarkedFailed) {
+        updates.push('is_failed = 0');
       }
 
       updates.push('status = ?');
