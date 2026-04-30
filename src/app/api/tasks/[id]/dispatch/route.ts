@@ -243,9 +243,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // Deliverables directory: MC-managed location the agent writes FINAL
     // deliverables into so they become web-downloadable. Separate from
     // taskProjectDir, which may be an isolated worktree the agent codes in.
+    //
+    // Slice 7 of the autonomous-flow tightening: pick the perspective from
+    // `agent.runtime_kind`. A host-runtime agent gets `/Users/...`; a
+    // container-runtime agent gets `/app/...`. The AlertDialog Tester wrote
+    // a `/app/workspace/...` screenshot from a host runtime and got ENOENT
+    // because the dispatch always passed 'host' regardless of where the
+    // agent actually ran.
+    const agentRuntime: 'host' | 'container' =
+      (agent as Agent & { runtime_kind?: string }).runtime_kind === 'container'
+        ? 'container'
+        : 'host';
     const deliverablesDir = getTaskDeliverableDir(
       { id: task.id, title: task.title, created_at: task.created_at },
-      'host'
+      agentRuntime,
     );
 
     // Create isolated workspace if parallel builds are possible.
