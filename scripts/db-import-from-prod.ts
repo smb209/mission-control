@@ -63,6 +63,15 @@ interface Args {
   source: string;
   target: string;
   preserve: string[];
+  /**
+   * Suffix appended to a source agent's `name` to find its target
+   * equivalent. E.g. `--agent-suffix=-dev` rewrites every FK pointing
+   * at prod's `mc-foo` to dev's `mc-foo-dev` instead of NULLing the
+   * column or deleting the row.
+   *
+   * Empty string disables remapping (legacy behavior).
+   */
+  agentSuffix: string;
   dryRun: boolean;
   yes: boolean;
 }
@@ -109,6 +118,7 @@ function usage(): never {
 function parseArgs(argv: string[]): Args {
   const args: Partial<Args> = {
     preserve: DEFAULT_PRESERVE,
+    agentSuffix: '',
     dryRun: false,
     yes: false,
   };
@@ -123,6 +133,8 @@ function parseArgs(argv: string[]): Args {
     if (a === '--source') args.source = next();
     else if (a === '--target') args.target = next();
     else if (a === '--preserve') args.preserve = next().split(',').map((s) => s.trim()).filter(Boolean);
+    else if (a === '--agent-suffix') args.agentSuffix = next();
+    else if (a.startsWith('--agent-suffix=')) args.agentSuffix = a.split('=', 2)[1] ?? '';
     else if (a === '--dry-run') args.dryRun = true;
     else if (a === '--yes') args.yes = true;
     else if (a === '--help' || a === '-h') usage();
@@ -175,6 +187,83 @@ interface PreservedRows {
   table: string;
   columns: string[];
   rows: unknown[][];
+}
+
+/**
+ * Build a (source agent id → target agent id) lookup using the
+ * suffix rule. Tries `gateway_agent_id` first (the natural openclaw
+ * identifier — `mc-builder` ↔ `mc-builder-dev`), then falls back to
+ * `name` for agents without a gateway binding (e.g. PM seeded by
+ * migration). Captured BEFORE the agents table is rehydrated so we
+ * can map the source's agent ids (still in the new target file from
+ * the cp) to the target equivalents we just snapshotted.
+ *
+ * Returns null when no remapping was requested.
+ */
+function buildAgentRemap(
+  newTargetPath: string,
+  preserved: PreservedRows[],
+  suffix: string,
+): { map: Map<string, string>; matched: number; unmatched: number } | null {
+  if (!suffix) return null;
+  const agentsSnapshot = preserved.find((p) => p.table === 'agents');
+  if (!agentsSnapshot) return null;
+
+  // Pull the SOURCE agents (currently in newTargetPath since we just
+  // copied source over target — agents haven't been rehydrated yet).
+  const db = new Database(newTargetPath, { readonly: true });
+  const sourceAgents = db
+    .prepare(`SELECT id, name, gateway_agent_id FROM agents`)
+    .all() as Array<{ id: string; name: string | null; gateway_agent_id: string | null }>;
+  db.close();
+
+  const idCol = agentsSnapshot.columns.indexOf('id');
+  const nameCol = agentsSnapshot.columns.indexOf('name');
+  const gwCol = agentsSnapshot.columns.indexOf('gateway_agent_id');
+  if (idCol < 0) return null;
+
+  const targetByGateway = new Map<string, string>();
+  const targetByName = new Map<string, string>();
+  for (const row of agentsSnapshot.rows) {
+    const id = row[idCol] as string | null;
+    if (!id) continue;
+    if (gwCol >= 0) {
+      const gw = row[gwCol] as string | null;
+      if (gw) targetByGateway.set(gw, id);
+    }
+    if (nameCol >= 0) {
+      const name = row[nameCol] as string | null;
+      if (name) targetByName.set(name, id);
+    }
+  }
+
+  const map = new Map<string, string>();
+  let matched = 0;
+  let unmatched = 0;
+  for (const sa of sourceAgents) {
+    if (!sa.id) continue;
+    let targetId: string | undefined;
+    // 1. Suffixed gateway match (prod 'mc-builder' → dev 'mc-builder-dev')
+    if (sa.gateway_agent_id) {
+      targetId = targetByGateway.get(sa.gateway_agent_id + suffix);
+    }
+    // 2. Suffixed name fallback (PM seeded by migration has no gw id)
+    if (!targetId && sa.name) {
+      targetId = targetByName.get(sa.name + suffix);
+    }
+    // 3. Verbatim gateway match (prod 'main' → dev 'main' — same id used
+    //    on both sides of the same openclaw, no suffix added).
+    if (!targetId && sa.gateway_agent_id) {
+      targetId = targetByGateway.get(sa.gateway_agent_id);
+    }
+    if (targetId) {
+      map.set(sa.id, targetId);
+      matched++;
+    } else {
+      unmatched++;
+    }
+  }
+  return { map, matched, unmatched };
 }
 
 /**
@@ -263,8 +352,8 @@ function rehydratePreserved(targetPath: string, preserved: PreservedRows[]): voi
 interface FkAction {
   table: string;
   column: string;
-  /** 'set_null' (column is NULLable) or 'delete_row' (NOT NULL or PK part). */
-  strategy: 'set_null' | 'delete_row';
+  /** 'remap', 'set_null', or 'delete_row'. */
+  strategy: 'remap' | 'set_null' | 'delete_row';
   affected: number;
 }
 
@@ -281,6 +370,7 @@ interface FkAction {
 function fixDanglingFKs(
   targetPath: string,
   preservedTables: string[],
+  agentRemap: Map<string, string> | null,
 ): FkAction[] {
   const db = new Database(targetPath);
   db.pragma('foreign_keys = OFF');
@@ -314,8 +404,30 @@ function fixDanglingFKs(
       const refTable = fk.table;
       const refCol = fk.to;
       const isNotNull = col.notnull === 1 || col.pk > 0;
-      const strategy: FkAction['strategy'] = isNotNull ? 'delete_row' : 'set_null';
 
+      // Step 1: rewrite via the agent remap (only valid when the
+      // referenced table is `agents` — that's the only remap source we
+      // build right now).
+      if (agentRemap && agentRemap.size > 0 && refTable === 'agents') {
+        const update = db.prepare(
+          `UPDATE ${table} SET "${col.name}" = ? WHERE "${col.name}" = ?`,
+        );
+        let remapped = 0;
+        const tx = db.transaction(() => {
+          for (const [sourceId, targetId] of agentRemap) {
+            const r = update.run(targetId, sourceId);
+            remapped += r.changes;
+          }
+        });
+        tx();
+        if (remapped > 0) {
+          out.push({ table, column: col.name, strategy: 'remap', affected: remapped });
+        }
+      }
+
+      // Step 2: handle whatever didn't remap (no source agent name match,
+      // or remap disabled). Same NULL-vs-DELETE rule as before.
+      const strategy: 'set_null' | 'delete_row' = isNotNull ? 'delete_row' : 'set_null';
       const sql =
         strategy === 'set_null'
           ? `UPDATE ${table}
@@ -324,10 +436,9 @@ function fixDanglingFKs(
                 AND "${col.name}" NOT IN (SELECT "${refCol}" FROM ${refTable})`
           : `DELETE FROM ${table}
               WHERE "${col.name}" NOT IN (SELECT "${refCol}" FROM ${refTable})`;
-
-      const result = db.prepare(sql).run();
-      if (result.changes > 0) {
-        out.push({ table, column: col.name, strategy, affected: result.changes });
+      const residual = db.prepare(sql).run();
+      if (residual.changes > 0) {
+        out.push({ table, column: col.name, strategy, affected: residual.changes });
       }
     }
   }
@@ -442,16 +553,31 @@ async function main(): Promise<void> {
     dbForMigrations.close();
     console.log('[import] migrations applied to new target');
 
-    // 5. Rehydrate preserved rows.
+    // 5a. Build the agent remap BEFORE rehydration, while the new target
+    //     file still contains the source's agent rows. After rehydrate,
+    //     those source rows are gone and we'd lose the (id → name) lookup.
+    const remap = buildAgentRemap(args.target, preserved, args.agentSuffix);
+    if (remap) {
+      console.log(
+        `[import] agent name remap (suffix='${args.agentSuffix}'): ${remap.matched} matched, ${remap.unmatched} unmatched`,
+      );
+    }
+
+    // 5b. Rehydrate preserved rows.
     rehydratePreserved(args.target, preserved);
 
     // 6. Fix dangling FKs that point at no-longer-present preserved rows.
-    const fkActions = fixDanglingFKs(args.target, args.preserve);
+    const fkActions = fixDanglingFKs(args.target, args.preserve, remap?.map ?? null);
     if (fkActions.length === 0) {
       console.log('[import] no dangling FKs to fix');
     } else {
       for (const f of fkActions) {
-        const verb = f.strategy === 'set_null' ? 'NULLed' : 'deleted';
+        const verb =
+          f.strategy === 'remap'
+            ? 'remapped'
+            : f.strategy === 'set_null'
+              ? 'NULLed'
+              : 'deleted';
         console.log(`[import] ${verb} ${f.affected} ${f.table}.${f.column} row(s)`);
       }
     }
