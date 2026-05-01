@@ -79,6 +79,8 @@ export interface PmDiffCapture {
   created_task_id?: string;
   /** Set by `applyDiff` for `add_availability` — id of the inserted row. */
   created_availability_id?: string;
+  /** Set by `applyDiff` for `set_task_status`. */
+  prev_task_status?: string;
 }
 
 export type PmDiff =
@@ -99,7 +101,11 @@ export type PmDiff =
   | ({
       kind: 'set_initiative_status';
       initiative_id: string;
-      status: 'planned' | 'in_progress' | 'at_risk' | 'blocked';
+      // Forward proposals are PM-restricted to planned|in_progress|at_risk|blocked
+      // (validated when trigger_kind != 'revert'). Revert proposals may
+      // restore done/cancelled if that was the captured prev_status, so
+      // the diff shape covers all six values.
+      status: 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
     } & PmDiffCapture)
   | ({
       kind: 'add_dependency';
@@ -149,6 +155,16 @@ export type PmDiff =
       status_check_md?: string | null;
       assigned_agent_id?: string | null;
       priority?: 'low' | 'normal' | 'high';
+    } & PmDiffCapture)
+  | ({
+      // Slice 2 of revertable PM proposals. Used as the inverse of
+      // `create_task_under_initiative` — the "tombstone" pattern: PM
+      // never hard-deletes, it cancels. Narrowly scoped to status='cancelled'
+      // for now since that's the only revert use case; if a broader
+      // task-status kind is needed in the future, generalize there.
+      kind: 'set_task_status';
+      task_id: string;
+      status: 'cancelled';
     } & PmDiffCapture);
 
 export interface PmProposal {
@@ -241,6 +257,7 @@ function assertInitiativeInWorkspace(
 export function validateProposedChanges(
   workspaceId: string,
   changes: PmDiff[],
+  options: { trigger_kind?: PmProposalTriggerKind } = {},
 ): string[] {
   const errors: string[] = [];
   const initiativeCache = new Map<string, boolean>();
@@ -306,9 +323,19 @@ export function validateProposedChanges(
           break;
         }
         assertInitiativeInWorkspace(workspaceId, c.initiative_id, errors, initiativeCache);
-        if (!STATUS_ALLOWED_FROM_PM.has(c.status)) {
+        // Forward proposals are PM-restricted to the four working statuses.
+        // Revert proposals legitimately need to restore done/cancelled when
+        // the captured prev_status was one of those — keep the diff shape
+        // honest here and trust the operator's accept review.
+        const isRevert = options.trigger_kind === 'revert';
+        const allowed = isRevert
+          ? new Set(['planned', 'in_progress', 'at_risk', 'blocked', 'done', 'cancelled'])
+          : STATUS_ALLOWED_FROM_PM;
+        if (!allowed.has(c.status)) {
           errors.push(
-            `changes[${i}]: status "${c.status}" not allowed from PM (planned/in_progress/at_risk/blocked only)`,
+            isRevert
+              ? `changes[${i}]: status "${c.status}" is not a valid initiative status`
+              : `changes[${i}]: status "${c.status}" not allowed from PM (planned/in_progress/at_risk/blocked only)`,
           );
         }
         break;
@@ -431,6 +458,25 @@ export function validateProposedChanges(
         }
         break;
       }
+      case 'set_task_status': {
+        if (!c.task_id) {
+          errors.push(`changes[${i}]: task_id required`);
+          break;
+        }
+        if (c.status !== 'cancelled') {
+          errors.push(
+            `changes[${i}]: set_task_status only supports status='cancelled' (revert use only)`,
+          );
+        }
+        const t = queryOne<{ id: string }>(
+          'SELECT id FROM tasks WHERE id = ? AND workspace_id = ?',
+          [c.task_id, workspaceId],
+        );
+        if (!t) {
+          errors.push(`changes[${i}]: task ${c.task_id} not found in workspace ${workspaceId}`);
+        }
+        break;
+      }
       default: {
         const exhaustive: never = c;
         errors.push(`changes[${i}]: unknown kind "${(exhaustive as { kind?: string }).kind ?? '?'}"`);
@@ -501,7 +547,11 @@ export function createProposal(input: CreateProposalInput): PmProposal {
     throw new PmProposalValidationError('impact_md required');
   }
 
-  const errors = validateProposedChanges(input.workspace_id, input.proposed_changes ?? []);
+  const errors = validateProposedChanges(
+    input.workspace_id,
+    input.proposed_changes ?? [],
+    { trigger_kind: input.trigger_kind ?? 'manual' },
+  );
   if (errors.length > 0) {
     throw new PmProposalValidationError(
       `Invalid proposed_changes: ${errors.length} error(s)`,
@@ -662,7 +712,11 @@ export function acceptProposal(
 
   // Re-validate against current DB state — initiatives could've been
   // deleted between draft and accept.
-  const errors = validateProposedChanges(existing.workspace_id, existing.proposed_changes);
+  const errors = validateProposedChanges(
+    existing.workspace_id,
+    existing.proposed_changes,
+    { trigger_kind: existing.trigger_kind },
+  );
   if (errors.length > 0) {
     throw new PmProposalValidationError(
       `Cannot apply proposal ${id}: ${errors.length} validation error(s)`,
@@ -963,6 +1017,18 @@ function applyDiff(diff: PmDiff, now: string): void {
       // Same out-of-band pattern: handled in acceptProposal so
       // initiative_id placeholders can resolve from the same proposal.
       throw new Error('create_task_under_initiative must be applied via acceptProposal pass-2');
+    }
+    case 'set_task_status': {
+      const prev = queryOne<{ status: string }>(
+        `SELECT status FROM tasks WHERE id = ?`,
+        [diff.task_id],
+      );
+      if (prev) diff.prev_task_status = prev.status;
+      run(
+        `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
+        [diff.status, now, diff.task_id],
+      );
+      return;
     }
     default: {
       const exhaustive: never = diff;
