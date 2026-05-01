@@ -152,10 +152,19 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
     // mirroring disjoint subsets of agents).
     const { included, excludedGatewayIds } = selectGatewayAgents(gatewayAgents);
 
+    // Track *whether* a gateway_id has any existing rows (to choose
+     // INSERT vs UPDATE). Multiple rows per gateway_id are legal — the
+     // clone-agents-on-create feature copies an agent into a new
+     // workspace while preserving gateway_agent_id, since gateway agents
+     // are an org-wide identity. Both rows must receive sync updates,
+     // so the UPDATEs below match by gateway_agent_id rather than id.
     const existing = queryAll<{ id: string; gateway_agent_id: string | null }>(
       `SELECT id, gateway_agent_id FROM agents WHERE gateway_agent_id IS NOT NULL`
     );
-    const existingByGatewayId = new Map(existing.map((a) => [a.gateway_agent_id, a.id]));
+    const existingGatewayIds = new Set<string>();
+    for (const a of existing) {
+      if (a.gateway_agent_id) existingGatewayIds.add(a.gateway_agent_id);
+    }
 
     let changed = 0;
     let markedOffline = 0;
@@ -168,22 +177,22 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
 
         const name = ga.name || ga.label || gatewayId;
         const role = normalizeRole(name);
-        const existingId = existingByGatewayId.get(gatewayId) || null;
 
-        if (existingId) {
-          // Update existing row. Flip status off 'offline' if a previous
-          // sync had marked it filtered-out and the operator has now
-          // included it again (env var change → restart).
+        if (existingGatewayIds.has(gatewayId)) {
+          // Update every existing row for this gateway_agent_id (one per
+          // workspace that has an agent linked to it). Flip status off
+          // 'offline' if a previous sync had marked it filtered-out and
+          // the operator has now included it again.
           run(
             `UPDATE agents
                 SET name = ?,
                     role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
                     model = COALESCE(?, model),
                     source = 'gateway',
-                    status = CASE WHEN status = 'offline' THEN 'idle' ELSE status END,
+                    status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
                     updated_at = ?
-              WHERE id = ?`,
-            [name, role, normaliseModel(ga.model), ts, existingId]
+              WHERE gateway_agent_id = ?`,
+            [name, role, normaliseModel(ga.model), ts, gatewayId]
           );
         } else {
           run(
@@ -202,13 +211,12 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
       // tasks / mailbox stay valid, and a future env-var relaxation
       // will flip status back to 'idle' automatically (above).
       for (const gatewayId of excludedGatewayIds) {
-        const existingId = existingByGatewayId.get(gatewayId);
-        if (!existingId) continue;
+        if (!existingGatewayIds.has(gatewayId)) continue;
         const result = run(
-          `UPDATE agents SET status = 'offline', updated_at = ? WHERE id = ? AND status != 'offline'`,
-          [ts, existingId]
+          `UPDATE agents SET status = 'offline', updated_at = ? WHERE gateway_agent_id = ? AND status != 'offline'`,
+          [ts, gatewayId]
         );
-        if (result.changes > 0) markedOffline += 1;
+        if (result.changes > 0) markedOffline += result.changes;
       }
 
       run(
