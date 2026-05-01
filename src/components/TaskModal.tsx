@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText, BookOpen } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText, BookOpen, Send } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -37,7 +37,35 @@ interface TaskModalProps {
 }
 
 export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
-  const { agents, addTask, updateTask, addEvent } = useMissionControl();
+  const { agents, addTask, updateTask, updateTaskStatus, addEvent } = useMissionControl();
+  const [isPromoting, setIsPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+
+  const handlePromote = async () => {
+    if (!task) return;
+    setIsPromoting(true);
+    setPromoteError(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/promote`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Promote failed (${res.status})`);
+      }
+      updateTaskStatus(task.id, 'inbox');
+      addEvent({
+        id: task.id + '-promote-' + Date.now(),
+        type: 'task_status_changed',
+        task_id: task.id,
+        message: `Promoted draft to inbox: ${task.title}`,
+        created_at: new Date().toISOString(),
+      });
+      onClose();
+    } catch (e) {
+      setPromoteError(e instanceof Error ? e.message : 'Promote failed');
+    } finally {
+      setIsPromoting(false);
+    }
+  };
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [usePlanningMode, setUsePlanningMode] = useState(false);
@@ -380,12 +408,25 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
       <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full max-w-5xl max-h-[92vh] sm:max-h-[92vh] h-[92vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-mc-border shrink-0">
-          <h2 className="text-lg font-semibold">
-            {task ? task.title : 'Create New Task'}
-          </h2>
+          <div className="flex items-center gap-3 min-w-0">
+            {task && (
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wide border shrink-0 ${
+                  task.status === 'draft'
+                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                    : 'bg-mc-bg-tertiary text-mc-text-secondary border-mc-border'
+                }`}
+              >
+                {task.status}
+              </span>
+            )}
+            <h2 className="text-lg font-semibold truncate">
+              {task ? task.title : 'Create New Task'}
+            </h2>
+          </div>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-mc-bg-tertiary rounded-sm"
+            className="p-1 hover:bg-mc-bg-tertiary rounded-sm shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
@@ -780,7 +821,26 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
                 </>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {task?.status === 'draft' && (
+                <>
+                  {promoteError && (
+                    <span className="text-xs text-red-400 max-w-48 truncate" title={promoteError}>
+                      {promoteError}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handlePromote}
+                    disabled={isPromoting}
+                    title="Promote draft to execution queue (status → inbox)"
+                    className="min-h-11 flex items-center gap-2 px-3 py-2 rounded-sm text-sm border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                  >
+                    <Send className="w-4 h-4" />
+                    {isPromoting ? 'Promoting…' : 'Promote to inbox'}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 onClick={onClose}
