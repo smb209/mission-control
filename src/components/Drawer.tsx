@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
@@ -27,6 +28,11 @@ export default function Drawer({
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Render via portal so the fixed-positioned panel can't get trapped by
+  // an ancestor that creates a containing block (e.g. a parent flex column,
+  // CSS containment, or future transform). Mount-gated to keep SSR happy.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   // Esc to close + focus trap + restore focus on close.
   useEffect(() => {
@@ -81,9 +87,9 @@ export default function Drawer({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50">
       {/* Backdrop */}
       <div
@@ -120,6 +126,7 @@ export default function Drawer({
           </footer>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
