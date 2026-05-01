@@ -41,6 +41,10 @@ export const TRIGGER_BADGE: Record<string, TriggerBadge> = {
     label: 'decompose',
     cls: 'bg-pink-500/15 text-pink-300 border-pink-500/30',
   },
+  decompose_story: {
+    label: 'story → tasks',
+    cls: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  },
   notes_intake: {
     label: 'notes',
     cls: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30',

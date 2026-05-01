@@ -19,6 +19,9 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
+import DecomposeStoryToTasksModal from '@/components/DecomposeStoryToTasksModal';
+import { DecomposerAgentPicker, type DecomposerOption } from '@/components/inline/DecomposerAgentPicker';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import PlanWithPmPanel, {
   type PlanInitiativeSuggestions,
 } from '@/components/PlanWithPmPanel';
@@ -111,6 +114,7 @@ interface AgentLite {
   role: string;
   avatar_emoji: string;
   workspace_id: string;
+  is_pm?: number | boolean | null;
 }
 
 type Complexity = 'S' | 'M' | 'L' | 'XL';
@@ -180,6 +184,19 @@ export default function InitiativeDetailPage({
   const [agents, setAgents] = useState<AgentLite[]>([]);
   const [showPromoteModal, setShowPromoteModal] = useState(false);
   const [showDecomposeModal, setShowDecomposeModal] = useState(false);
+  // Story → tasks decomposition (sibling of decompose for epics/milestones).
+  const [showDecomposeStoryModal, setShowDecomposeStoryModal] = useState(false);
+  const [decomposeStoryAgent, setDecomposeStoryAgent] = useState<{ id: string; label: string } | null>(null);
+  // Generic destructive-action confirm. One slot is enough — we only ever
+  // prompt for one action at a time. Replaces native window.confirm() so
+  // the modal renders in the same visual style as the rest of the app and
+  // is preview/automation-driveable.
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    body: React.ReactNode;
+    confirmLabel: string;
+    action: () => void;
+  } | null>(null);
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showAddDepModal, setShowAddDepModal] = useState(false);
@@ -297,6 +314,23 @@ export default function InitiativeDetailPage({
     window.setTimeout(() => setPlanPanelHighlight(false), 1800);
   }, []);
 
+  // Decomposer agent options for the story → tasks picker. Today only the
+  // workspace PM has a task-decomposition prompt; other agents will be
+  // added once Builder/Coordinator/custom prompts exist (the picker is
+  // already shaped for it).
+  const decomposerOptions: DecomposerOption[] = (() => {
+    const out: DecomposerOption[] = [];
+    const pm = agents.find(a => a.is_pm === 1 || a.is_pm === true || a.role === 'pm');
+    if (pm) {
+      out.push({
+        id: pm.id,
+        label: 'PM',
+        description: 'Workspace PM. Proposes a small set of draft tasks the operator can review before promoting to Inbox.',
+      });
+    }
+    return out;
+  })();
+
   const openDecompose = useCallback((hint?: string) => {
     setDecomposeHint(hint && hint.length > 0 ? hint : null);
     setShowDecomposeModal(true);
@@ -372,35 +406,47 @@ export default function InitiativeDetailPage({
 
   // Delete with confirm. On success, route back to the list — the detail
   // page no longer has a row to render.
-  const deleteInitiative = useCallback(async () => {
+  const deleteInitiative = useCallback(() => {
     if (!initiative) return;
-    if (!confirm(`Delete "${initiative.title}"? This cannot be undone.`)) return;
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/initiatives/${initiative.id}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Delete failed (${res.status})`);
-      }
-      router.push('/initiatives');
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Delete failed');
-    }
+    setPendingConfirm({
+      title: `Delete "${initiative.title}"?`,
+      body: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      action: async () => {
+        setActionError(null);
+        try {
+          const res = await fetch(`/api/initiatives/${initiative.id}`, { method: 'DELETE' });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Delete failed (${res.status})`);
+          }
+          router.push('/initiatives');
+        } catch (e) {
+          setActionError(e instanceof Error ? e.message : 'Delete failed');
+        }
+      },
+    });
   }, [initiative, router]);
 
-  const deleteDraft = async (taskId: string) => {
-    setActionError(null);
-    if (!window.confirm('Delete this draft task? This cannot be undone.')) return;
-    try {
-      const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Delete failed (${res.status})`);
-      }
-      refresh();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Delete failed');
-    }
+  const deleteDraft = (taskId: string) => {
+    setPendingConfirm({
+      title: 'Delete this draft task?',
+      body: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      action: async () => {
+        setActionError(null);
+        try {
+          const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `Delete failed (${res.status})`);
+          }
+          refresh();
+        } catch (e) {
+          setActionError(e instanceof Error ? e.message : 'Delete failed');
+        }
+      },
+    });
   };
 
   const promoteDraft = async (taskId: string) => {
@@ -560,6 +606,19 @@ or "carve out the onboarding flow as its own story first"`}
               >
                 Decompose with PM
               </SplitToolbarButton>
+            )}
+            {initiative.kind === 'story' && (
+              <DecomposerAgentPicker
+                icon={<Sparkles className="w-3.5 h-3.5" />}
+                agents={decomposerOptions}
+                onPick={(id, label) => {
+                  setDecomposeStoryAgent({ id, label });
+                  setShowDecomposeStoryModal(true);
+                }}
+                title="Break this story into draft tasks"
+              >
+                Decompose to tasks
+              </DecomposerAgentPicker>
             )}
             <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
@@ -927,6 +986,23 @@ or "carve out the onboarding flow as its own story first"`}
           }}
         />
       )}
+      {showDecomposeStoryModal && initiative.kind === 'story' && (
+        <DecomposeStoryToTasksModal
+          initiative={{
+            id: initiative.id,
+            title: initiative.title,
+            kind: initiative.kind,
+            workspace_id: initiative.workspace_id,
+          }}
+          agentId={decomposeStoryAgent?.id ?? null}
+          agentLabel={decomposeStoryAgent?.label}
+          onClose={() => setShowDecomposeStoryModal(false)}
+          onAccepted={() => {
+            setShowDecomposeStoryModal(false);
+            refresh();
+          }}
+        />
+      )}
       {showMoveModal && (
         <MoveModal
           initiative={initiative as ListInitiative}
@@ -966,6 +1042,19 @@ or "carve out the onboarding flow as its own story first"`}
           onClose={() => setShowHistoryDrawer(false)}
         />
       )}
+      <ConfirmDialog
+        open={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ''}
+        body={pendingConfirm?.body ?? null}
+        confirmLabel={pendingConfirm?.confirmLabel ?? 'Confirm'}
+        destructive
+        onConfirm={() => {
+          const c = pendingConfirm;
+          setPendingConfirm(null);
+          c?.action();
+        }}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   );
 }
