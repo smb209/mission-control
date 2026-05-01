@@ -30,6 +30,7 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
+  RefreshCw,
 } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
@@ -89,6 +90,7 @@ export default function AgentsPage() {
   const [rollCallBusy, setRollCallBusy] = useState(false);
   const [rollCallResult, setRollCallResult] = useState<RollCallResultView | null>(null);
   const [resetSessionsBusy, setResetSessionsBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
   // Replaces native window.confirm() — see §1.7 finding in PREVIEW_TEST_FINDINGS.
   // The native dialog blocks automation tooling and breaks the test-flow walk.
   const [pendingConfirm, setPendingConfirm] = useState<null | {
@@ -255,6 +257,28 @@ export default function AgentsPage() {
       });
     } finally {
       setRollCallBusy(false);
+    }
+  };
+
+  const syncFromGateway = async () => {
+    setSyncBusy(true);
+    try {
+      const res = await fetch('/api/agents/sync', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showAlertDialog('Sync failed', data.error || `Sync failed (${res.status})`);
+        return;
+      }
+      // Refetch the roster so the page reflects whatever the gateway just
+      // wrote (model changes, new agents, status flips).
+      const refresh = await fetch(`/api/agents?workspace_id=${encodeURIComponent(workspaceId)}`);
+      if (refresh.ok) {
+        setAgents((await refresh.json()) as Agent[]);
+      }
+    } catch (e) {
+      showAlertDialog('Sync failed', e instanceof Error ? e.message : 'Sync failed');
+    } finally {
+      setSyncBusy(false);
     }
   };
 
@@ -471,6 +495,14 @@ export default function AgentsPage() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            <HeaderButton
+              icon={syncBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              onClick={syncFromGateway}
+              disabled={syncBusy}
+              tone="purple"
+            >
+              {syncBusy ? 'Syncing…' : 'Sync from Gateway'}
+            </HeaderButton>
             <HeaderButton
               icon={rollCallBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
               onClick={runRollCall}
