@@ -20,6 +20,7 @@ import {
   FileText,
   CalendarRange,
   ExternalLink,
+  FolderInput,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
@@ -145,6 +146,7 @@ export default function InitiativesPage() {
   const [editing, setEditing] = useState<Initiative | null>(null);
   const [creating, setCreating] = useState<{ parent_id: string | null } | null>(null);
   const [moving, setMoving] = useState<Initiative | null>(null);
+  const [movingToWorkspace, setMovingToWorkspace] = useState<Initiative | null>(null);
   const [converting, setConverting] = useState<Initiative | null>(null);
   const [promoting, setPromoting] = useState<Initiative | null>(null);
   const [historyFor, setHistoryFor] = useState<Initiative | null>(null);
@@ -284,6 +286,7 @@ export default function InitiativesPage() {
                 onEdit={setEditing}
                 onAddChild={parent => setCreating({ parent_id: parent.id })}
                 onMove={setMoving}
+                onMoveToWorkspace={setMovingToWorkspace}
                 onConvert={setConverting}
                 onPromote={setPromoting}
                 onShowHistory={setHistoryFor}
@@ -333,6 +336,16 @@ export default function InitiativesPage() {
           onClose={() => setMoving(null)}
           onSaved={() => {
             setMoving(null);
+            refresh();
+          }}
+        />
+      )}
+      {movingToWorkspace && (
+        <MoveToWorkspaceModal
+          initiative={movingToWorkspace}
+          onClose={() => setMovingToWorkspace(null)}
+          onSaved={() => {
+            setMovingToWorkspace(null);
             refresh();
           }}
         />
@@ -429,6 +442,7 @@ function InitiativeRow({
   onEdit,
   onAddChild,
   onMove,
+  onMoveToWorkspace,
   onConvert,
   onPromote,
   onShowHistory,
@@ -445,6 +459,7 @@ function InitiativeRow({
   onEdit: (init: Initiative) => void;
   onAddChild: (parent: Initiative) => void;
   onMove: (init: Initiative) => void;
+  onMoveToWorkspace: (init: Initiative) => void;
   onConvert: (init: Initiative) => void;
   onPromote: (init: Initiative) => void;
   onShowHistory: (init: Initiative) => void;
@@ -500,6 +515,7 @@ function InitiativeRow({
         ]
       : []),
     { label: 'Move', icon: <MoveRight className="w-3.5 h-3.5" />, onClick: () => onMove(node) },
+    { label: 'Move to workspace…', icon: <FolderInput className="w-3.5 h-3.5" />, onClick: () => onMoveToWorkspace(node) },
     { label: 'Convert kind', icon: <Shuffle className="w-3.5 h-3.5" />, onClick: () => onConvert(node) },
     { label: 'Add dependency', icon: <Link2 className="w-3.5 h-3.5" />, onClick: () => onAddDependency(node) },
     { label: 'View history', icon: <History className="w-3.5 h-3.5" />, onClick: () => onShowHistory(node) },
@@ -653,6 +669,7 @@ function InitiativeRow({
             onEdit={onEdit}
             onAddChild={onAddChild}
             onMove={onMove}
+            onMoveToWorkspace={onMoveToWorkspace}
             onConvert={onConvert}
             onPromote={onPromote}
             onShowHistory={onShowHistory}
@@ -1759,5 +1776,112 @@ export function HistoryDrawer({
         </ul>
       )}
     </Drawer>
+  );
+}
+
+interface WorkspaceLite { id: string; slug: string; name: string; icon?: string | null }
+
+function MoveToWorkspaceModal({
+  initiative,
+  onClose,
+  onSaved,
+}: {
+  initiative: Initiative;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
+  const [target, setTarget] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/workspaces');
+        if (!res.ok) throw new Error(`Failed to load workspaces (${res.status})`);
+        const list: WorkspaceLite[] = await res.json();
+        const others = list.filter(w => w.id !== initiative.workspace_id);
+        setWorkspaces(others);
+        if (others.length > 0) setTarget(others[0].id);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : 'Failed to load workspaces');
+      }
+    })();
+  }, [initiative.workspace_id]);
+
+  const submit = async () => {
+    if (!target) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/initiatives/${initiative.id}/move-to-workspace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to_workspace_id: target }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Move failed (${res.status})`);
+      }
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Move failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div
+        className="bg-mc-bg-secondary border border-mc-border rounded-lg p-6 w-full max-w-lg text-mc-text"
+        onClick={e => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-semibold mb-2">Move subtree to workspace</h2>
+        <p className="text-sm text-mc-text-secondary mb-4">
+          Moves <strong>{initiative.title}</strong> and every descendant initiative to the
+          chosen workspace. The root will land as a top-level node there. Tasks linked to
+          these initiatives stay in their original workspace — task↔initiative links may
+          now span workspaces.
+        </p>
+        {workspaces.length === 0 ? (
+          <p className="text-sm text-mc-text-secondary">
+            No other workspaces available.
+          </p>
+        ) : (
+          <label className="block">
+            <span className="text-sm text-mc-text-secondary">Target workspace</span>
+            <select
+              className="mt-1 w-full px-3 py-2 rounded bg-mc-bg border border-mc-border"
+              value={target}
+              onChange={e => setTarget(e.target.value)}
+            >
+              {workspaces.map(w => (
+                <option key={w.id} value={w.id}>
+                  {w.icon ? `${w.icon} ` : ''}{w.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {err && <div className="text-red-400 text-sm mt-3">{err}</div>}
+        <div className="flex justify-end gap-2 pt-4">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || !target || workspaces.length === 0}
+            className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
+          >
+            {submitting ? 'Moving…' : 'Move subtree'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
