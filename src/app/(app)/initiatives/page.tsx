@@ -26,6 +26,7 @@ import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
 import PlanWithPmPanel, { type PlanInitiativeSuggestions } from '@/components/PlanWithPmPanel';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 import { showAlertDialog } from '@/lib/show-alert';
+import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -90,8 +91,6 @@ const KIND_BADGE: Record<Kind, string> = {
   story: 'bg-emerald-500/20 text-emerald-300',
 };
 
-const WORKSPACE_ID = 'default';
-
 const SHOW_CANCELLED_LS_KEY = 'mc:initiatives:show_cancelled';
 
 // Toggle persisted across the URL (`?show_cancelled=1`) so links survive
@@ -138,6 +137,7 @@ function useShowCancelled(): [boolean, (next: boolean) => void] {
 }
 
 export default function InitiativesPage() {
+  const workspaceId = useCurrentWorkspaceId();
   const [flat, setFlat] = useState<Initiative[]>([]);
   const [taskCounts, setTaskCounts] = useState<Record<string, TaskCounts>>({});
   const [loading, setLoading] = useState(true);
@@ -156,8 +156,8 @@ export default function InitiativesPage() {
     setError(null);
     try {
       const [iRes, tRes] = await Promise.all([
-        fetch(`/api/initiatives?workspace_id=${WORKSPACE_ID}`),
-        fetch(`/api/tasks?workspace_id=${WORKSPACE_ID}`),
+        fetch(`/api/initiatives?workspace_id=${encodeURIComponent(workspaceId)}`),
+        fetch(`/api/tasks?workspace_id=${encodeURIComponent(workspaceId)}`),
       ]);
       if (!iRes.ok) throw new Error(`Failed to load (${iRes.status})`);
       const rows: Initiative[] = await iRes.json();
@@ -184,7 +184,7 @@ export default function InitiativesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     refresh();
@@ -309,6 +309,7 @@ export default function InitiativesPage() {
       {creating && (
         <CreateModal
           parentId={creating.parent_id}
+          workspaceId={workspaceId}
           allInitiatives={pickableInitiatives}
           onClose={() => setCreating(null)}
           onSaved={() => {
@@ -899,11 +900,13 @@ function ModalShell({
 
 export function CreateModal({
   parentId,
+  workspaceId,
   allInitiatives,
   onClose,
   onSaved,
 }: {
   parentId: string | null;
+  workspaceId: string;
   allInitiatives: Initiative[];
   onClose: () => void;
   onSaved: () => void;
@@ -922,7 +925,7 @@ export function CreateModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workspace_id: WORKSPACE_ID,
+          workspace_id: workspaceId,
           title,
           kind,
           parent_initiative_id: chosenParent,

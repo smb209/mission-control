@@ -26,8 +26,8 @@ import {
   toIsoDay,
   type ZoomLevel,
 } from '@/lib/roadmap/date-math';
+import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 
-const WORKSPACE_ID = 'default';
 const ZOOM_KEY = 'roadmap.zoom';
 const RAIL_WIDTH = 300; // px
 const ROW_HEIGHT = 36;  // px — must match RoadmapRail row height
@@ -109,6 +109,7 @@ function writeZoom(z: ZoomLevel) {
 }
 
 export function RoadmapTimeline() {
+  const workspaceId = useCurrentWorkspaceId();
   const [snapshot, setSnapshot] = useState<RoadmapSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +138,7 @@ export function RoadmapTimeline() {
     try {
       setError(null);
       const params = new URLSearchParams();
-      params.set('workspace_id', WORKSPACE_ID);
+      params.set('workspace_id', workspaceId);
       if (filters.product_id) params.set('product_id', filters.product_id);
       if (filters.owner_agent_id) params.set('owner_agent_id', filters.owner_agent_id);
       const r = await fetch(`/api/roadmap?${params.toString()}`);
@@ -149,7 +150,7 @@ export function RoadmapTimeline() {
     } finally {
       setLoading(false);
     }
-  }, [filters.product_id, filters.owner_agent_id]);
+  }, [workspaceId, filters.product_id, filters.owner_agent_id]);
 
   useEffect(() => {
     refresh();
@@ -162,7 +163,7 @@ export function RoadmapTimeline() {
       const r = await fetch('/api/roadmap/recompute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id: WORKSPACE_ID }),
+        body: JSON.stringify({ workspace_id: workspaceId }),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));

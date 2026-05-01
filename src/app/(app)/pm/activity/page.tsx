@@ -7,8 +7,7 @@ import { ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react
 import { ProposalDiffsList, summarizeDiff, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import { showAlertDialog } from '@/lib/show-alert';
-
-const WORKSPACE_ID = 'default';
+import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 
 interface PmProposal {
   id: string;
@@ -44,6 +43,7 @@ const DATE_RANGE_OPTIONS: Array<{ key: string; label: string; hours: number | nu
 
 export default function PmActivityPage() {
   const router = useRouter();
+  const workspaceId = useCurrentWorkspaceId();
   const [proposals, setProposals] = useState<PmProposal[]>([]);
   const [agents, setAgents] = useState<Record<string, AgentLite>>({});
   const [initiatives, setInitiatives] = useState<Record<string, InitiativeLite>>({});
@@ -61,9 +61,9 @@ export default function PmActivityPage() {
     setError(null);
     try {
       const [pRes, aRes, iRes] = await Promise.all([
-        fetch(`/api/pm/proposals?workspace_id=${WORKSPACE_ID}&status=accepted&limit=200`),
-        fetch(`/api/agents?workspace_id=${WORKSPACE_ID}`),
-        fetch(`/api/initiatives?workspace_id=${WORKSPACE_ID}`),
+        fetch(`/api/pm/proposals?workspace_id=${encodeURIComponent(workspaceId)}&status=accepted&limit=200`),
+        fetch(`/api/agents?workspace_id=${encodeURIComponent(workspaceId)}`),
+        fetch(`/api/initiatives?workspace_id=${encodeURIComponent(workspaceId)}`),
       ]);
       if (!pRes.ok) throw new Error(`Failed to load proposals (${pRes.status})`);
       const ps: PmProposal[] = await pRes.json();
@@ -86,7 +86,7 @@ export default function PmActivityPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     refresh();
