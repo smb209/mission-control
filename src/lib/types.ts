@@ -2,7 +2,7 @@
 
 export type AgentStatus = 'standby' | 'working' | 'offline';
 
-export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'convoy_active' | 'testing' | 'review' | 'verification' | 'done' | 'cancelled' | 'needs_user_input';
+export type TaskStatus = 'draft' | 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'convoy_active' | 'testing' | 'review' | 'verification' | 'done' | 'cancelled' | 'needs_user_input';
 
 /**
  * Phase of the enhanced planning flow. Drives which prompt the backend sends
@@ -222,6 +222,7 @@ export interface WorkspaceStats {
   slug: string;
   icon: string;
   taskCounts: {
+    draft: number;
     pending_dispatch: number;
     planning: number;
     inbox: number;

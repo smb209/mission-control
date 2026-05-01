@@ -18,6 +18,7 @@ interface MissionQueueProps {
 }
 
 const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
+  { id: 'draft', label: '✎ Draft', color: 'border-t-slate-500' },
   { id: 'planning', label: '📋 Planning', color: 'border-t-mc-accent-purple' },
   { id: 'inbox', label: 'Inbox', color: 'border-t-mc-accent-pink' },
   { id: 'assigned', label: 'Assigned', color: 'border-t-mc-accent-yellow' },
@@ -101,13 +102,10 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
   const [pendingMove, setPendingMove] = useState<{ task: Task; targetStatus: TaskStatus } | null>(null);
 
-  // Drafts (status='draft') belong to the planning board only — see spec
-  // §13.2 (Workflow Unification). They never appear in the execution queue.
   const getTasksByStatus = (status: TaskStatus) =>
     tasks.filter(
       (task) =>
         task.status === status &&
-        task.status !== ('draft' as TaskStatus) &&
         (showArchived || !task.is_archived),
     );
 

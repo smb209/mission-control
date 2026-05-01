@@ -388,6 +388,21 @@ export default function InitiativeDetailPage({
     }
   }, [initiative, router]);
 
+  const deleteDraft = async (taskId: string) => {
+    setActionError(null);
+    if (!window.confirm('Delete this draft task? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
   const promoteDraft = async (taskId: string) => {
     setActionError(null);
     try {
@@ -818,6 +833,7 @@ or "carve out the onboarding flow as its own story first"`}
                 label="Draft (planning)"
                 rows={drafts}
                 onPromote={promoteDraft}
+                onDelete={deleteDraft}
               />
               <TaskGroup label="Active" rows={active} />
               {other.length > 0 && <TaskGroup label="Other" rows={other} />}
@@ -885,6 +901,8 @@ or "carve out the onboarding flow as its own story first"`}
       {showPromoteModal && (
         <PromoteToTaskModal
           initiative={initiative}
+          existingDraftCount={drafts.length}
+          existingActiveCount={active.length}
           onClose={() => setShowPromoteModal(false)}
           onSaved={() => {
             setShowPromoteModal(false);
@@ -1045,10 +1063,12 @@ function TaskGroup({
   label,
   rows,
   onPromote,
+  onDelete,
 }: {
   label: string;
   rows: TaskRow[];
   onPromote?: (taskId: string) => void;
+  onDelete?: (taskId: string) => void;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -1079,6 +1099,15 @@ function TaskGroup({
                 <Send className="w-3 h-3" /> Promote
               </button>
             )}
+            {onDelete && t.status === 'draft' && (
+              <button
+                onClick={() => onDelete(t.id)}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded text-mc-text-secondary border border-mc-border hover:text-red-300 hover:border-red-500/40"
+                title="Delete this draft"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
           </li>
         ))}
       </ul>
@@ -1088,10 +1117,14 @@ function TaskGroup({
 
 function PromoteToTaskModal({
   initiative,
+  existingDraftCount,
+  existingActiveCount,
   onClose,
   onSaved,
 }: {
   initiative: Initiative;
+  existingDraftCount: number;
+  existingActiveCount: number;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1133,9 +1166,24 @@ function PromoteToTaskModal({
         <h2 className="text-lg font-semibold mb-4">Promote story to task draft</h2>
         <p className="text-sm text-mc-text-secondary mb-4">
           Creates one task in <code>status=draft</code>, linked to this initiative.
-          The draft lives on the planning board until you explicitly promote it
-          to the execution queue.
+          The draft lives on the task board's Draft column until you explicitly
+          promote it to the execution queue.
         </p>
+        {existingDraftCount + existingActiveCount > 0 && (
+          <div className="mb-4 p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
+            This story already has{' '}
+            <strong>
+              {existingDraftCount + existingActiveCount} non-done task
+              {existingDraftCount + existingActiveCount === 1 ? '' : 's'}
+            </strong>
+            {existingDraftCount > 0 && existingActiveCount > 0
+              ? ` (${existingDraftCount} draft, ${existingActiveCount} active)`
+              : existingDraftCount > 0
+                ? ` (draft${existingDraftCount === 1 ? '' : 's'})`
+                : ` (active)`}
+            . Promote anyway only if you genuinely need another parallel task.
+          </div>
+        )}
         <div className="space-y-3">
           <label className="block">
             <span className="text-sm text-mc-text-secondary">Task title</span>
