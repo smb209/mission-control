@@ -1201,8 +1201,11 @@ function ApplyPlanToInitiativeModal({
       try {
         const res = await fetch(`/api/initiatives?workspace_id=${encodeURIComponent(workspaceId)}`);
         if (!res.ok) throw new Error(`Failed to load initiatives (${res.status})`);
-        const list = (await res.json()) as InitiativeLite[];
+        const raw = (await res.json()) as InitiativeLite[];
         if (cancelled) return;
+        // Cancelled initiatives are tombstones; never preselect or offer
+        // them as a target for new PM suggestions.
+        const list = raw.filter(i => i.status !== 'cancelled');
         setInitiatives(list);
         // Preselect by case-insensitive title equality first, then by
         // longest substring overlap. If nothing matches, leave the

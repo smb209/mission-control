@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import {
   Plus,
   ChevronRight,
@@ -91,8 +92,52 @@ const KIND_BADGE: Record<Kind, string> = {
 
 const WORKSPACE_ID = 'default';
 
+const SHOW_CANCELLED_LS_KEY = 'mc:initiatives:show_cancelled';
+
+// Toggle persisted across the URL (`?show_cancelled=1`) so links survive
+// reload + are shareable. localStorage is the fallback default when the
+// URL has no opinion. URL value, when present, wins over localStorage.
+function useShowCancelled(): [boolean, (next: boolean) => void] {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const urlValue = searchParams.get('show_cancelled');
+
+  const initial = (() => {
+    if (urlValue === '1') return true;
+    if (urlValue === '0') return false;
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem(SHOW_CANCELLED_LS_KEY) === '1';
+    }
+    return false;
+  })();
+
+  const [value, setValue] = useState<boolean>(initial);
+
+  useEffect(() => {
+    if (urlValue === '1') setValue(true);
+    else if (urlValue === '0') setValue(false);
+  }, [urlValue]);
+
+  const update = useCallback(
+    (next: boolean) => {
+      setValue(next);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(SHOW_CANCELLED_LS_KEY, next ? '1' : '0');
+      }
+      const params = new URLSearchParams(searchParams.toString());
+      if (next) params.set('show_cancelled', '1');
+      else params.delete('show_cancelled');
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname, searchParams],
+  );
+
+  return [value, update];
+}
+
 export default function InitiativesPage() {
-  const [tree, setTree] = useState<TreeNode[]>([]);
   const [flat, setFlat] = useState<Initiative[]>([]);
   const [taskCounts, setTaskCounts] = useState<Record<string, TaskCounts>>({});
   const [loading, setLoading] = useState(true);
@@ -105,6 +150,7 @@ export default function InitiativesPage() {
   const [historyFor, setHistoryFor] = useState<Initiative | null>(null);
   const [addingDepFor, setAddingDepFor] = useState<Initiative | null>(null);
   const [decomposing, setDecomposing] = useState<Initiative | null>(null);
+  const [showCancelled, setShowCancelled] = useShowCancelled();
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -116,7 +162,6 @@ export default function InitiativesPage() {
       if (!iRes.ok) throw new Error(`Failed to load (${iRes.status})`);
       const rows: Initiative[] = await iRes.json();
       setFlat(rows);
-      setTree(buildTree(rows));
 
       // Count tasks per initiative_id, partitioned by status family.
       const counts: Record<string, TaskCounts> = {};
@@ -144,6 +189,20 @@ export default function InitiativesPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Tree + picker list derive from flat + the cancelled-filter toggle.
+  // Cancelled rows are spliced out and their non-cancelled children
+  // re-parent to the cancelled row's effective parent so the subtree
+  // doesn't get orphaned.
+  const tree = useMemo(() => buildTree(flat, !showCancelled), [flat, showCancelled]);
+  const pickableInitiatives = useMemo(
+    () => (showCancelled ? flat : flat.filter(i => i.status !== 'cancelled')),
+    [flat, showCancelled],
+  );
+  const cancelledCount = useMemo(
+    () => flat.filter(i => i.status === 'cancelled').length,
+    [flat],
+  );
 
   // Detach = move to no parent. Surfaced from the action menu when the
   // initiative currently has a parent.
@@ -178,6 +237,21 @@ export default function InitiativesPage() {
         <div className="flex items-center gap-2">
           {/* "Workspaces" button removed — global workspace switcher lives
               in the unified left nav now. */}
+          <label
+            className="inline-flex items-center gap-1.5 text-xs text-mc-text-secondary cursor-pointer select-none"
+            title="Toggle visibility of cancelled initiatives. Persisted in URL (?show_cancelled=1) and localStorage."
+          >
+            <input
+              type="checkbox"
+              className="accent-mc-accent"
+              checked={showCancelled}
+              onChange={e => setShowCancelled(e.target.checked)}
+            />
+            Show cancelled
+            {cancelledCount > 0 && (
+              <span className="text-[11px] text-mc-text-secondary/70">({cancelledCount})</span>
+            )}
+          </label>
           <button
             onClick={() => setCreating({ parent_id: null })}
             className="px-3 py-2 rounded-lg bg-mc-accent text-white hover:bg-mc-accent/90 text-sm flex items-center gap-2"
@@ -205,6 +279,7 @@ export default function InitiativesPage() {
                 node={node}
                 depth={0}
                 allInitiatives={flat}
+                pickableInitiatives={pickableInitiatives}
                 taskCounts={taskCounts}
                 onEdit={setEditing}
                 onAddChild={parent => setCreating({ parent_id: parent.id })}
@@ -234,7 +309,7 @@ export default function InitiativesPage() {
       {creating && (
         <CreateModal
           parentId={creating.parent_id}
-          allInitiatives={flat}
+          allInitiatives={pickableInitiatives}
           onClose={() => setCreating(null)}
           onSaved={() => {
             setCreating(null);
@@ -253,7 +328,7 @@ export default function InitiativesPage() {
       {moving && (
         <MoveModal
           initiative={moving}
-          allInitiatives={flat}
+          allInitiatives={pickableInitiatives}
           onClose={() => setMoving(null)}
           onSaved={() => {
             setMoving(null);
@@ -291,7 +366,7 @@ export default function InitiativesPage() {
       {addingDepFor && (
         <AddDependencyModal
           initiative={addingDepFor}
-          allInitiatives={flat}
+          allInitiatives={pickableInitiatives}
           onClose={() => setAddingDepFor(null)}
           onSaved={() => {
             setAddingDepFor(null);
@@ -313,10 +388,26 @@ export default function InitiativesPage() {
   );
 }
 
-function buildTree(rows: Initiative[]): TreeNode[] {
+function buildTree(rows: Initiative[], hideCancelled: boolean): TreeNode[] {
+  const byId = new Map(rows.map(r => [r.id, r] as const));
+  const isHidden = (r: Initiative | undefined) =>
+    !!r && hideCancelled && r.status === 'cancelled';
+
+  // If a parent is hidden (cancelled), walk up until we hit a visible
+  // ancestor — that's where the visible child should attach so the
+  // subtree doesn't render as orphaned root rows.
+  function effectiveParent(parentId: string | null): string | null {
+    if (parentId == null) return null;
+    const p = byId.get(parentId);
+    if (!p) return null;
+    if (isHidden(p)) return effectiveParent(p.parent_initiative_id);
+    return parentId;
+  }
+
+  const visible = rows.filter(r => !isHidden(r));
   const byParent = new Map<string | null, Initiative[]>();
-  for (const r of rows) {
-    const k = r.parent_initiative_id ?? null;
+  for (const r of visible) {
+    const k = effectiveParent(r.parent_initiative_id);
     const list = byParent.get(k) ?? [];
     list.push(r);
     byParent.set(k, list);
@@ -332,6 +423,7 @@ function InitiativeRow({
   node,
   depth,
   allInitiatives,
+  pickableInitiatives,
   taskCounts,
   onEdit,
   onAddChild,
@@ -347,6 +439,7 @@ function InitiativeRow({
   node: TreeNode;
   depth: number;
   allInitiatives: Initiative[];
+  pickableInitiatives: Initiative[];
   taskCounts: Record<string, TaskCounts>;
   onEdit: (init: Initiative) => void;
   onAddChild: (parent: Initiative) => void;
@@ -429,7 +522,9 @@ function InitiativeRow({
   return (
     <>
       <li
-        className="flex items-center gap-2 p-2 rounded-lg bg-mc-bg-secondary border border-mc-border hover:border-mc-accent/40"
+        className={`flex items-center gap-2 p-2 rounded-lg bg-mc-bg-secondary border border-mc-border hover:border-mc-accent/40 ${
+          node.status === 'cancelled' ? 'opacity-60' : ''
+        }`}
         style={{ marginLeft: depth * 24 }}
       >
         <button
@@ -467,7 +562,16 @@ function InitiativeRow({
         >
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
-        <span className="text-xs text-mc-text-secondary">{node.status}</span>
+        {node.status === 'cancelled' ? (
+          <span
+            className="text-[11px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30"
+            title="This initiative is cancelled"
+          >
+            cancelled
+          </span>
+        ) : (
+          <span className="text-xs text-mc-text-secondary">{node.status}</span>
+        )}
         {!childrenExpanded && directChildrenCount > 0 && (
           <span
             className="text-[11px] text-mc-text-secondary/80"
@@ -521,7 +625,11 @@ function InitiativeRow({
           className="rounded-lg bg-mc-bg border border-mc-border/60 px-3 py-2 -mt-1 text-sm"
           style={{ marginLeft: depth * 24 + 12 }}
         >
-          <DetailsPanel initiative={node} allInitiatives={allInitiatives} />
+          <DetailsPanel
+            initiative={node}
+            allInitiatives={allInitiatives}
+            pickableInitiatives={pickableInitiatives}
+          />
           <div className="mt-2 pt-2 border-t border-mc-border/60 flex justify-end">
             <Link
               href={`/initiatives/${node.id}`}
@@ -539,6 +647,7 @@ function InitiativeRow({
             node={c}
             depth={depth + 1}
             allInitiatives={allInitiatives}
+            pickableInitiatives={pickableInitiatives}
             taskCounts={taskCounts}
             onEdit={onEdit}
             onAddChild={onAddChild}
@@ -581,9 +690,11 @@ interface DepEdges {
 function DetailsPanel({
   initiative,
   allInitiatives,
+  pickableInitiatives,
 }: {
   initiative: Initiative;
   allInitiatives: Initiative[];
+  pickableInitiatives: Initiative[];
 }) {
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [deps, setDeps] = useState<DepEdges | null>(null);
@@ -691,7 +802,7 @@ function DetailsPanel({
               onChange={e => setChosenDep(e.target.value)}
             >
               <option value="">(choose initiative this depends on)</option>
-              {allInitiatives
+              {pickableInitiatives
                 .filter(i => i.id !== initiative.id)
                 .map(i => (
                   <option key={i.id} value={i.id}>
