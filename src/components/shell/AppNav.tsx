@@ -270,6 +270,7 @@ function WorkspaceSwitcher({
   onWorkspaceCreated: () => void;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const currentWorkspaceId = useCurrentWorkspaceId();
   const setCurrentWorkspaceId = useSetCurrentWorkspaceId();
   const [open, setOpen] = useState(false);
@@ -294,9 +295,18 @@ function WorkspaceSwitcher({
     (w: WorkspaceLite) => {
       setCurrentWorkspaceId(w.id);
       setOpen(false);
-      router.push(`/workspace/${w.slug}`);
+      // Slug-scoped routes (/workspace/[slug]/*) need the slug segment
+      // rewritten so the page refetches against the new workspace.
+      // Context-scoped routes (/initiatives, /roadmap, /pm, etc.) read
+      // workspace from the localStorage-backed context and refetch via
+      // the useCurrentWorkspaceId hook — no navigation needed.
+      const m = pathname?.match(/^\/workspace\/[^/]+(\/.*)?$/);
+      if (m) {
+        const tail = m[1] ?? '';
+        router.push(`/workspace/${w.slug}${tail}`);
+      }
     },
-    [router, setCurrentWorkspaceId],
+    [router, setCurrentWorkspaceId, pathname],
   );
 
   const handleCreated = useCallback(
