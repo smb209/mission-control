@@ -974,7 +974,7 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   trigger_text TEXT NOT NULL,
   trigger_kind TEXT NOT NULL DEFAULT 'manual'
-    CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative','notes_intake')),
+    CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative','decompose_story','notes_intake','revert')),
   impact_md TEXT NOT NULL,
   proposed_changes TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft'

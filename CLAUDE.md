@@ -80,6 +80,20 @@ itself was fine. Real corruption is rare; auto-backups exist mainly to
 recover from operator mistakes (a bad migration, a wrong `db:reset`,
 etc.) rather than file-level loss.
 
+## UI Conventions
+
+**No native `window.confirm()` / `alert()` / `prompt()`.** Use the reusable
+dialogs in `src/components/`:
+
+- `ConfirmDialog` — destructive or yes/no confirmations (delete, reset,
+  irreversible actions). Pass `destructive` for red styling.
+- `AlertDialog` — single-button informational alerts (also wired to the
+  global `alert()` shim, so legacy `alert(...)` calls route through it).
+
+Native modals block the JS event loop and aren't drivable from
+preview/automation tooling, which surfaces as flaky verification runs.
+Always thread the dialog through component state instead.
+
 ## Verification (MCP Preview)
 
 After multi-file changes that touch UI or MCP tool surfaces, verify before opening a PR:

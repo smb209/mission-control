@@ -383,6 +383,96 @@ export function synthesizeDecompose(
   return { impact_md: lines.join('\n'), changes };
 }
 
+// ─── Story → tasks decomposition ─────────────────────────────────────
+//
+// Sibling of `synthesizeDecompose`, but the parent is a story-kind
+// initiative and the children are draft tasks (not initiatives). One
+// `create_task_under_initiative` diff per task, all targeting the
+// story's id directly — no placeholders since the story already exists.
+//
+// LLM swap-in seam: the named PM agent can replace this with a richer
+// implementation-level breakdown via `propose_changes` with
+// trigger_kind='decompose_story'. The synth keeps working as the
+// offline floor and the deterministic placeholder.
+
+export interface SynthesizeStoryTasksResult {
+  impact_md: string;
+  changes: PmDiff[];
+}
+
+export function synthesizeStoryToTasks(
+  parent: Initiative,
+  hint?: string,
+): SynthesizeStoryTasksResult {
+  const x = parent.title;
+  const lowerTitle = parent.title.toLowerCase();
+  const isBuild = /^(build|feature|implement|create|add|wire)\b/i.test(parent.title);
+  const isFix = /^(fix|repair|debug)\b/i.test(parent.title);
+  const isRefactor = /^(refactor|rewrite|migrate|clean\s*up)\b/i.test(lowerTitle);
+
+  let titles: string[];
+  if (isFix) {
+    titles = [
+      `Reproduce: ${x}`,
+      `Patch: ${x}`,
+      `Regression test for ${x}`,
+    ];
+  } else if (isRefactor) {
+    titles = [
+      `Inventory current behavior for ${x}`,
+      `Land the refactor for ${x}`,
+      `Verify no behavior change in ${x}`,
+    ];
+  } else if (isBuild) {
+    titles = [
+      `Scaffold the data + types for ${x}`,
+      `Implement the core logic for ${x}`,
+      `Wire ${x} into the UI`,
+      `Add tests for ${x}`,
+    ];
+  } else {
+    titles = [
+      `Plan ${x}`,
+      `Implement ${x}`,
+      `Verify ${x}`,
+    ];
+  }
+
+  const baseDesc = parent.description?.trim() ?? '';
+  const hintBlock = hint ? `\n\n_Operator hint: ${hint.trim()}_` : '';
+
+  const changes: PmDiff[] = titles.map(t => ({
+    kind: 'create_task_under_initiative',
+    initiative_id: parent.id,
+    title: t,
+    description:
+      `${t}\n\nFor story "${x}".` +
+      (baseDesc ? `\n\nStory context:\n${baseDesc}` : '') +
+      hintBlock,
+    priority: 'normal' as const,
+  }));
+
+  const lines: string[] = [
+    `### Task breakdown for "${x}"`,
+    ``,
+    `Proposed ${changes.length} draft task${changes.length === 1 ? '' : 's'}` +
+      ` (${isFix ? 'fix template' : isRefactor ? 'refactor template' : isBuild ? 'build template' : 'generic template'}):`,
+    ``,
+    ...changes.map(c =>
+      c.kind === 'create_task_under_initiative' ? `- ${c.title}` : '',
+    ),
+  ];
+  if (hint) {
+    lines.push(``, `_Operator hint applied: "${hint.trim()}"._`);
+  }
+  lines.push(
+    ``,
+    `Apply to insert these as draft tasks under this story. Drafts land in the Draft column on the task board — promote to Inbox when ready.`,
+  );
+
+  return { impact_md: lines.join('\n'), changes };
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function capitalizeFirst(s: string): string {

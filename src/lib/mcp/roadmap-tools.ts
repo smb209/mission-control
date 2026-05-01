@@ -607,6 +607,7 @@ export function registerRoadmapTools(server: McpServer): void {
             'status_check_investigation',
             'plan_initiative',
             'decompose_initiative',
+            'decompose_story',
             'notes_intake',
           ])
           .optional(),
