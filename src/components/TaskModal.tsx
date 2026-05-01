@@ -56,12 +56,90 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
         id: task.id + '-promote-' + Date.now(),
         type: 'task_status_changed',
         task_id: task.id,
-        message: `Promoted draft to inbox: ${task.title}`,
+        message: `Promoted draft to queue: ${task.title}`,
         created_at: new Date().toISOString(),
       });
       onClose();
     } catch (e) {
       setPromoteError(e instanceof Error ? e.message : 'Promote failed');
+    } finally {
+      setIsPromoting(false);
+    }
+  };
+
+  // Set status='in_progress' (which the existing auto-dispatch path detects)
+  // and trigger the gateway dispatch. Used both by "Start work" on a queued
+  // task and by "Promote and start" on a draft (after promotion).
+  const startWork = async (
+    targetTask: Task,
+    options: { agentId?: string | null; agentName?: string } = {},
+  ): Promise<void> => {
+    const agentId = options.agentId ?? targetTask.assigned_agent_id ?? null;
+    const agentName =
+      options.agentName ?? agents.find(a => a.id === agentId)?.name ?? 'Unknown Agent';
+    const patchRes = await fetch(`/api/tasks/${targetTask.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    if (!patchRes.ok) {
+      const body = await patchRes.json().catch(() => ({}));
+      throw new Error(body.error || `Status update failed (${patchRes.status})`);
+    }
+    updateTaskStatus(targetTask.id, 'in_progress');
+    if (agentId) {
+      const result = await triggerAutoDispatch({
+        taskId: targetTask.id,
+        taskTitle: targetTask.title,
+        agentId,
+        agentName,
+        workspaceId: targetTask.workspace_id,
+      });
+      if (!result.success) {
+        throw new Error(result.error || 'Dispatch failed');
+      }
+    }
+    addEvent({
+      id: targetTask.id + '-start-' + Date.now(),
+      type: 'task_status_changed',
+      task_id: targetTask.id,
+      message: `Started: ${targetTask.title}`,
+      created_at: new Date().toISOString(),
+    });
+  };
+
+  const handleStartWork = async () => {
+    if (!task) return;
+    setIsPromoting(true);
+    setPromoteError(null);
+    try {
+      await startWork(task);
+      onClose();
+    } catch (e) {
+      setPromoteError(e instanceof Error ? e.message : 'Start failed');
+    } finally {
+      setIsPromoting(false);
+    }
+  };
+
+  const handlePromoteAndStart = async () => {
+    if (!task) return;
+    setIsPromoting(true);
+    setPromoteError(null);
+    try {
+      const promoteRes = await fetch(`/api/tasks/${task.id}/promote`, { method: 'POST' });
+      if (!promoteRes.ok) {
+        const body = await promoteRes.json().catch(() => ({}));
+        throw new Error(body.error || `Promote failed (${promoteRes.status})`);
+      }
+      updateTaskStatus(task.id, 'inbox');
+      // The promote endpoint doesn't change assigned_agent_id, so we can use
+      // the task's existing assignment (set when the workflow template
+      // auto-assigned at draft-creation time) to drive the dispatch.
+      await startWork({ ...task, status: 'inbox' });
+      onClose();
+    } catch (e) {
+      setPromoteError(e instanceof Error ? e.message : 'Promote-and-start failed');
     } finally {
       setIsPromoting(false);
     }
@@ -822,23 +900,49 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {task?.status === 'draft' && (
+              {(task?.status === 'draft' || task?.status === 'inbox' || task?.status === 'assigned') && (
                 <>
                   {promoteError && (
                     <span className="text-xs text-red-400 max-w-48 truncate" title={promoteError}>
                       {promoteError}
                     </span>
                   )}
-                  <button
-                    type="button"
-                    onClick={handlePromote}
-                    disabled={isPromoting}
-                    title="Promote draft to execution queue (status → inbox)"
-                    className="min-h-11 flex items-center gap-2 px-3 py-2 rounded-sm text-sm border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
-                  >
-                    <Send className="w-4 h-4" />
-                    {isPromoting ? 'Promoting…' : 'Promote to inbox'}
-                  </button>
+                  {task.status === 'draft' && (
+                    <button
+                      type="button"
+                      onClick={handlePromote}
+                      disabled={isPromoting}
+                      title="Promote draft to the queue (status → inbox); doesn't start work"
+                      className="min-h-11 flex items-center gap-2 px-3 py-2 rounded-sm text-sm border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                    >
+                      <Send className="w-4 h-4" />
+                      {isPromoting ? 'Working…' : 'Promote to queue'}
+                    </button>
+                  )}
+                  {task.status === 'draft' && task.assigned_agent_id && (
+                    <button
+                      type="button"
+                      onClick={handlePromoteAndStart}
+                      disabled={isPromoting}
+                      title="Promote draft and immediately dispatch to the assigned agent"
+                      className="min-h-11 flex items-center gap-2 px-3 py-2 rounded-sm text-sm bg-mc-accent text-mc-bg hover:bg-mc-accent/90 disabled:opacity-50"
+                    >
+                      <Send className="w-4 h-4" />
+                      {isPromoting ? 'Working…' : 'Promote and start'}
+                    </button>
+                  )}
+                  {(task.status === 'inbox' || task.status === 'assigned') && task.assigned_agent_id && (
+                    <button
+                      type="button"
+                      onClick={handleStartWork}
+                      disabled={isPromoting}
+                      title="Dispatch to the assigned agent and move to In Progress"
+                      className="min-h-11 flex items-center gap-2 px-3 py-2 rounded-sm text-sm bg-mc-accent text-mc-bg hover:bg-mc-accent/90 disabled:opacity-50"
+                    >
+                      <Send className="w-4 h-4" />
+                      {isPromoting ? 'Starting…' : 'Start work'}
+                    </button>
+                  )}
                 </>
               )}
               <button

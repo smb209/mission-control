@@ -17,17 +17,24 @@ interface MissionQueueProps {
   isPortrait?: boolean;
 }
 
-const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
-  { id: 'draft', label: '✎ Draft', color: 'border-t-slate-500' },
-  { id: 'planning', label: '📋 Planning', color: 'border-t-mc-accent-purple' },
-  { id: 'inbox', label: 'Inbox', color: 'border-t-mc-accent-pink' },
-  { id: 'assigned', label: 'Assigned', color: 'border-t-mc-accent-yellow' },
-  { id: 'in_progress', label: 'In Progress', color: 'border-t-mc-accent' },
-  { id: 'convoy_active', label: '🚚 Convoy', color: 'border-t-cyan-400' },
-  { id: 'testing', label: 'Testing', color: 'border-t-mc-accent-cyan' },
-  { id: 'review', label: 'Review', color: 'border-t-mc-accent-purple' },
-  { id: 'verification', label: 'Verification', color: 'border-t-orange-500' },
-  { id: 'done', label: 'Done', color: 'border-t-mc-accent-green' },
+// `id` is the drop-target status — dragging into this column sets task.status
+// to this value. `matches` is the set of statuses rendered in the column.
+// Most columns are 1:1; the "Queued" column collapses inbox+assigned because
+// they're functionally indistinguishable idle states (both mean "committed
+// work, not running yet"). Operators saw three pre-execution columns of
+// nothing-happening and got understandably confused about why their assigned
+// task wasn't being worked on.
+interface Column { id: TaskStatus; label: string; color: string; matches: TaskStatus[] }
+const COLUMNS: Column[] = [
+  { id: 'draft', label: '✎ Draft', color: 'border-t-slate-500', matches: ['draft'] },
+  { id: 'planning', label: '📋 Planning', color: 'border-t-mc-accent-purple', matches: ['planning'] },
+  { id: 'inbox', label: '⏳ Queued', color: 'border-t-mc-accent-pink', matches: ['inbox', 'assigned'] },
+  { id: 'in_progress', label: 'In Progress', color: 'border-t-mc-accent', matches: ['in_progress'] },
+  { id: 'convoy_active', label: '🚚 Convoy', color: 'border-t-cyan-400', matches: ['convoy_active'] },
+  { id: 'testing', label: 'Testing', color: 'border-t-mc-accent-cyan', matches: ['testing'] },
+  { id: 'review', label: 'Review', color: 'border-t-mc-accent-purple', matches: ['review'] },
+  { id: 'verification', label: 'Verification', color: 'border-t-orange-500', matches: ['verification'] },
+  { id: 'done', label: 'Done', color: 'border-t-mc-accent-green', matches: ['done'] },
 ];
 
 interface InitiativeMini {
@@ -106,6 +113,13 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
     tasks.filter(
       (task) =>
         task.status === status &&
+        (showArchived || !task.is_archived),
+    );
+
+  const getTasksForColumn = (column: Column) =>
+    tasks.filter(
+      (task) =>
+        column.matches.includes(task.status) &&
         (showArchived || !task.is_archived),
     );
 
@@ -212,7 +226,10 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
     setDraggedTask(null);
   };
 
-  const mobileTasks = getTasksByStatus(mobileStatus);
+  // Mobile view shows the column whose `id` matches the selected mobileStatus.
+  // For the Queued column this means inbox+assigned tasks both appear.
+  const mobileColumn = COLUMNS.find(c => c.id === mobileStatus) ?? COLUMNS[0];
+  const mobileTasks = getTasksForColumn(mobileColumn);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -248,7 +265,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
       {!mobileMode ? (
         <div className="mission-queue-scroll-x flex-1 flex gap-3 p-3 overflow-x-auto">
           {COLUMNS.map((column) => {
-            const columnTasks = getTasksByStatus(column.id);
+            const columnTasks = getTasksForColumn(column);
             const hasTasks = columnTasks.length > 0;
             const collapsed = isColumnCollapsed(column.id, columnTasks.length);
 
@@ -326,7 +343,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
         <div className={`flex-1 overflow-y-auto ${isPortrait ? 'p-3 pb-[calc(1rem+env(safe-area-inset-bottom))]' : 'p-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`}>
           <div className={`flex gap-2 overflow-x-auto ${isPortrait ? 'pb-3' : 'pb-2'}`}>
             {COLUMNS.map((column) => {
-              const count = getTasksByStatus(column.id).length;
+              const count = getTasksForColumn(column).length;
               const selected = mobileStatus === column.id;
               return (
                 <button
