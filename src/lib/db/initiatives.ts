@@ -337,6 +337,84 @@ export function moveInitiative(
 }
 
 /**
+ * Move an initiative subtree to a different workspace. The root + every
+ * descendant initiative gets its workspace_id rewritten; the root's
+ * parent_initiative_id is nulled so it lands as a top-level node in the
+ * destination. Tasks are intentionally left in their original workspace —
+ * task.workspace_id is independent of initiative.workspace_id, and the
+ * cross-workspace task→initiative_id link is acceptable.
+ *
+ * initiative_dependencies are not touched: they reference initiatives by
+ * id, so they follow the tree naturally as long as both endpoints move
+ * together (which they do, since dependencies inside the subtree stay
+ * intact, and dependencies that cross out of the subtree are left alone
+ * — they may now span workspaces, same shape as the task case).
+ */
+export function moveInitiativeSubtreeToWorkspace(
+  id: string,
+  to_workspace_id: string,
+  moved_by_agent_id?: string | null,
+  reason?: string | null,
+): { moved_count: number; root: Initiative } {
+  const root = queryOne<Initiative>('SELECT * FROM initiatives WHERE id = ?', [id]);
+  if (!root) throw new Error(`Initiative not found: ${id}`);
+
+  const targetWorkspace = queryOne<{ id: string }>(
+    'SELECT id FROM workspaces WHERE id = ?',
+    [to_workspace_id],
+  );
+  if (!targetWorkspace) throw new Error(`Target workspace not found: ${to_workspace_id}`);
+
+  if (root.workspace_id === to_workspace_id) {
+    throw new Error(`Initiative is already in workspace ${to_workspace_id}`);
+  }
+
+  // BFS the descendant set.
+  const descendantIds: string[] = [id];
+  const stack: string[] = [id];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const children = queryAll<{ id: string }>(
+      'SELECT id FROM initiatives WHERE parent_initiative_id = ?',
+      [cur],
+    );
+    for (const c of children) {
+      descendantIds.push(c.id);
+      stack.push(c.id);
+    }
+  }
+
+  return transaction(() => {
+    const now = new Date().toISOString();
+    const placeholders = descendantIds.map(() => '?').join(',');
+    run(
+      `UPDATE initiatives SET workspace_id = ?, updated_at = ? WHERE id IN (${placeholders})`,
+      [to_workspace_id, now, ...descendantIds],
+    );
+    if (root.parent_initiative_id !== null) {
+      run(
+        'UPDATE initiatives SET parent_initiative_id = NULL, updated_at = ? WHERE id = ?',
+        [now, id],
+      );
+      run(
+        `INSERT INTO initiative_parent_history (id, initiative_id, from_parent_id, to_parent_id, moved_by_agent_id, reason, created_at)
+         VALUES (?, ?, ?, NULL, ?, ?, ?)`,
+        [
+          uuidv4(),
+          id,
+          root.parent_initiative_id,
+          moved_by_agent_id ?? null,
+          reason ?? `moved subtree to workspace ${to_workspace_id}`,
+          now,
+        ],
+      );
+    }
+    const updatedRoot = queryOne<Initiative>('SELECT * FROM initiatives WHERE id = ?', [id])!;
+    return { moved_count: descendantIds.length, root: updatedRoot };
+  });
+}
+
+/**
  * Returns true if `candidate` is a descendant of `ancestor` (or equal to it).
  * Walk down the tree from ancestor and look for candidate.
  */
