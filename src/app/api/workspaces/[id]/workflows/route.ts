@@ -19,8 +19,14 @@ export async function GET(
       stages: string; fail_targets: string; is_default: number;
       created_at: string; updated_at: string;
     }>(
+      // Workspace-scoped only. Every workspace gets its own copies of the
+      // canonical templates via cloneWorkflowTemplates at creation, so a
+      // union with `default` would surface duplicates (one row from the
+      // workspace's clone + one from default) on any non-default
+      // workspace. The `default` workspace gets its own 3 rows naturally
+      // because it owns them.
       `SELECT * FROM workflow_templates
-       WHERE workspace_id = ? OR workspace_id = 'default'
+       WHERE workspace_id = ?
        ORDER BY is_default DESC, name ASC`,
       [workspaceId]
     );
