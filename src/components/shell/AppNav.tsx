@@ -38,6 +38,7 @@ import {
   Bug,
   Users,
   Package,
+  History,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -76,6 +77,7 @@ function buildSections(taskBoardHref: string, workspaceSettingsHref: string): Na
         // space; promoted to its own page so it stays reachable on
         // small viewports too.
         { href: '/pm', label: 'PM', icon: Bot },
+        { href: '/pm/activity', label: 'PM activity', icon: History },
         { href: '/initiatives', label: 'Initiatives', icon: ListTree, prefix: true },
         { href: '/roadmap', label: 'Roadmap', icon: GanttChart },
         { href: taskBoardHref, label: 'Task Board', icon: KanbanSquare, prefix: taskBoardHref !== '/' },
