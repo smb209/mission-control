@@ -37,6 +37,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     avatar_emoji: agent?.avatar_emoji || '🤖',
     status: agent?.status || 'standby' as AgentStatus,
     is_master: agent?.is_master || false,
+    is_pm: !!agent?.is_pm,
     soul_md: agent?.soul_md || '',
     user_md: agent?.user_md || '',
     agents_md: agent?.agents_md || '',
@@ -366,6 +367,23 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                 />
                 <label htmlFor="is_master" className="text-sm">
                   Master Orchestrator (can coordinate other agents)
+                </label>
+              </div>
+
+              {/* PM Toggle — one PM per workspace; the API enforces the
+                  invariant (clears is_pm on every other agent in this
+                  workspace) and forces role='pm' so the resolver's
+                  legacy fallback agrees. */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="is_pm"
+                  checked={form.is_pm}
+                  onChange={(e) => setForm({ ...form, is_pm: e.target.checked })}
+                  className="w-4 h-4"
+                />
+                <label htmlFor="is_pm" className="text-sm">
+                  PM for this workspace (drives /pm chat + proposals)
                 </label>
               </div>
 

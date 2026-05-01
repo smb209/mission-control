@@ -32,7 +32,7 @@
 
 import { getRoadmapSnapshot, type RoadmapSnapshot } from '@/lib/db/roadmap';
 import { previewDerivation } from '@/lib/roadmap/apply-derivation';
-import { queryAll, queryOne, run } from '@/lib/db';
+import { queryAll, run } from '@/lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import {
   createProposal,
@@ -51,6 +51,7 @@ import {
   type SendChatClient,
 } from '@/lib/openclaw/send-chat';
 import { buildNotesIntakeMessage } from './pm-prompts/notes-intake';
+import { getPmAgent } from './pm-resolver';
 import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -377,11 +378,7 @@ function buildSnapshotSummary(snapshot: RoadmapSnapshot): string {
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function lookupPmAgent(workspaceId: string): Agent | null {
-  const row = queryOne<Agent>(
-    `SELECT * FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
-    [workspaceId],
-  );
-  return row ?? null;
+  return getPmAgent(workspaceId);
 }
 
 /**
@@ -978,10 +975,7 @@ interface PostPmChatMessage {
  * doesn't exist (caller is responsible for ensuring the migration ran).
  */
 export function postPmChatMessage(input: PostPmChatMessage): void {
-  const pm = queryOne<{ id: string }>(
-    `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
-    [input.workspace_id],
-  );
+  const pm = getPmAgent(input.workspace_id);
   if (!pm) {
     throw new Error(
       `No PM agent for workspace ${input.workspace_id} — migration 045 should have seeded one`,

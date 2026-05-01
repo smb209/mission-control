@@ -52,34 +52,29 @@ export function bootstrapCoreAgentsRaw(
 }
 
 /**
- * Ensure the workspace has a PM (role='pm') agent. Idempotent. Reads the
- * soul_md from the .md file next to the pm-agent module so operators can
- * tweak the prompt without redeploying. Safe to call from API routes.
+ * Ensure the workspace has a PM agent. Idempotent.
  *
- * The PM is now seeded as a NAMED gateway agent (source='gateway') linked
- * to the openclaw workspace at `~/.openclaw/workspaces/mc-project-manager/`.
- * That workspace ships with full agent files (SOUL.md, IDENTITY.md, etc.)
- * — same pattern as mc-coordinator/mc-builder/etc. The `gateway_agent_id`
- * + `session_key_prefix` are what let `resolveAgentSessionKeyPrefix` route
- * real chat.send traffic to the gateway-hosted PM session.
+ * Pre-061 this seeded a hardcoded `mc-project-manager` gateway link with
+ * a default name ("Margaret 'Maps' Hamilton"). That bound the PM identity
+ * to a specific gateway agent, which broke when a dev DB cloned from
+ * prod via `db:import-from-prod --agent-suffix=-dev` ended up routing
+ * chat to the still-prod gateway session. The fix is to let operators
+ * promote ANY existing agent via the AgentModal "PM for this workspace"
+ * checkbox — `getPmAgent` resolves the chosen one.
  *
- * Migration 045 originally seeded PMs as ephemeral source='local' rows
- * with no gateway link; migration 049 backfills those rows so they pick
- * up the new routing.
- *
- * If a PM row already exists for the workspace this function does NOT
- * mutate it — operators may have customised it, and migration 049 owns
- * the backfill for older rows.
+ * What this function still does on a fresh workspace: insert a generic
+ * placeholder PM (local source, no gateway link, name "PM") so the /pm
+ * UI has something to render before the operator promotes a real agent.
+ * If a PM already exists (via is_pm=1 OR LOWER(role)='pm'), it's left
+ * untouched — operators may have customized it, and migration 061
+ * backfilled is_pm for legacy rows.
  */
-export const PM_GATEWAY_AGENT_ID = 'mc-project-manager';
-export const PM_SESSION_KEY_PREFIX = `agent:${PM_GATEWAY_AGENT_ID}:main`;
-export const PM_NAMED_AGENT_NAME = 'Margaret "Maps" Hamilton';
-export const PM_NAMED_AGENT_AVATAR = '🗺️';
-
 export function ensurePmAgent(workspaceId: string): { id: string; created: boolean } {
   const db = getDb();
   const existing = db.prepare(
-    `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm' LIMIT 1`,
+    `SELECT id FROM agents
+       WHERE workspace_id = ? AND (is_pm = 1 OR LOWER(role) = 'pm')
+       LIMIT 1`,
   ).get(workspaceId) as { id: string } | undefined;
   if (existing) return { id: existing.id, created: false };
 
@@ -90,23 +85,21 @@ export function ensurePmAgent(workspaceId: string): { id: string; created: boole
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  // source='gateway' matches the convention used by agent-catalog-sync
-  // for every gateway-hosted named agent (mc-coordinator, mc-builder, …).
+  // source='local', no gateway link — a placeholder. The operator
+  // either edits this row to point at a gateway PM, or (more likely)
+  // promotes a different existing gateway agent via the AgentModal
+  // checkbox, which clears is_pm here and sets it on the new target.
   db.prepare(`
     INSERT INTO agents (
-      id, name, role, description, avatar_emoji, status, is_master,
-      workspace_id, soul_md, source, gateway_agent_id, session_key_prefix,
+      id, name, role, description, avatar_emoji, status, is_master, is_pm,
+      workspace_id, soul_md, source,
       is_active, created_at, updated_at
-    ) VALUES (?, ?, 'pm', ?, ?, 'standby', 0, ?, ?, 'gateway', ?, ?, 1, ?, ?)
+    ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 0, 1, ?, ?, 'local', 1, ?, ?)
   `).run(
     id,
-    PM_NAMED_AGENT_NAME,
     PM_AGENT_DESCRIPTION,
-    PM_NAMED_AGENT_AVATAR,
     workspaceId,
     getPmSoulMd(),
-    PM_GATEWAY_AGENT_ID,
-    PM_SESSION_KEY_PREFIX,
     now,
     now,
   );

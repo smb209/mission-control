@@ -45,6 +45,10 @@ export interface Agent {
   avatar_emoji: string;
   status: AgentStatus;
   is_master: boolean;
+  /** Migration 061: workspace-scoped PM flag. The PM resolver prefers
+   *  this flag over the legacy `role='pm'` match. SQLite hydrates as
+   *  number (0|1); the modal coerces to boolean for the checkbox. */
+  is_pm?: number;
   workspace_id: string;
   soul_md?: string;
   user_md?: string;
@@ -421,6 +425,7 @@ export interface CreateAgentRequest {
   description?: string;
   avatar_emoji?: string;
   is_master?: boolean;
+  is_pm?: boolean;
   soul_md?: string;
   user_md?: string;
   agents_md?: string;

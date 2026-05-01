@@ -57,18 +57,24 @@ export async function POST(request: NextRequest) {
 
     const id = uuidv4();
     const now = new Date().toISOString();
+    const workspaceId = (body as { workspace_id?: string }).workspace_id || 'default';
+    // Match the PATCH normalization: 'PM'/'Pm' → 'pm' so the resolver's
+    // legacy fallback agrees with the is_pm flag.
+    const role = body.role.toLowerCase() === 'pm' ? 'pm' : body.role;
+    const isPm = body.is_pm ? 1 : 0;
 
     run(
-      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, is_pm, workspace_id, soul_md, user_md, agents_md, model, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         body.name,
-        body.role,
+        role,
         body.description || null,
         body.avatar_emoji || '🤖',
         body.is_master ? 1 : 0,
-        (body as { workspace_id?: string }).workspace_id || 'default',
+        isPm,
+        workspaceId,
         body.soul_md || null,
         body.user_md || null,
         body.agents_md || null,
@@ -77,6 +83,15 @@ export async function POST(request: NextRequest) {
         now,
       ]
     );
+
+    // One-PM-per-workspace invariant: if this new agent is being
+    // created as the PM, demote any prior PM in the same workspace.
+    if (isPm) {
+      run(
+        `UPDATE agents SET is_pm = 0 WHERE workspace_id = ? AND id != ?`,
+        [workspaceId, id],
+      );
+    }
 
     // Log event
     run(
