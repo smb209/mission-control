@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS agents (
   avatar_emoji TEXT DEFAULT '🤖',
   status TEXT DEFAULT 'standby' CHECK (status IN ('standby', 'working', 'offline')),
   is_master INTEGER DEFAULT 0,
+  -- One agent per workspace may carry is_pm=1. The PM resolver
+  -- (getPmAgent) prefers is_pm=1 and falls back to LOWER(role)='pm'
+  -- for compat with rows that pre-date migration 061. Operators flip
+  -- this from the AgentModal "PM for this workspace" checkbox; the
+  -- API enforces the single-PM invariant.
+  is_pm INTEGER DEFAULT 0,
   workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id) ON DELETE CASCADE,
   soul_md TEXT,
   user_md TEXT,

@@ -46,8 +46,12 @@ export async function PATCH(
       values.push(body.name);
     }
     if (body.role !== undefined) {
+      // Normalize 'PM' / 'Pm' / 'pm' to lowercase 'pm' so the resolver's
+      // legacy fallback (LOWER(role)='pm') and direct equality both
+      // match. Other roles pass through unchanged — tightening to a
+      // whitelist would break operator-defined roles like "QA Tester".
       updates.push('role = ?');
-      values.push(body.role);
+      values.push(body.role.toLowerCase() === 'pm' ? 'pm' : body.role);
     }
     if (body.description !== undefined) {
       updates.push('description = ?');
@@ -72,6 +76,25 @@ export async function PATCH(
     if (body.is_master !== undefined) {
       updates.push('is_master = ?');
       values.push(body.is_master ? 1 : 0);
+    }
+    if (body.is_pm !== undefined) {
+      updates.push('is_pm = ?');
+      values.push(body.is_pm ? 1 : 0);
+      if (body.is_pm) {
+        // Promotion: this row is becoming the workspace's PM. Force
+        // role='pm' (so the legacy resolver fallback agrees with the
+        // flag) and clear is_pm on every sibling — one-PM-per-workspace
+        // invariant. We don't downgrade the sibling's role string;
+        // operators can rename a former PM via the modal if they want.
+        if (!updates.includes('role = ?')) {
+          updates.push('role = ?');
+          values.push('pm');
+        }
+        run(
+          `UPDATE agents SET is_pm = 0 WHERE workspace_id = ? AND id != ?`,
+          [existing.workspace_id, id],
+        );
+      }
     }
     if (body.soul_md !== undefined) {
       updates.push('soul_md = ?');

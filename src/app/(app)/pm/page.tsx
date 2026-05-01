@@ -68,6 +68,7 @@ interface AgentLite {
   id: string;
   name: string;
   role: string;
+  is_pm?: number;
   workspace_id: string;
 }
 
@@ -151,11 +152,16 @@ function PmChatPageInner() {
     fetch(`/api/agents?workspace_id=${encodeURIComponent(workspaceId)}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((agents: AgentLite[]) => {
-        const pm = agents.find(a => a.role === 'pm');
+        // Prefer the explicit is_pm flag (post-migration 061); fall
+        // back to the case-insensitive role match for legacy rows /
+        // the placeholder seeded by ensurePmAgent.
+        const pm =
+          agents.find(a => a.is_pm) ??
+          agents.find(a => a.role?.toLowerCase() === 'pm');
         setPmAgent(pm ?? null);
         if (!pm) {
           setError(
-            'No PM agent for this workspace. Migration 045 should have seeded one — try restarting the dev server, or create the workspace anew.',
+            'No PM agent for this workspace. Promote any agent via the AgentModal "PM for this workspace" checkbox on /agents.',
           );
         } else {
           setError(null);

@@ -91,13 +91,26 @@ function makeFakeClient(opts: {
   };
   return { client, seenSends };
 }
-import {
-  ensurePmAgent,
-  PM_GATEWAY_AGENT_ID,
-  PM_SESSION_KEY_PREFIX,
-  PM_NAMED_AGENT_NAME,
-  PM_NAMED_AGENT_AVATAR,
-} from '@/lib/bootstrap-agents';
+import { ensurePmAgent } from '@/lib/bootstrap-agents';
+
+// Concrete gateway link the dispatch tests promote the seeded PM with.
+// Pre-migration-061 these were exported from bootstrap-agents as
+// hardcoded constants, which baked the prod gateway id into seeded
+// workspaces. The new flow lets the operator promote any agent via
+// the AgentModal PM checkbox; tests simulate that promotion below.
+const TEST_PM_GATEWAY_AGENT_ID = 'mc-project-manager';
+const TEST_PM_SESSION_KEY_PREFIX = `agent:${TEST_PM_GATEWAY_AGENT_ID}:main`;
+
+function promotePmToGateway(workspaceId: string): void {
+  run(
+    `UPDATE agents
+        SET gateway_agent_id = ?,
+            session_key_prefix = ?,
+            source = 'gateway'
+      WHERE workspace_id = ? AND is_pm = 1`,
+    [TEST_PM_GATEWAY_AGENT_ID, TEST_PM_SESSION_KEY_PREFIX, workspaceId],
+  );
+}
 
 function freshWorkspace(): string {
   const id = `ws-${uuidv4().slice(0, 8)}`;
@@ -265,7 +278,7 @@ test('dispatchPm: returns a usable proposal even when nothing is parsed', async 
 
 // ─── Bootstrap: PM is now a named gateway agent ────────────────────
 
-test('ensurePmAgent: seeds the PM as a named gateway agent', () => {
+test('ensurePmAgent: seeds a generic local PM placeholder with is_pm=1', () => {
   const ws = freshWorkspace();
   const r = ensurePmAgent(ws);
   assert.equal(r.created, true);
@@ -274,20 +287,24 @@ test('ensurePmAgent: seeds the PM as a named gateway agent', () => {
     avatar_emoji: string;
     role: string;
     source: string;
-    gateway_agent_id: string;
-    session_key_prefix: string;
+    is_pm: number;
+    gateway_agent_id: string | null;
+    session_key_prefix: string | null;
   }>(
-    `SELECT name, avatar_emoji, role, source, gateway_agent_id, session_key_prefix
+    `SELECT name, avatar_emoji, role, source, is_pm, gateway_agent_id, session_key_prefix
        FROM agents WHERE id = ?`,
     [r.id],
   );
   assert.ok(row);
   assert.equal(row!.role, 'pm');
-  assert.equal(row!.gateway_agent_id, PM_GATEWAY_AGENT_ID);
-  assert.equal(row!.session_key_prefix, PM_SESSION_KEY_PREFIX);
-  assert.equal(row!.source, 'gateway');
-  assert.equal(row!.name, PM_NAMED_AGENT_NAME);
-  assert.equal(row!.avatar_emoji, PM_NAMED_AGENT_AVATAR);
+  assert.equal(row!.is_pm, 1);
+  assert.equal(row!.source, 'local');
+  // Pre-061 the seed baked the prod gateway link in here; post-061 the
+  // operator promotes a real gateway agent via the AgentModal checkbox.
+  assert.equal(row!.gateway_agent_id, null);
+  assert.equal(row!.session_key_prefix, null);
+  assert.equal(row!.name, 'PM');
+  assert.equal(row!.avatar_emoji, '📋');
 });
 
 // ─── Named-agent dispatch routing ──────────────────────────────────
@@ -295,6 +312,7 @@ test('ensurePmAgent: seeds the PM as a named gateway agent', () => {
 test('dispatchPm: routes through named agent when openclaw is connected; mock creates proposal via propose_changes simulation', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
 
   // The named agent would call propose_changes via MCP. Our mock client
   // simulates that side effect: when chat.send is invoked, it inserts a
@@ -332,7 +350,7 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
     const send = seenSends.find(s => s.method === 'chat.send');
     assert.ok(send);
     const sk = (send!.params as { sessionKey?: string }).sessionKey;
-    assert.equal(sk, `agent:${PM_GATEWAY_AGENT_ID}:main:dispatch-main`);
+    assert.equal(sk, `agent:${TEST_PM_GATEWAY_AGENT_ID}:main:dispatch-main`);
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
@@ -342,6 +360,7 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
 test('dispatchPm: falls back to synth when openclaw client is offline', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   seedNamedAgent(ws, 'Sarah');
 
   const { client } = makeFakeClient({ isConnected: false });
@@ -369,6 +388,7 @@ test('dispatchPm: falls back to synth when openclaw client is offline', async ()
 test('dispatchPm: falls back to synth when named-agent send throws', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   seedNamedAgent(ws, 'Sarah');
 
   const { client } = makeFakeClient({
@@ -397,6 +417,7 @@ test('dispatchPm: falls back to synth when named-agent send throws', async () =>
 test('dispatchPm: falls back to synth when named agent times out without writing', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
 
   // emitFinal: false → no chat_event arrives, await primitive will time out.
   const { client } = makeFakeClient({ emitFinal: false });
@@ -423,6 +444,7 @@ test('dispatchPm: falls back to synth when named agent times out without writing
 test('dispatchPm: notes_intake uses a fresh per-correlation session and the notes prompt', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
 
   const { client, seenSends } = makeFakeClient({
     onChatSend: () => {
@@ -463,6 +485,7 @@ test('dispatchPm: notes_intake uses a fresh per-correlation session and the note
 test('dispatchPm: allowFallback=false propagates gateway error instead of synth-falling-back', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
 
   // Gateway is down — synth path should be skipped.
   const { client } = makeFakeClient({ isConnected: false });
@@ -489,6 +512,7 @@ test('dispatchPm: allowFallback=false propagates gateway error instead of synth-
 test('dispatchPm: allowFallback=false + gateway-up but agent silent → completion.used_named_agent === false', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
 
   // Gateway up, but the agent emits final without writing a propose_changes
   // row. The reconciler tail expires; completion settles synth_only.
@@ -521,6 +545,7 @@ test('dispatchPm: allowFallback=false + gateway-up but agent silent → completi
 test('drainPendingNotes: skips when gateway is down', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   const { enqueuePendingNote } = await import('@/lib/db/pm-pending-notes');
   enqueuePendingNote({ workspace_id: ws, agent_id: 'a', notes_text: 'x' });
 
@@ -541,6 +566,7 @@ test('drainPendingNotes: skips when gateway is down', async () => {
 test('drainPendingNotes: dispatches each pending row and marks dispatched', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   // Earlier tests in the file may leave pending rows whose workspace
   // PMs aren't wired up to this fake client. Skip them so the drain
   // loop processes our row only.
@@ -593,6 +619,7 @@ const baseSynth = {
 test('dispatchPmSynthesized: returns synth placeholder synchronously when gateway is up', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   const { client } = makeFakeClient({
     onChatSend: () => {
       // Simulate the agent landing a proposal via MCP propose_changes.
@@ -643,6 +670,7 @@ test('dispatchPmSynthesized: agent supersede re-echoes a chat message anchored t
   // disruption-path behavior in dispatchPm.
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   const agentImpactMd = '### Agent reply\n- 8-story decomposition with deps';
   const { client } = makeFakeClient({
     onChatSend: () => {
@@ -705,6 +733,7 @@ test('dispatchPmSynthesized: agent supersede re-echoes a chat message anchored t
 test('dispatchPmSynthesized: timeoutMs is honored — bumping it lets a slow agent win', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   // The fake client emits final 200ms after send; with a 50ms timeout the
   // primary wait fails, but the tail window catches it.
   const { client } = makeFakeClient({
@@ -742,6 +771,7 @@ test('dispatchPmSynthesized: timeoutMs is honored — bumping it lets a slow age
 test('dispatchPmSynthesized: synth_only when no agent reply ever arrives', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   // No onChatSend → no agent row created. emitFinal default true so wait
   // returns sent:true but findProposal sees nothing.
   const { client } = makeFakeClient({});
@@ -771,6 +801,7 @@ test('dispatchPmSynthesized: synth_only when no agent reply ever arrives', async
 test('dispatchPmSynthesized: gateway down → synth-only placeholder, no background dispatch', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   const { client } = makeFakeClient({ isConnected: false });
   __setOpenClawClientForTests(client);
   try {
@@ -794,6 +825,7 @@ test('dispatchPmSynthesized: gateway down → synth-only placeholder, no backgro
 test('dispatchPmSynthesized: target_initiative_id is stamped on the agent row during supersede', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Tier-2 target' });
   const { client } = makeFakeClient({
     onChatSend: () => {
@@ -832,6 +864,7 @@ test('dispatchPmSynthesized: target_initiative_id is stamped on the agent row du
 test('dispatchPmSynthesized: plan_initiative — agent omits target dates → reconciler backfills from synth', async () => {
   const ws = freshWorkspace();
   ensurePmAgent(ws);
+  promotePmToGateway(ws);
   // Build a synth that has populated dates (always true in production —
   // synthesizePlanInitiative inserts derived target_start / _end based on
   // complexity).

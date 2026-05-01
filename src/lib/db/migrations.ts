@@ -3558,6 +3558,31 @@ const migrations: Migration[] = [
       console.log('[Migration 060] agents.runtime_kind added.');
     },
   },
+  {
+    id: '061',
+    name: 'agents_is_pm',
+    up: (db) => {
+      // Decouple PM identity from a hardcoded gateway agent id. Pre-061
+      // the PM was discovered via `WHERE role = 'pm'`, which (a) is
+      // case-sensitive (rows persisted as 'PM' silently disappeared from
+      // the resolver) and (b) baked the prod gateway link into seeded
+      // workspaces, so a dev DB cloned from prod kept routing PM chat
+      // to the prod gateway session. With is_pm the operator promotes
+      // any agent (including a `*-dev` clone) from the AgentModal
+      // checkbox; the resolver prefers is_pm=1 and falls back to
+      // LOWER(role)='pm' for legacy rows.
+      const cols = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'is_pm')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN is_pm INTEGER DEFAULT 0`);
+      }
+      // Backfill: any row whose role *parses* as PM (case-insensitive)
+      // becomes the PM. Also normalize the persisted role string so
+      // future reads don't depend on the resolver's compat fallback.
+      db.exec(`UPDATE agents SET is_pm = 1 WHERE LOWER(role) = 'pm'`);
+      db.exec(`UPDATE agents SET role = 'pm' WHERE LOWER(role) = 'pm' AND role != 'pm'`);
+      console.log('[Migration 061] agents.is_pm added + backfilled from role.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
