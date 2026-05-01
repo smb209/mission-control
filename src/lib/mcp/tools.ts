@@ -135,18 +135,46 @@ export function registerAllTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     trace('whoami', async ({ agent_id }) => {
-      const me = queryOne<{
+      // Multi-workspace gateway clones (#133) make `gateway_agent_id`
+      // ambiguous on its own. Try UUID first; on miss, only fall back to
+      // gateway_agent_id when it resolves to exactly one row. Otherwise
+      // return a structured error listing the candidate workspaces so
+      // the operator can re-dispatch with the correct UUID — silently
+      // returning the first match would mint the wrong workspace_id and
+      // break every subsequent MCP call with workspace_mismatch.
+      type AgentRow = {
         id: string;
         name: string;
         role: string;
         workspace_id: string;
         gateway_agent_id: string | null;
         is_active: number | null;
-      }>(
+      };
+      let me = queryOne<AgentRow>(
         `SELECT id, name, role, workspace_id, gateway_agent_id, is_active
-           FROM agents WHERE id = ? OR gateway_agent_id = ? LIMIT 1`,
-        [agent_id, agent_id],
+           FROM agents WHERE id = ? LIMIT 1`,
+        [agent_id],
       );
+      if (!me) {
+        const byGateway = queryAll<AgentRow>(
+          `SELECT id, name, role, workspace_id, gateway_agent_id, is_active
+             FROM agents WHERE gateway_agent_id = ?`,
+          [agent_id],
+        );
+        if (byGateway.length === 1) {
+          me = byGateway[0];
+        } else if (byGateway.length > 1) {
+          const candidates = byGateway.map((r) => ({ id: r.id, workspace_id: r.workspace_id, name: r.name }));
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `gateway_agent_id "${agent_id}" exists in ${byGateway.length} workspaces. Pass your MC agent_id (UUID) instead — the dispatch briefing embeds it as "Your agent_id is: …".`,
+            }],
+            structuredContent: { error: 'ambiguous_gateway_id', gateway_agent_id: agent_id, candidates },
+          };
+        }
+      }
       if (!me) {
         return {
           isError: true,
@@ -214,10 +242,35 @@ export function registerAllTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     trace('get_workspace_context', async ({ agent_id }) => {
-      const me = queryOne<{ workspace_id: string }>(
-        `SELECT workspace_id FROM agents WHERE id = ? OR gateway_agent_id = ? LIMIT 1`,
-        [agent_id, agent_id],
+      // Same multi-workspace ambiguity guard as whoami — picking the
+      // first row by gateway_agent_id would surface the wrong
+      // workspace's context_md silently.
+      let me = queryOne<{ workspace_id: string }>(
+        `SELECT workspace_id FROM agents WHERE id = ? LIMIT 1`,
+        [agent_id],
       );
+      if (!me) {
+        const byGateway = queryAll<{ id: string; workspace_id: string; name: string }>(
+          `SELECT id, workspace_id, name FROM agents WHERE gateway_agent_id = ?`,
+          [agent_id],
+        );
+        if (byGateway.length === 1) {
+          me = { workspace_id: byGateway[0].workspace_id };
+        } else if (byGateway.length > 1) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `gateway_agent_id "${agent_id}" exists in ${byGateway.length} workspaces. Pass your MC agent_id (UUID) instead.`,
+            }],
+            structuredContent: {
+              error: 'ambiguous_gateway_id',
+              gateway_agent_id: agent_id,
+              candidates: byGateway,
+            },
+          };
+        }
+      }
       if (!me) {
         return {
           isError: true,
@@ -286,7 +339,34 @@ export function registerAllTools(server: McpServer): void {
       inputSchema: { agent_id: agentIdArg, task_id: taskIdArg },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    trace('get_task', async ({ task_id }) => {
+    trace('get_task', async ({ agent_id, task_id }) => {
+      // Gate cross-workspace reads. Until this PR get_task accepted the
+      // bearer alone, so any agent could enumerate task UUIDs from
+      // other workspaces. We only enforce workspace match here (not the
+      // stricter on-task membership) so coordinators can still inspect
+      // peer subtasks they didn't directly assign — list_my_subtasks
+      // already proves they own the parent.
+      const callerWs = queryOne<{ workspace_id: string | null }>(
+        'SELECT workspace_id FROM agents WHERE id = ?',
+        [agent_id],
+      );
+      const taskWs = queryOne<{ workspace_id: string | null }>(
+        'SELECT workspace_id FROM tasks WHERE id = ?',
+        [task_id],
+      );
+      if (!callerWs) {
+        throw new AuthzError('agent_not_found', `agent not found: ${agent_id}`, { agentId: agent_id, taskId: task_id });
+      }
+      if (!taskWs) {
+        // Fall through — the existing 'task not found' branch below
+        // will return the structured not_found result.
+      } else if ((callerWs.workspace_id ?? 'default') !== (taskWs.workspace_id ?? 'default')) {
+        throw new AuthzError(
+          'workspace_mismatch',
+          `agent ${agent_id} cannot read task ${task_id} (different workspace)`,
+          { agentId: agent_id, taskId: task_id, action: 'read' },
+        );
+      }
       const task = queryOne<Record<string, unknown>>(
         `SELECT t.*,
            aa.name as assigned_agent_name,
@@ -1059,11 +1139,46 @@ export function registerAllTools(server: McpServer): void {
         };
       }
 
+      // Scope peer lookup to the parent task's workspace. Without this,
+      // the multi-workspace gateway clones from #133 mean we can grab
+      // any workspace's row for `peer_gateway_id` — the child task is
+      // created with parent.workspace_id but assigned_agent_id ends up
+      // pointing at the foreign-workspace clone, and every subsequent
+      // MCP call from the peer trips authz:workspace_mismatch.
+      const parentWs = queryOne<{ workspace_id: string | null }>(
+        'SELECT workspace_id FROM tasks WHERE id = ?',
+        [args.task_id],
+      )?.workspace_id ?? 'default';
       const peer = queryOne<{ id: string; name: string; role: string | null }>(
-        `SELECT id, name, role FROM agents WHERE gateway_agent_id = ? LIMIT 1`,
-        [args.peer_gateway_id],
+        `SELECT id, name, role FROM agents
+          WHERE gateway_agent_id = ?
+            AND COALESCE(workspace_id, 'default') = ?
+          LIMIT 1`,
+        [args.peer_gateway_id, parentWs],
       );
       if (!peer) {
+        // Distinguish "exists, wrong workspace" from "doesn't exist
+        // anywhere" so the coordinator gets an actionable error.
+        const elsewhere = queryAll<{ workspace_id: string | null }>(
+          `SELECT workspace_id FROM agents WHERE gateway_agent_id = ?`,
+          [args.peer_gateway_id],
+        );
+        if (elsewhere.length > 0) {
+          const otherWorkspaces = elsewhere.map((r) => r.workspace_id ?? 'default');
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `Peer "${args.peer_gateway_id}" exists but not in this task's workspace (${parentWs}). Found in: ${otherWorkspaces.join(', ')}. Call list_peers to see the in-workspace roster, or have the operator clone the agent into ${parentWs}.`,
+            }],
+            structuredContent: {
+              error: 'peer_not_in_workspace',
+              peer_gateway_id: args.peer_gateway_id,
+              task_workspace_id: parentWs,
+              found_in_workspaces: otherWorkspaces,
+            },
+          };
+        }
         return {
           isError: true,
           content: [{

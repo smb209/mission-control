@@ -284,6 +284,16 @@ export function ensureCatalogSyncScheduled(): void {
 }
 
 export function getAgentByPreferredRoles(taskId: string, preferredRoles: string[]): { id: string; name: string } | null {
+  // Workspace-scope the global-role fallback. Without this filter a
+  // multi-workspace gateway clone (#133) can be selected for a task in
+  // another workspace, which then trips authz:workspace_mismatch on
+  // every MCP call. The byTaskRole path is already implicitly scoped
+  // because task_roles rows are populated from workspace agents
+  // (populateTaskRolesFromAgents).
+  const taskWorkspace = queryOne<{ workspace_id: string | null }>(
+    'SELECT workspace_id FROM tasks WHERE id = ?',
+    [taskId],
+  )?.workspace_id ?? 'default';
   // Filter out operator-disabled agents (is_active=0). COALESCE(is_active, 1)
   // guards rows created before the column existed.
   for (const role of preferredRoles) {
@@ -302,8 +312,9 @@ export function getAgentByPreferredRoles(taskId: string, preferredRoles: string[
     const byGlobalRole = queryOne<{ id: string; name: string }>(
       `SELECT id, name FROM agents
        WHERE role = ? AND status != 'offline' AND COALESCE(is_active, 1) = 1
+         AND COALESCE(workspace_id, 'default') = ?
        ORDER BY updated_at DESC LIMIT 1`,
-      [role]
+      [role, taskWorkspace]
     );
     if (byGlobalRole) return byGlobalRole;
   }
