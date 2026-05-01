@@ -39,46 +39,86 @@ export type PmProposalTriggerKind =
   | 'status_check_investigation'
   | 'plan_initiative'
   | 'decompose_initiative'
-  | 'notes_intake';
+  | 'notes_intake'
+  | 'revert';
+
+/**
+ * Capture state recorded at apply time onto each accepted diff (slice 1 of
+ * revertable PM proposals). The field is optional on the type because (a)
+ * draft proposals don't have it yet and (b) accepted proposals predating
+ * the capture pattern won't either — the revert UI surfaces a "limited"
+ * tooltip for those.
+ *
+ * Per-kind shapes are documented inline on each variant below.
+ */
+export interface PmDiffCapture {
+  /** Set by `applyDiff` for `set_initiative_status`. */
+  prev_status?: 'planned' | 'in_progress' | 'at_risk' | 'blocked' | 'done' | 'cancelled';
+  /** Set by `applyDiff` for `update_status_check`. */
+  prev_status_check_md?: string | null;
+  /** Set by `applyDiff` for `shift_initiative_target`. */
+  prev_target_start?: string | null;
+  /** Set by `applyDiff` for `shift_initiative_target`. */
+  prev_target_end?: string | null;
+  /** Set by `applyDiff` for `add_dependency` — id of the inserted edge. */
+  created_dependency_id?: string;
+  /** Set by `applyDiff` for `remove_dependency` — full row prior to delete. */
+  removed_dependency_row?: {
+    id: string;
+    initiative_id: string;
+    depends_on_initiative_id: string;
+    kind: string;
+    note: string | null;
+    created_at: string;
+  };
+  /** Set by `applyDiff` for `reorder_initiatives`. */
+  prev_child_ids_in_order?: string[];
+  /** Set by `applyCreateChildInitiative` — id of the inserted initiative. */
+  created_initiative_id?: string;
+  /** Set by the create_task_under_initiative apply pass — id of the new task. */
+  created_task_id?: string;
+  /** Set by `applyDiff` for `add_availability` — id of the inserted row. */
+  created_availability_id?: string;
+}
 
 export type PmDiff =
-  | {
+  | ({
       kind: 'shift_initiative_target';
       initiative_id: string;
       target_start?: string | null;
       target_end?: string | null;
       reason?: string;
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       kind: 'add_availability';
       agent_id: string;
       start: string;
       end: string;
       reason?: string;
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       kind: 'set_initiative_status';
       initiative_id: string;
       status: 'planned' | 'in_progress' | 'at_risk' | 'blocked';
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       kind: 'add_dependency';
       initiative_id: string;
       depends_on_initiative_id: string;
       note?: string;
-    }
-  | { kind: 'remove_dependency'; dependency_id: string }
-  | {
+    } & PmDiffCapture)
+  | ({ kind: 'remove_dependency'; dependency_id: string } & PmDiffCapture)
+  | ({
       kind: 'reorder_initiatives';
       parent_id: string | null;
       child_ids_in_order: string[];
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       kind: 'update_status_check';
       initiative_id: string;
       status_check_md: string;
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       // Polish B (decompose flow). On accept, the decompose handler inserts
       // one initiative row under `parent_initiative_id`. `depends_on_initiative_ids`
       // can carry placeholder ids (`$0`, `$1`, …) that point to other
@@ -96,8 +136,8 @@ export type PmDiff =
       depends_on_initiative_ids?: string[];
       /** Optional placeholder id for cross-sibling dep resolution. */
       placeholder_id?: string;
-    }
-  | {
+    } & PmDiffCapture)
+  | ({
       // Freeform-notes intake: create one draft task attached to an
       // initiative. `initiative_id` may be a placeholder ($N or a custom
       // `placeholder_id` from a same-proposal `create_child_initiative`)
@@ -109,7 +149,7 @@ export type PmDiff =
       status_check_md?: string | null;
       assigned_agent_id?: string | null;
       priority?: 'low' | 'normal' | 'high';
-    };
+    } & PmDiffCapture);
 
 export interface PmProposal {
   id: string;
@@ -130,6 +170,9 @@ export interface PmProposal {
    *  pm-dispatch-async spec). For pre-migration rows or non-dispatched
    *  proposals, defaults to 'agent_complete'. */
   dispatch_state: PmProposalDispatchState;
+  /** When this proposal was synthesized to undo another accepted proposal,
+   *  this points back at it. NULL for forward proposals. */
+  reverts_proposal_id: string | null;
   created_at: string;
 }
 
@@ -147,6 +190,7 @@ interface PmProposalRow {
   parent_proposal_id: string | null;
   target_initiative_id: string | null;
   dispatch_state: PmProposalDispatchState | null;
+  reverts_proposal_id: string | null;
   created_at: string;
 }
 
@@ -424,6 +468,7 @@ function rowToProposal(row: PmProposalRow): PmProposal {
     parent_proposal_id: row.parent_proposal_id,
     target_initiative_id: row.target_initiative_id ?? null,
     dispatch_state: (row.dispatch_state ?? 'agent_complete') as PmProposalDispatchState,
+    reverts_proposal_id: row.reverts_proposal_id ?? null,
     created_at: row.created_at,
   };
 }
@@ -443,6 +488,10 @@ export interface CreateProposalInput {
    *  when persisting a synth placeholder while the named-agent dispatch
    *  is still in flight (Tier 3 of pm-dispatch-async). */
   dispatch_state?: PmProposalDispatchState;
+  /** Slice 1 of revertable proposals: when this draft is the inverse of
+   *  another accepted proposal, point back at it so the timeline can
+   *  render a chain. Slice 2 wires the inverse synthesis. */
+  reverts_proposal_id?: string | null;
 }
 
 export function createProposal(input: CreateProposalInput): PmProposal {
@@ -465,8 +514,8 @@ export function createProposal(input: CreateProposalInput): PmProposal {
   run(
     `INSERT INTO pm_proposals (
        id, workspace_id, trigger_text, trigger_kind, impact_md,
-       proposed_changes, plan_suggestions, status, parent_proposal_id, target_initiative_id, dispatch_state, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`,
+       proposed_changes, plan_suggestions, status, parent_proposal_id, target_initiative_id, dispatch_state, reverts_proposal_id, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -478,6 +527,7 @@ export function createProposal(input: CreateProposalInput): PmProposal {
       input.parent_proposal_id ?? null,
       input.target_initiative_id ?? null,
       input.dispatch_state ?? 'agent_complete',
+      input.reverts_proposal_id ?? null,
       now,
     ],
   );
@@ -646,6 +696,9 @@ export function acceptProposal(
             applied_by_agent_id,
             id,
           );
+          // Capture the new initiative id back onto the diff so revert
+          // can target the right row without recomputing.
+          change.created_initiative_id = newId;
           // Two index forms accepted: explicit `placeholder_id` field or
           // ordinal `$N` based on diff position.
           placeholderMap.set(`$${idx}`, newId);
@@ -694,7 +747,7 @@ export function acceptProposal(
               `create_task_under_initiative: unresolved placeholder "${change.initiative_id}"`,
             );
           }
-          createTaskFromInitiative({
+          const created = createTaskFromInitiative({
             initiative_id: realInit,
             workspace_id: existing.workspace_id,
             title: change.title,
@@ -705,12 +758,26 @@ export function acceptProposal(
             created_by_agent_id: applied_by_agent_id,
             reason: `created via PM notes proposal #${id}`,
           });
+          // Capture the new task id so revert can cancel that exact row.
+          change.created_task_id = created.id;
           changesApplied++;
           continue;
         }
         applyDiff(change, now);
         changesApplied++;
       }
+    }
+
+    // Persist the augmented proposed_changes JSON. The apply path above
+    // mutated each diff in place to add capture state (prev_status,
+    // created_dependency_id, etc.) — write that back so Slice 2's
+    // invertDiff can synthesize a pure-function revert from the row alone.
+    // Skipped on the advisory path since no diffs ran.
+    if (!isAdvisory) {
+      run(
+        `UPDATE pm_proposals SET proposed_changes = ? WHERE id = ?`,
+        [JSON.stringify(existing.proposed_changes), id],
+      );
     }
 
     // Flip the proposal row.
@@ -751,6 +818,16 @@ export function acceptProposal(
 function applyDiff(diff: PmDiff, now: string): void {
   switch (diff.kind) {
     case 'shift_initiative_target': {
+      // Capture the previous targets BEFORE the UPDATE so revert can
+      // restore them without recomputing from drifted DB state.
+      const prev = queryOne<{ target_start: string | null; target_end: string | null }>(
+        `SELECT target_start, target_end FROM initiatives WHERE id = ?`,
+        [diff.initiative_id],
+      );
+      if (prev) {
+        diff.prev_target_start = prev.target_start ?? null;
+        diff.prev_target_end = prev.target_end ?? null;
+      }
       const sets: string[] = [];
       const params: unknown[] = [];
       if (diff.target_start !== undefined) {
@@ -768,14 +845,25 @@ function applyDiff(diff: PmDiff, now: string): void {
       return;
     }
     case 'add_availability': {
+      const newId = uuidv4();
       run(
         `INSERT INTO owner_availability (id, agent_id, unavailable_start, unavailable_end, reason, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [uuidv4(), diff.agent_id, diff.start, diff.end, diff.reason ?? null, now],
+        [newId, diff.agent_id, diff.start, diff.end, diff.reason ?? null, now],
       );
+      diff.created_availability_id = newId;
       return;
     }
     case 'set_initiative_status': {
+      // Capture previous status so revert can restore it. PM-driven
+      // statuses are limited (planned|in_progress|at_risk|blocked) but
+      // an operator could have left the row in done/cancelled before the
+      // proposal lands — `prev_status` covers all six values.
+      const prev = queryOne<{ status: PmDiffCapture['prev_status'] }>(
+        `SELECT status FROM initiatives WHERE id = ?`,
+        [diff.initiative_id],
+      );
+      if (prev) diff.prev_status = prev.status;
       run(
         `UPDATE initiatives SET status = ?, updated_at = ? WHERE id = ?`,
         [diff.status, now, diff.initiative_id],
@@ -783,26 +871,64 @@ function applyDiff(diff: PmDiff, now: string): void {
       return;
     }
     case 'add_dependency': {
+      const newId = uuidv4();
       try {
         run(
           `INSERT INTO initiative_dependencies (id, initiative_id, depends_on_initiative_id, kind, note, created_at)
            VALUES (?, ?, ?, 'finish_to_start', ?, ?)`,
-          [uuidv4(), diff.initiative_id, diff.depends_on_initiative_id, diff.note ?? null, now],
+          [newId, diff.initiative_id, diff.depends_on_initiative_id, diff.note ?? null, now],
         );
+        diff.created_dependency_id = newId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // SQLite throws SQLITE_CONSTRAINT_UNIQUE on duplicate edges. Treat
-        // as idempotent — the desired state already exists.
-        if (/UNIQUE constraint failed/i.test(msg)) return;
+        // as idempotent — the desired state already exists. Resolve and
+        // capture the existing edge's id so revert still works.
+        if (/UNIQUE constraint failed/i.test(msg)) {
+          const existing = queryOne<{ id: string }>(
+            `SELECT id FROM initiative_dependencies
+              WHERE initiative_id = ? AND depends_on_initiative_id = ?`,
+            [diff.initiative_id, diff.depends_on_initiative_id],
+          );
+          if (existing) diff.created_dependency_id = existing.id;
+          return;
+        }
         throw err;
       }
       return;
     }
     case 'remove_dependency': {
+      // Snapshot the row BEFORE delete so revert can re-insert the
+      // identical edge. We capture the full row (including original id +
+      // created_at) — Slice 2's invertDiff will reuse the id when it
+      // re-inserts so any references stay valid.
+      const row = queryOne<{
+        id: string;
+        initiative_id: string;
+        depends_on_initiative_id: string;
+        kind: string;
+        note: string | null;
+        created_at: string;
+      }>(
+        `SELECT id, initiative_id, depends_on_initiative_id, kind, note, created_at
+           FROM initiative_dependencies WHERE id = ?`,
+        [diff.dependency_id],
+      );
+      if (row) diff.removed_dependency_row = row;
       run(`DELETE FROM initiative_dependencies WHERE id = ?`, [diff.dependency_id]);
       return;
     }
     case 'reorder_initiatives': {
+      // Snapshot the prior order of these siblings BEFORE the UPDATE so
+      // revert restores the exact previous arrangement. We only capture
+      // the ids the diff is touching — siblings outside that set keep
+      // their existing sort_order through both apply and revert.
+      const placeholders = diff.child_ids_in_order.map(() => '?').join(',');
+      const prevRows = queryAll<{ id: string; sort_order: number }>(
+        `SELECT id, sort_order FROM initiatives WHERE id IN (${placeholders}) ORDER BY sort_order ASC`,
+        diff.child_ids_in_order,
+      );
+      diff.prev_child_ids_in_order = prevRows.map(r => r.id);
       // Bulk update sort_order. Validation already confirmed every id
       // exists in this workspace.
       let order = 0;
@@ -816,6 +942,11 @@ function applyDiff(diff: PmDiff, now: string): void {
       return;
     }
     case 'update_status_check': {
+      const prev = queryOne<{ status_check_md: string | null }>(
+        `SELECT status_check_md FROM initiatives WHERE id = ?`,
+        [diff.initiative_id],
+      );
+      if (prev) diff.prev_status_check_md = prev.status_check_md ?? null;
       run(
         `UPDATE initiatives SET status_check_md = ?, updated_at = ? WHERE id = ?`,
         [diff.status_check_md, now, diff.initiative_id],

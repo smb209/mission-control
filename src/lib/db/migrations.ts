@@ -3583,6 +3583,75 @@ const migrations: Migration[] = [
       console.log('[Migration 061] agents.is_pm added + backfilled from role.');
     },
   },
+  {
+    id: '062',
+    name: 'pm_proposals_revert_foundation',
+    up: (db) => {
+      // Slice 1 of revertable PM proposals (specs/pm-revertable-proposals.md):
+      //   1. Add `reverts_proposal_id` (nullable FK) so a revert proposal can
+      //      point back at the proposal it inverts.
+      //   2. Extend the trigger_kind CHECK to permit 'revert'.
+      //
+      // Mirrors the table-rebuild pattern from migration 054, since SQLite
+      // can't ALTER a CHECK in place. We also re-declare every column so the
+      // schema stays canonical after the rebuild.
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string }>;
+      const tableSql = (db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='pm_proposals'`,
+      ).get() as { sql: string } | undefined)?.sql ?? '';
+
+      const hasRevertsCol = cols.some(c => c.name === 'reverts_proposal_id');
+      const checkHasRevert = tableSql.includes("'revert'");
+
+      if (hasRevertsCol && checkHasRevert) {
+        console.log('[Migration 062] Already applied; skipping.');
+        return;
+      }
+
+      const fkList = db.prepare(`PRAGMA foreign_key_list(pm_proposals)`).all() as Array<{ from: string; on_delete: string }>;
+      const targetFk = fkList.find(fk => fk.from === 'target_initiative_id');
+      const targetCascade = targetFk?.on_delete === 'CASCADE' ? 'CASCADE' : 'SET NULL';
+      const dispatchStateExists = cols.some(c => c.name === 'dispatch_state');
+
+      const carryCols = [
+        'id', 'workspace_id', 'trigger_text', 'trigger_kind', 'impact_md',
+        'proposed_changes', 'status', 'applied_at', 'applied_by_agent_id',
+        'parent_proposal_id', 'created_at', 'target_initiative_id',
+        'plan_suggestions',
+        ...(dispatchStateExists ? ['dispatch_state'] : []),
+      ].filter(c => cols.some(x => x.name === c));
+      const carryList = carryCols.join(', ');
+
+      db.exec(`
+        CREATE TABLE pm_proposals_new (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          trigger_text TEXT NOT NULL,
+          trigger_kind TEXT NOT NULL DEFAULT 'manual'
+            CHECK (trigger_kind IN ('manual','scheduled_drift_scan','disruption_event','status_check_investigation','plan_initiative','decompose_initiative','notes_intake','revert')),
+          impact_md TEXT NOT NULL,
+          proposed_changes TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK (status IN ('draft','accepted','rejected','superseded')),
+          applied_at TEXT,
+          applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL,
+          created_at TEXT DEFAULT (datetime('now')),
+          target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE ${targetCascade},
+          plan_suggestions TEXT,
+          ${dispatchStateExists ? 'dispatch_state TEXT,' : ''}
+          reverts_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL
+        )
+      `);
+      db.exec(`INSERT INTO pm_proposals_new (${carryList}) SELECT ${carryList} FROM pm_proposals`);
+      db.exec(`DROP TABLE pm_proposals`);
+      db.exec(`ALTER TABLE pm_proposals_new RENAME TO pm_proposals`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_target_init ON pm_proposals(target_initiative_id, status, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_pm_proposals_reverts ON pm_proposals(reverts_proposal_id) WHERE reverts_proposal_id IS NOT NULL`);
+      console.log('[Migration 062] pm_proposals.reverts_proposal_id + revert trigger_kind ready.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

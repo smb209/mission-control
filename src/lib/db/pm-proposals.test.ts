@@ -567,3 +567,191 @@ test('acceptProposal emits a pm_proposal_accepted event row', () => {
   });
   assert.ok(latest, 'event metadata.proposal_id should match');
 });
+
+// ─── Slice 1: capture-at-apply pattern (revertable proposals) ───────
+
+test('apply captures prev_status on set_initiative_status', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Capture me' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: init.id, status: 'at_risk' },
+    ],
+  });
+  acceptProposal(p.id);
+  const updated = getProposal(p.id)!;
+  const diff = updated.proposed_changes[0];
+  assert.equal(diff.kind, 'set_initiative_status');
+  // initial status defaults to 'planned' from createInitiative
+  assert.equal((diff as { prev_status?: string }).prev_status, 'planned');
+});
+
+test('apply captures prev_target_start/end on shift_initiative_target', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({
+    workspace_id: ws,
+    kind: 'epic',
+    title: 'Shifty',
+    target_start: '2026-01-01',
+    target_end: '2026-02-01',
+  });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      {
+        kind: 'shift_initiative_target',
+        initiative_id: init.id,
+        target_start: '2026-03-01',
+        target_end: '2026-04-01',
+      },
+    ],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as {
+    prev_target_start?: string | null;
+    prev_target_end?: string | null;
+  };
+  assert.equal(diff.prev_target_start?.slice(0, 10), '2026-01-01');
+  assert.equal(diff.prev_target_end?.slice(0, 10), '2026-02-01');
+});
+
+test('apply captures created_dependency_id on add_dependency', () => {
+  const ws = freshWorkspace();
+  const a = createInitiative({ workspace_id: ws, kind: 'epic', title: 'A' });
+  const b = createInitiative({ workspace_id: ws, kind: 'epic', title: 'B' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'add_dependency', initiative_id: a.id, depends_on_initiative_id: b.id },
+    ],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as { created_dependency_id?: string };
+  assert.ok(diff.created_dependency_id, 'capture should record the new edge id');
+  const row = queryOne<{ id: string }>(
+    `SELECT id FROM initiative_dependencies WHERE id = ?`,
+    [diff.created_dependency_id],
+  );
+  assert.ok(row, 'captured id must reference a real edge');
+});
+
+test('apply captures removed_dependency_row on remove_dependency', () => {
+  const ws = freshWorkspace();
+  const a = createInitiative({ workspace_id: ws, kind: 'epic', title: 'A' });
+  const b = createInitiative({ workspace_id: ws, kind: 'epic', title: 'B' });
+  const dep = addInitiativeDependency({
+    initiative_id: a.id,
+    depends_on_initiative_id: b.id,
+  });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [{ kind: 'remove_dependency', dependency_id: dep.id }],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as {
+    removed_dependency_row?: { id: string; initiative_id: string; depends_on_initiative_id: string };
+  };
+  assert.ok(diff.removed_dependency_row);
+  assert.equal(diff.removed_dependency_row!.id, dep.id);
+  assert.equal(diff.removed_dependency_row!.initiative_id, a.id);
+  assert.equal(diff.removed_dependency_row!.depends_on_initiative_id, b.id);
+});
+
+test('apply captures prev_child_ids_in_order on reorder_initiatives', () => {
+  const ws = freshWorkspace();
+  const parent = createInitiative({ workspace_id: ws, kind: 'milestone', title: 'P' });
+  const c1 = createInitiative({ workspace_id: ws, kind: 'epic', title: 'C1', parent_initiative_id: parent.id, sort_order: 0 });
+  const c2 = createInitiative({ workspace_id: ws, kind: 'epic', title: 'C2', parent_initiative_id: parent.id, sort_order: 1 });
+  const c3 = createInitiative({ workspace_id: ws, kind: 'epic', title: 'C3', parent_initiative_id: parent.id, sort_order: 2 });
+  const reversed = [c3.id, c2.id, c1.id];
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'reorder_initiatives', parent_id: parent.id, child_ids_in_order: reversed },
+    ],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as { prev_child_ids_in_order?: string[] };
+  // c1, c2, c3 were inserted in creation order, so the captured prior
+  // arrangement should match that ordering.
+  assert.deepEqual(diff.prev_child_ids_in_order, [c1.id, c2.id, c3.id]);
+});
+
+test('apply captures prev_status_check_md on update_status_check', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'I' });
+  // Seed an initial status_check_md so capture is non-null.
+  run(
+    `UPDATE initiatives SET status_check_md = ? WHERE id = ?`,
+    ['previous-md', init.id],
+  );
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'update_status_check', initiative_id: init.id, status_check_md: 'new-md' },
+    ],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as { prev_status_check_md?: string | null };
+  assert.equal(diff.prev_status_check_md, 'previous-md');
+});
+
+test('apply captures created_initiative_id on create_child_initiative', () => {
+  const ws = freshWorkspace();
+  const parent = createInitiative({ workspace_id: ws, kind: 'milestone', title: 'P' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'Child',
+        child_kind: 'epic',
+      },
+    ],
+  });
+  acceptProposal(p.id);
+  const diff = getProposal(p.id)!.proposed_changes[0] as { created_initiative_id?: string };
+  assert.ok(diff.created_initiative_id);
+  const row = queryOne<{ id: string }>(
+    `SELECT id FROM initiatives WHERE id = ?`,
+    [diff.created_initiative_id],
+  );
+  assert.ok(row);
+});
+
+test('createProposal accepts reverts_proposal_id and rowToProposal surfaces it', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
+  const original = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [{ kind: 'set_initiative_status', initiative_id: init.id, status: 'at_risk' }],
+  });
+  const revert = createProposal({
+    workspace_id: ws,
+    trigger_text: 't-revert',
+    trigger_kind: 'revert',
+    impact_md: 'undo it',
+    proposed_changes: [],
+    reverts_proposal_id: original.id,
+  });
+  assert.equal(revert.reverts_proposal_id, original.id);
+  assert.equal(revert.trigger_kind, 'revert');
+});
