@@ -9,6 +9,7 @@ const agentId = z.string().regex(
 
 // Task status and priority enums from types
 const TaskStatus = z.enum([
+  'draft',
   'pending_dispatch',
   'planning',
   'inbox',
