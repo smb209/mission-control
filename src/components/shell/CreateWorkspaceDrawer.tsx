@@ -43,6 +43,8 @@ export function CreateWorkspaceDrawer({ open, onClose, onCreated }: CreateWorksp
   const [slugDirty, setSlugDirty] = useState(false);
   const [icon, setIcon] = useState('📁');
   const [description, setDescription] = useState('');
+  const [cloneAgentsFrom, setCloneAgentsFrom] = useState<string>('');
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string; icon?: string | null }>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,8 +56,23 @@ export function CreateWorkspaceDrawer({ open, onClose, onCreated }: CreateWorksp
     setSlugDirty(false);
     setIcon('📁');
     setDescription('');
+    setCloneAgentsFrom('');
     setSubmitting(false);
     setError(null);
+  }, [open]);
+
+  // Pre-load workspace list for the "copy agents from" dropdown when the
+  // drawer opens. Cheap (one /api/workspaces call) and avoids a flicker.
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/workspaces');
+        if (!res.ok) return;
+        const list = await res.json();
+        setWorkspaces(Array.isArray(list) ? list : []);
+      } catch { /* non-fatal */ }
+    })();
   }, [open]);
 
   // Keep slug in sync with name unless the operator has explicitly edited it.
@@ -83,6 +100,7 @@ export function CreateWorkspaceDrawer({ open, onClose, onCreated }: CreateWorksp
           slug: slug.trim() || undefined,
           icon,
           description: description.trim() || undefined,
+          clone_agents_from: cloneAgentsFrom || undefined,
         }),
       });
 
@@ -211,6 +229,31 @@ export function CreateWorkspaceDrawer({ open, onClose, onCreated }: CreateWorksp
             placeholder="What lives in this workspace?"
             className="w-full px-3 py-2 bg-mc-bg border border-mc-border rounded-sm text-sm text-mc-text focus:border-mc-accent focus:outline-hidden resize-none"
           />
+        </div>
+
+        {/* Agents */}
+        <div>
+          <label htmlFor="ws-clone-agents" className="block text-xs uppercase tracking-wider text-mc-text-secondary mb-1">
+            Agents
+          </label>
+          <select
+            id="ws-clone-agents"
+            value={cloneAgentsFrom}
+            onChange={e => setCloneAgentsFrom(e.target.value)}
+            className="w-full px-3 py-2 bg-mc-bg border border-mc-border rounded-sm text-sm text-mc-text focus:border-mc-accent focus:outline-hidden"
+          >
+            <option value="">Default (placeholder PM only)</option>
+            {workspaces.map(w => (
+              <option key={w.id} value={w.id}>
+                Copy from: {w.icon ? `${w.icon} ` : ''}{w.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-mc-text-secondary mt-1">
+            Copies every active agent from the chosen workspace, preserving roles
+            and gateway links. Pick "Default" if you want this workspace to start
+            empty (just the PM placeholder).
+          </p>
         </div>
 
         {error && (

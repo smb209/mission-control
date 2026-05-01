@@ -107,6 +107,92 @@ export function ensurePmAgent(workspaceId: string): { id: string; created: boole
 }
 
 /**
+ * Copy every active agent from `sourceWorkspaceId` into `targetWorkspaceId`,
+ * preserving identity-shaped fields (name, role, description, avatar_emoji,
+ * soul/user/agents markdown, model, source, gateway_agent_id, runtime_kind,
+ * is_pm, is_master) but with fresh ids and reset runtime counters
+ * (status='standby', total_cost_usd=0, total_tokens_used=0, ephemeral=0).
+ *
+ * Use case: a new workspace inherits the operator's existing roster
+ * instead of starting empty (gateway sync only populates the workspace
+ * the operator's openclaw runner is keyed to, leaving fresh workspaces
+ * agentless until the operator manually adds rows).
+ *
+ * Returns the number of agents inserted.
+ */
+export function cloneAgentsFromWorkspace(
+  sourceWorkspaceId: string,
+  targetWorkspaceId: string,
+): number {
+  const db = getDb();
+  const sources = db.prepare(
+    `SELECT name, role, description, avatar_emoji, is_master, is_pm,
+            soul_md, user_md, agents_md, model, source, gateway_agent_id,
+            session_key_prefix, runtime_kind
+       FROM agents
+      WHERE workspace_id = ? AND is_active = 1`,
+  ).all(sourceWorkspaceId) as Array<{
+    name: string;
+    role: string;
+    description: string | null;
+    avatar_emoji: string | null;
+    is_master: number;
+    is_pm: number;
+    soul_md: string | null;
+    user_md: string | null;
+    agents_md: string | null;
+    model: string | null;
+    source: string | null;
+    gateway_agent_id: string | null;
+    session_key_prefix: string | null;
+    runtime_kind: string;
+  }>;
+
+  if (sources.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  const insert = db.prepare(`
+    INSERT INTO agents (
+      id, name, role, description, avatar_emoji, status, is_master, is_pm,
+      workspace_id, soul_md, user_md, agents_md, model, source,
+      gateway_agent_id, session_key_prefix, is_active, runtime_kind,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'standby', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+  `);
+
+  const inserted = db.transaction(() => {
+    let n = 0;
+    for (const src of sources) {
+      insert.run(
+        crypto.randomUUID(),
+        src.name,
+        src.role,
+        src.description,
+        src.avatar_emoji ?? '🤖',
+        src.is_master,
+        src.is_pm,
+        targetWorkspaceId,
+        src.soul_md,
+        src.user_md,
+        src.agents_md,
+        src.model,
+        src.source ?? 'local',
+        src.gateway_agent_id,
+        src.session_key_prefix,
+        src.runtime_kind ?? 'host',
+        now,
+        now,
+      );
+      n += 1;
+    }
+    return n;
+  })();
+
+  console.log(`[Bootstrap] Cloned ${inserted} agent(s) from ${sourceWorkspaceId} → ${targetWorkspaceId}`);
+  return inserted;
+}
+
+/**
  * Clone workflow templates from the default workspace into a new workspace.
  */
 export function cloneWorkflowTemplates(db: Database.Database, targetWorkspaceId: string): void {

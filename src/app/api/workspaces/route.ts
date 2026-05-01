@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { bootstrapCoreAgents, cloneWorkflowTemplates, ensurePmAgent } from '@/lib/bootstrap-agents';
+import { bootstrapCoreAgents, cloneAgentsFromWorkspace, cloneWorkflowTemplates, ensurePmAgent } from '@/lib/bootstrap-agents';
 import type { Workspace, WorkspaceStats, TaskStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -85,7 +85,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, description, icon } = body;
+    const { name, description, icon, clone_agents_from } = body as {
+      name?: string;
+      description?: string;
+      icon?: string;
+      clone_agents_from?: string;
+    };
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return NextResponse.json({ error: 'Name is required' }, { status: 400 });
@@ -109,7 +114,26 @@ export async function POST(request: NextRequest) {
     // Clone workflow templates and bootstrap core agents for the new workspace
     cloneWorkflowTemplates(db, id);
     bootstrapCoreAgents(id);
-    // Seed the workspace's PM agent (planning layer, role='pm'). Idempotent.
+
+    // Optional: copy the agent roster from another workspace. Useful when
+    // gateway sync only keys to one workspace and a fresh row would
+    // otherwise start empty. ensurePmAgent below is a no-op if any
+    // cloned agent already has is_pm=1.
+    if (clone_agents_from && typeof clone_agents_from === 'string') {
+      const source = db.prepare(
+        'SELECT id FROM workspaces WHERE id = ?',
+      ).get(clone_agents_from);
+      if (!source) {
+        return NextResponse.json(
+          { error: `Source workspace not found: ${clone_agents_from}` },
+          { status: 400 },
+        );
+      }
+      cloneAgentsFromWorkspace(clone_agents_from, id);
+    }
+
+    // Seed the workspace's PM agent (planning layer, role='pm'). Idempotent
+    // — bails out if cloneAgentsFromWorkspace already brought a PM across.
     ensurePmAgent(id);
 
     const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
