@@ -282,11 +282,19 @@ export function isActiveStatus(status: string): boolean {
 }
 
 export function pickDynamicAgent(taskId: string, stageRole?: string | null): { id: string; name: string } | null {
-  const planningAgentsTask = queryOne<{ planning_agents?: string }>('SELECT planning_agents FROM tasks WHERE id = ?', [taskId]);
+  // Workspace-scope every lookup. Without this filter, a multi-workspace
+  // gateway_agent_id (clones produced by feat(workspaces)#133) lets the
+  // role/fallback queries silently route a task to a foreign-workspace
+  // agent, which then trips authz:workspace_mismatch on every MCP call.
+  const taskRow = queryOne<{ planning_agents?: string; workspace_id: string | null }>(
+    'SELECT planning_agents, workspace_id FROM tasks WHERE id = ?',
+    [taskId],
+  );
+  const workspaceId = taskRow?.workspace_id ?? 'default';
   const plannerCandidates: string[] = [];
-  if (planningAgentsTask?.planning_agents) {
+  if (taskRow?.planning_agents) {
     try {
-      const parsed = JSON.parse(planningAgentsTask.planning_agents) as Array<{ agent_id?: string; role?: string }>;
+      const parsed = JSON.parse(taskRow.planning_agents) as Array<{ agent_id?: string; role?: string }>;
       for (const a of parsed) {
         if (a.role && stageRole && a.role.toLowerCase().includes(stageRole.toLowerCase()) && a.agent_id) plannerCandidates.push(a.agent_id);
       }
@@ -298,11 +306,12 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
   // marked inactive agent is excluded from every routing decision.
   const checked = new Set<string>();
   for (const candidateId of plannerCandidates) {
-    const candidate = queryOne<{ id: string; name: string; is_master: number; status: string; is_active: number }>(
-      'SELECT id, name, is_master, status, is_active FROM agents WHERE id = ? LIMIT 1',
+    const candidate = queryOne<{ id: string; name: string; is_master: number; status: string; is_active: number; workspace_id: string | null }>(
+      'SELECT id, name, is_master, status, is_active, workspace_id FROM agents WHERE id = ? LIMIT 1',
       [candidateId]
     );
     if (!candidate || candidate.status === 'offline' || Number(candidate.is_active ?? 1) !== 1) continue;
+    if ((candidate.workspace_id ?? 'default') !== workspaceId) continue;
     checked.add(candidate.id);
     return { id: candidate.id, name: candidate.name };
   }
@@ -314,12 +323,13 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
     const byRole = queryOne<{ id: string; name: string }>(
       `SELECT id, name FROM agents
        WHERE role = ? AND status != 'offline' AND COALESCE(is_active, 1) = 1
+         AND COALESCE(workspace_id, 'default') = ?
        ORDER BY
          (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL) DESC,
          status = 'standby' DESC,
          updated_at DESC
        LIMIT 1`,
-      [stageRole]
+      [stageRole, workspaceId]
     );
     if (byRole) return byRole;
   }
@@ -327,11 +337,13 @@ export function pickDynamicAgent(taskId: string, stageRole?: string | null): { i
   const fallback = queryOne<{ id: string; name: string }>(
     `SELECT id, name FROM agents
      WHERE status != 'offline' AND COALESCE(is_active, 1) = 1
+       AND COALESCE(workspace_id, 'default') = ?
      ORDER BY
        (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL) DESC,
        is_master ASC,
        updated_at DESC
-     LIMIT 1`
+     LIMIT 1`,
+    [workspaceId]
   );
   if (fallback && !checked.has(fallback.id)) return fallback;
 
