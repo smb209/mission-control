@@ -91,6 +91,36 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | null | undefin
 }
 
 /**
+ * Resolve every agent row whose prefix matches this sessionKey. When agents
+ * are cloned across workspaces they share `gateway_agent_id`, so the same
+ * sessionKey maps to one row per workspace. We need to ping all of them so
+ * each workspace's sidebar dot lights up — single-winner resolution silently
+ * starved cloned-workspace rows of activity signal.
+ */
+export function resolveAllAgentIdsFromSessionKey(sessionKey: string | null | undefined): string[] {
+  if (!sessionKey) return [];
+  refreshPrefixIndex();
+  const matches: string[] = [];
+  let bestPrefixLen = 0;
+  for (const entry of prefixIndex ?? []) {
+    if (!sessionKey.startsWith(entry.prefix)) continue;
+    // Index is sorted longest-prefix-first. Once we've found the most
+    // specific prefix, only collect siblings with the *same* prefix length —
+    // shorter prefixes are less-specific matches we'd previously have
+    // skipped under single-winner resolution.
+    if (matches.length === 0) {
+      bestPrefixLen = entry.prefix.length;
+      matches.push(entry.agentId);
+    } else if (entry.prefix.length === bestPrefixLen) {
+      matches.push(entry.agentId);
+    } else {
+      break;
+    }
+  }
+  return matches;
+}
+
+/**
  * Record a ping for an agent and broadcast it to SSE subscribers. Safe to
  * call from any traffic path — a missing/unresolvable agentId is a no-op.
  */
@@ -110,9 +140,9 @@ export function pingAgent(agentId: string | null | undefined, direction: PingDir
  * know whether the ping landed).
  */
 export function pingAgentBySessionKey(sessionKey: string | null | undefined, direction: PingDirection): boolean {
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  if (!agentId) return false;
-  pingAgent(agentId, direction);
+  const agentIds = resolveAllAgentIdsFromSessionKey(sessionKey);
+  if (agentIds.length === 0) return false;
+  for (const agentId of agentIds) pingAgent(agentId, direction);
   return true;
 }
 

@@ -28,7 +28,9 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
     setImportResult(null);
 
     try {
-      const res = await fetch('/api/agents/discover');
+      const res = await fetch(
+        `/api/agents/discover?workspace_id=${encodeURIComponent(workspaceId || 'default')}`,
+      );
       if (!res.ok) {
         const data = await res.json();
         setError(data.error || `Failed to discover agents (${res.status})`);
@@ -41,7 +43,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     discover();

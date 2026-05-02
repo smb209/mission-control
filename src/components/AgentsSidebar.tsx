@@ -240,7 +240,10 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
     )) return;
     setResetSessionsBusy(true);
     try {
-      const res = await fetch('/api/openclaw/sessions', { method: 'DELETE' });
+      const res = await fetch(
+        `/api/openclaw/sessions?workspace_id=${encodeURIComponent(workspaceId || 'default')}`,
+        { method: 'DELETE' },
+      );
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Failed to reset sessions');

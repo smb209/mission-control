@@ -120,9 +120,23 @@ export async function POST(request: Request) {
 // usually mean the gateway didn't route the command (agent offline,
 // allow-list restriction, etc.) — operator can fall back to `/reset` in
 // that agent's chat manually.
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
   try {
-    const sessions = queryAll<OpenClawSession>('SELECT * FROM openclaw_sessions');
+    // Scope the reset to the caller's workspace. Without this, an operator in
+    // workspace A would clear sessions and /reset cloned agents in workspaces
+    // B, C, … that happen to share gateway_agent_ids — see commit ae91091.
+    // openclaw_sessions has no workspace_id column, so we resolve workspace
+    // via the linked agent row.
+    const { searchParams } = new URL(request.url);
+    const workspaceId = searchParams.get('workspace_id') || 'default';
+
+    const sessions = queryAll<OpenClawSession>(
+      `SELECT s.* FROM openclaw_sessions s
+         LEFT JOIN agents a ON a.id = s.agent_id
+        WHERE s.agent_id IS NOT NULL
+          AND COALESCE(a.workspace_id, 'default') = ?`,
+      [workspaceId]
+    );
     const count = sessions.length;
 
     // Phase 0: abort in-flight autopilot cycles. Without this, a research or
@@ -196,7 +210,12 @@ export async function DELETE() {
           }
         }
       }
-      run('DELETE FROM openclaw_sessions');
+      // Delete only the sessions we just enumerated (workspace-scoped) rather
+      // than truncating the whole table — otherwise this would silently nuke
+      // sessions belonging to agents in other workspaces.
+      for (const s of sessions) {
+        run('DELETE FROM openclaw_sessions WHERE id = ?', [s.id]);
+      }
     });
 
     for (const s of sessions) {
@@ -219,7 +238,9 @@ export async function DELETE() {
       `SELECT * FROM agents
          WHERE gateway_agent_id IS NOT NULL
            AND COALESCE(is_active, 1) = 1
-           AND COALESCE(status, 'standby') != 'offline'`
+           AND COALESCE(status, 'standby') != 'offline'
+           AND COALESCE(workspace_id, 'default') = ?`,
+      [workspaceId]
     );
 
     const agentsReset: Array<{ agent_id: string; name: string; sessionKey: string; ok: boolean; error?: string }> = [];
