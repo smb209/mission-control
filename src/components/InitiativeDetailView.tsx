@@ -190,18 +190,20 @@ export interface InitiativeDetailViewProps {
   /** Called after a successful delete so the host can navigate / clear
    *  the master-detail selection. Defaults to no-op. */
   onDeleted?: () => void;
-  /** Optional handler for the "Parent" breadcrumb. When provided, we
-   *  call this with the parent's id instead of navigating to its own
-   *  detail route — the master-detail host uses this to flip the
-   *  selection and expand the parent's subtree in the rail. */
-  onSelectParent?: (parentId: string) => void;
+  /** Optional handler for in-pane navigation between initiatives:
+   *  parent breadcrumb, child list rows, dependency rows. When
+   *  provided, those click targets call this with the target id
+   *  instead of navigating to the target's standalone /initiatives/[id]
+   *  route — the master-detail host uses this to flip the selection
+   *  and reveal the row in the rail. */
+  onSelectInitiative?: (id: string) => void;
 }
 
 export function InitiativeDetailView({
   initiativeId,
   variant,
   onDeleted,
-  onSelectParent,
+  onSelectInitiative,
 }: InitiativeDetailViewProps) {
   const id = initiativeId;
   const router = useRouter();
@@ -557,10 +559,10 @@ export function InitiativeDetailView({
             {initiative.parent_initiative_id && (
               <>
                 {isFull && <ChevronRight className="w-4 h-4 text-mc-text-secondary" />}
-                {onSelectParent ? (
+                {onSelectInitiative ? (
                   <button
                     type="button"
-                    onClick={() => onSelectParent(initiative.parent_initiative_id!)}
+                    onClick={() => onSelectInitiative(initiative.parent_initiative_id!)}
                     className="text-mc-text-secondary hover:text-mc-text text-sm"
                     title="Select parent in the tree"
                   >
@@ -932,12 +934,22 @@ or "carve out the onboarding flow as its own story first"`}
                   <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[c.kind]}`}>
                     {c.kind}
                   </span>
-                  <Link
-                    href={`/initiatives/${c.id}`}
-                    className="font-medium text-mc-text hover:text-mc-accent"
-                  >
-                    {c.title}
-                  </Link>
+                  {onSelectInitiative ? (
+                    <button
+                      type="button"
+                      onClick={() => onSelectInitiative(c.id)}
+                      className="font-medium text-mc-text hover:text-mc-accent text-left"
+                    >
+                      {c.title}
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/initiatives/${c.id}`}
+                      className="font-medium text-mc-text hover:text-mc-accent"
+                    >
+                      {c.title}
+                    </Link>
+                  )}
                   <span className="text-xs text-mc-text-secondary ml-auto">{c.status}</span>
                 </li>
               ))}
@@ -975,23 +987,43 @@ or "carve out the onboarding flow as its own story first"`}
               {deps.outgoing.map(d => (
                 <li key={d.id} className="text-mc-text-secondary">
                   depends on{' '}
-                  <Link
-                    href={`/initiatives/${d.depends_on_initiative_id}`}
-                    className="text-mc-text hover:text-mc-accent"
-                  >
-                    {titleFor(d.depends_on_initiative_id)}
-                  </Link>
+                  {onSelectInitiative ? (
+                    <button
+                      type="button"
+                      onClick={() => onSelectInitiative(d.depends_on_initiative_id)}
+                      className="text-mc-text hover:text-mc-accent"
+                    >
+                      {titleFor(d.depends_on_initiative_id)}
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/initiatives/${d.depends_on_initiative_id}`}
+                      className="text-mc-text hover:text-mc-accent"
+                    >
+                      {titleFor(d.depends_on_initiative_id)}
+                    </Link>
+                  )}
                 </li>
               ))}
               {deps.incoming.map(d => (
                 <li key={d.id} className="text-mc-text-secondary">
                   blocks{' '}
-                  <Link
-                    href={`/initiatives/${d.initiative_id}`}
-                    className="text-mc-text hover:text-mc-accent"
-                  >
-                    {titleFor(d.initiative_id)}
-                  </Link>
+                  {onSelectInitiative ? (
+                    <button
+                      type="button"
+                      onClick={() => onSelectInitiative(d.initiative_id)}
+                      className="text-mc-text hover:text-mc-accent"
+                    >
+                      {titleFor(d.initiative_id)}
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/initiatives/${d.initiative_id}`}
+                      className="text-mc-text hover:text-mc-accent"
+                    >
+                      {titleFor(d.initiative_id)}
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>

@@ -547,9 +547,9 @@ export default function InitiativesPage() {
                 selectInitiative(null);
                 refresh();
               }}
-              onSelectParent={(parentId) => {
-                revealAncestors(parentId);
-                selectInitiative(parentId);
+              onSelectInitiative={(id) => {
+                revealAncestors(id);
+                selectInitiative(id);
               }}
             />
           ) : (
