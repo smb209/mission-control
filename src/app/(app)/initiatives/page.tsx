@@ -248,28 +248,31 @@ export default function InitiativesPage() {
   // doesn't get orphaned.
   const tree = useMemo(() => buildTree(flat, !showCancelled), [flat, showCancelled]);
 
-  // Fuzzy search over title + description. When the search box is
-  // non-empty, filter the tree to matching nodes AND every ancestor on
-  // the path to a match (so the matched node remains reachable in the
-  // hierarchy). Empty query → original tree.
+  // Fuzzy search by TITLE ONLY. Earlier we also matched description,
+  // but with a 0.4 threshold + descriptions that share common words
+  // ("FOIA", "policy", "request") almost every initiative scored as
+  // a match for "Fee Policy" — operator wanted exact-ish title hits,
+  // not corpus-wide vibes-matching. Tight threshold + ignoreLocation
+  // so a query in the middle of a long title still scores well.
   const [search, setSearch] = useState('');
   const fuse = useMemo(
     () =>
       new Fuse(flat, {
-        keys: ['title', 'description'],
-        threshold: 0.4,
+        keys: ['title'],
+        threshold: 0.3,
         ignoreLocation: true,
         minMatchCharLength: 2,
       }),
     [flat],
   );
-  const visibleTree = useMemo(() => {
+  // Filter result has two pieces: the *actual* matched ids (for the
+  // count badge) and the *visible* tree (matches + every ancestor on
+  // the path to a match so the match remains reachable in context).
+  const filterResult = useMemo<{ matchCount: number; tree: TreeNode[] }>(() => {
     const q = search.trim();
-    if (!q) return tree;
+    if (!q) return { matchCount: 0, tree };
     const matchedIds = new Set(fuse.search(q).map(r => r.item.id));
-    if (matchedIds.size === 0) return [];
-    // Walk up from each match adding ancestors so the match's path
-    // remains visible in the hierarchy.
+    if (matchedIds.size === 0) return { matchCount: 0, tree: [] };
     const byId = new Map(flat.map(r => [r.id, r] as const));
     const keep = new Set(matchedIds);
     for (const id of matchedIds) {
@@ -284,8 +287,9 @@ export default function InitiativesPage() {
         .filter(n => keep.has(n.id))
         .map(n => ({ ...n, children: prune(n.children) }));
     }
-    return prune(tree);
+    return { matchCount: matchedIds.size, tree: prune(tree) };
   }, [tree, search, fuse, flat]);
+  const visibleTree = filterResult.tree;
 
   // Expansion state lifted into the parent so the rail header's
   // Expand-all / Collapse-all controls can flip every row at once.
@@ -399,7 +403,7 @@ export default function InitiativesPage() {
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search title / description…"
+            placeholder="Search by title…"
             className="w-full pl-7 pr-7 py-1.5 rounded bg-mc-bg-secondary border border-mc-border text-xs text-mc-text placeholder:text-mc-text-secondary/60 focus:border-mc-accent/60 focus:outline-hidden"
           />
           {trimmedSearch && (
@@ -435,7 +439,9 @@ export default function InitiativesPage() {
             )}
           </label>
           <span className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
-            {trimmedSearch ? `${visibleTree.length} match${visibleTree.length === 1 ? '' : 'es'}` : `${flat.length} total`}
+            {trimmedSearch
+              ? `${filterResult.matchCount} match${filterResult.matchCount === 1 ? '' : 'es'}`
+              : `${flat.length} total`}
           </span>
         </div>
 
