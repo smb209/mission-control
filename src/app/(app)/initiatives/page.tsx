@@ -536,6 +536,10 @@ export default function InitiativesPage() {
         mainMaxWidth=""
         outerMaxWidth={null}
         outerPaddingX="px-4"
+        resizableLeftRail
+        leftRailStorageKey="mc:initiatives:railWidth"
+        leftRailMinWidth={280}
+        leftRailMaxWidth={720}
       >
         <>
           {selectedId ? (
@@ -802,12 +806,12 @@ function InitiativeRow({
   return (
     <>
       <li
-        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border transition-colors ${
+        className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border transition-colors ${
           isSelected
             ? 'bg-mc-accent/10 border-mc-accent/60'
             : 'bg-mc-bg-secondary border-mc-border hover:border-mc-accent/40'
         } ${node.status === 'cancelled' ? 'opacity-60' : ''}`}
-        style={{ marginLeft: depth * 16 }}
+        style={{ marginLeft: depth * 14 }}
       >
         <button
           title={
@@ -819,49 +823,55 @@ function InitiativeRow({
           aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
           aria-expanded={childrenExpanded}
           disabled={directChildrenCount === 0}
-          className="p-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent"
+          className="p-0.5 mt-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent shrink-0"
         >
           {childrenExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         </button>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
-          {node.kind}
-        </span>
         <button
           type="button"
           onClick={() => onSelect(node.id)}
           aria-label={`Select ${node.title}`}
           aria-current={isSelected ? 'true' : undefined}
           title={`Open ${node.title} in the right pane`}
-          className={`text-sm text-left cursor-pointer truncate min-w-0 flex-1 ${
-            isSelected ? 'font-semibold text-mc-text' : 'font-medium text-mc-text hover:text-mc-accent'
-          }`}
+          className="flex-1 min-w-0 text-left cursor-pointer"
         >
-          {node.title}
+          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+            <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
+              {node.kind}
+            </span>
+            {node.status === 'cancelled' && (
+              <span
+                className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30"
+                title="This initiative is cancelled"
+              >
+                cancelled
+              </span>
+            )}
+            {!childrenExpanded && directChildrenCount > 0 && (
+              <span
+                className="text-[10px] text-mc-text-secondary/80"
+                title={`${directChildrenCount} direct children, ${totalDescendantCount} total descendants in collapsed subtree`}
+              >
+                +{directChildrenCount}
+              </span>
+            )}
+            {counts && counts.total > 0 && (
+              <span
+                className="text-[10px] text-mc-text-secondary"
+                title={`${counts.total} tasks: ${counts.draft} draft, ${counts.active} active, ${counts.done} done`}
+              >
+                {counts.total} task{counts.total === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          <div
+            className={`text-sm break-words leading-snug ${
+              isSelected ? 'font-semibold text-mc-text' : 'font-medium text-mc-text hover:text-mc-accent'
+            }`}
+          >
+            {node.title}
+          </div>
         </button>
-        {node.status === 'cancelled' && (
-          <span
-            className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
-            title="This initiative is cancelled"
-          >
-            cancelled
-          </span>
-        )}
-        {!childrenExpanded && directChildrenCount > 0 && (
-          <span
-            className="text-[10px] text-mc-text-secondary/80 shrink-0"
-            title={`${directChildrenCount} direct children, ${totalDescendantCount} total descendants in collapsed subtree`}
-          >
-            +{directChildrenCount}
-          </span>
-        )}
-        {counts && counts.total > 0 && (
-          <span
-            className="text-[10px] text-mc-text-secondary shrink-0"
-            title={`${counts.total} tasks: ${counts.draft} draft, ${counts.active} active, ${counts.done} done`}
-          >
-            {counts.total}t
-          </span>
-        )}
         <ActionMenu items={menuItems} ariaLabel={`Actions for ${node.title}`} />
       </li>
       {childrenExpanded &&

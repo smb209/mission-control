@@ -36,6 +36,8 @@ import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 import DecomposeStoryToTasksModal from '@/components/DecomposeStoryToTasksModal';
 import { DecomposerAgentPicker, type DecomposerOption } from '@/components/inline/DecomposerAgentPicker';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { TaskModal } from '@/components/TaskModal';
+import type { Task } from '@/lib/types';
 import PlanWithPmPanel, {
   type PlanInitiativeSuggestions,
 } from '@/components/PlanWithPmPanel';
@@ -256,6 +258,23 @@ export function InitiativeDetailView({
   // Operator guidance for the initial Decompose dispatch. Same idea
   // as planGuidance but persists for the lifetime of the modal.
   const [decomposeHint, setDecomposeHint] = useState<string | null>(null);
+  // Selected task for the inline TaskModal — clicking a task in the
+  // children list opens it here instead of navigating away.
+  const [taskModalTask, setTaskModalTask] = useState<Task | null>(null);
+  const [taskModalLoading, setTaskModalLoading] = useState<string | null>(null);
+  const openTaskModal = useCallback(async (taskId: string) => {
+    setTaskModalLoading(taskId);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`);
+      if (!res.ok) throw new Error(`Failed to load task (${res.status})`);
+      const t = (await res.json()) as Task;
+      setTaskModalTask(t);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to open task');
+    } finally {
+      setTaskModalLoading(null);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -970,10 +989,12 @@ or "carve out the onboarding flow as its own story first"`}
                 rows={drafts}
                 onPromote={promoteDraft}
                 onDelete={deleteDraft}
+                onOpen={openTaskModal}
+                openingTaskId={taskModalLoading}
               />
-              <TaskGroup label="Active" rows={active} />
-              {other.length > 0 && <TaskGroup label="Other" rows={other} />}
-              <TaskGroup label="Done" rows={done} />
+              <TaskGroup label="Active" rows={active} onOpen={openTaskModal} openingTaskId={taskModalLoading} />
+              {other.length > 0 && <TaskGroup label="Other" rows={other} onOpen={openTaskModal} openingTaskId={taskModalLoading} />}
+              <TaskGroup label="Done" rows={done} onOpen={openTaskModal} openingTaskId={taskModalLoading} />
             </div>
           )}
         </Section>
@@ -1139,6 +1160,18 @@ or "carve out the onboarding flow as its own story first"`}
           onClose={() => setShowHistoryDrawer(false)}
         />
       )}
+      {taskModalTask && (
+        <TaskModal
+          task={taskModalTask}
+          workspaceId={initiative.workspace_id}
+          onClose={() => {
+            setTaskModalTask(null);
+            // Refresh in case status / counts changed inside the modal so
+            // the children list reflects the latest state.
+            refresh();
+          }}
+        />
+      )}
       <ConfirmDialog
         open={pendingConfirm !== null}
         title={pendingConfirm?.title ?? ''}
@@ -1250,11 +1283,15 @@ function TaskGroup({
   rows,
   onPromote,
   onDelete,
+  onOpen,
+  openingTaskId,
 }: {
   label: string;
   rows: TaskRow[];
   onPromote?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
+  onOpen?: (taskId: string) => void;
+  openingTaskId?: string | null;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -1275,7 +1312,22 @@ function TaskGroup({
             >
               {t.status}
             </span>
-            <span className="text-sm text-mc-text flex-1">{t.title}</span>
+            {onOpen ? (
+              <button
+                type="button"
+                onClick={() => onOpen(t.id)}
+                disabled={openingTaskId === t.id}
+                className="text-sm text-mc-text flex-1 text-left hover:text-mc-accent disabled:opacity-60"
+                title="Open task in modal"
+              >
+                {t.title}
+                {openingTaskId === t.id && (
+                  <span className="ml-2 text-[10px] text-mc-text-secondary">opening…</span>
+                )}
+              </button>
+            ) : (
+              <span className="text-sm text-mc-text flex-1">{t.title}</span>
+            )}
             {onPromote && t.status === 'draft' && (
               <button
                 onClick={() => onPromote(t.id)}
