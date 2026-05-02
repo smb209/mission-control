@@ -48,6 +48,9 @@ interface PageWithRailsProps {
   rightRailTitle?: string;
   /** Cap the main column's width so prose stays readable. Defaults to `max-w-4xl`. */
   mainMaxWidth?: string;
+  /** Left rail width on `lg+`. Defaults to `w-64` (~256px). Pages with a
+   *  tree / list as their left rail typically want `w-80` or `w-96`. */
+  leftRailWidth?: string;
   /** Right rail width on `lg+`. Defaults to `w-[28rem]` (~448px). */
   rightRailWidth?: string;
   children: ReactNode;
@@ -59,6 +62,7 @@ export function PageWithRails({
   rightRail,
   rightRailTitle = 'Preview',
   mainMaxWidth = 'max-w-4xl',
+  leftRailWidth = 'w-64',
   rightRailWidth = 'w-[28rem]',
   children,
 }: PageWithRailsProps) {
@@ -77,7 +81,8 @@ export function PageWithRails({
           {leftRail && (
             <aside
               className={clsx(
-                'hidden lg:block w-64 shrink-0',
+                'hidden lg:block shrink-0',
+                leftRailWidth,
                 'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
               )}
             >
