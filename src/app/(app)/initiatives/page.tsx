@@ -3,8 +3,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import Fuse from 'fuse.js';
+import { PageWithRails } from '@/components/shell/PageWithRails';
+import { InitiativeDetailView } from '@/components/InitiativeDetailView';
 import {
   Plus,
+  Search,
+  X,
   ChevronRight,
   ChevronDown,
   Pencil,
@@ -154,6 +159,51 @@ export default function InitiativesPage() {
   const [decomposing, setDecomposing] = useState<Initiative | null>(null);
   const [showCancelled, setShowCancelled] = useShowCancelled();
 
+  // Master-detail selection — local state is the source of truth so the
+  // right pane always re-renders on click. URL is a synced side-effect for
+  // deep links / back-forward (initial value seeds local state once on
+  // mount; subsequent clicks push to the URL via window.history).
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URL(window.location.href).searchParams.get('selected');
+  });
+  const selectInitiative = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      // Sync the URL without triggering a Next route transition — this is
+      // a bookmark/back-button affordance, not a navigation. Earlier
+      // attempts using router.replace() didn't propagate to the page's
+      // own useSearchParams snapshot fast enough for the right pane to
+      // re-render, so we keep the URL in sync via window.history and
+      // treat local state as the source of truth.
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set('selected', id);
+      else url.searchParams.delete('selected');
+      window.history.replaceState(window.history.state, '', url.toString());
+    },
+    [],
+  );
+
+  // Reveal a node by ensuring every ancestor is uncollapsed. Used when
+  // selecting from the detail pane's "↑ Parent" breadcrumb so the
+  // newly-selected row is actually visible in the tree on the left.
+  const revealAncestors = useCallback(
+    (id: string) => {
+      const byId = new Map(flat.map(r => [r.id, r] as const));
+      setCollapsedIds(prev => {
+        if (prev.size === 0) return prev;
+        const next = new Set(prev);
+        let cur = byId.get(id);
+        while (cur?.parent_initiative_id) {
+          next.delete(cur.parent_initiative_id);
+          cur = byId.get(cur.parent_initiative_id);
+        }
+        return next;
+      });
+    },
+    [flat],
+  );
+
   const refresh = useCallback(async () => {
     setError(null);
     try {
@@ -197,6 +247,82 @@ export default function InitiativesPage() {
   // re-parent to the cancelled row's effective parent so the subtree
   // doesn't get orphaned.
   const tree = useMemo(() => buildTree(flat, !showCancelled), [flat, showCancelled]);
+
+  // Fuzzy search by TITLE ONLY. Earlier we also matched description,
+  // but with a 0.4 threshold + descriptions that share common words
+  // ("FOIA", "policy", "request") almost every initiative scored as
+  // a match for "Fee Policy" — operator wanted exact-ish title hits,
+  // not corpus-wide vibes-matching. Tight threshold + ignoreLocation
+  // so a query in the middle of a long title still scores well.
+  const [search, setSearch] = useState('');
+  const fuse = useMemo(
+    () =>
+      new Fuse(flat, {
+        keys: ['title'],
+        threshold: 0.3,
+        ignoreLocation: true,
+        minMatchCharLength: 2,
+      }),
+    [flat],
+  );
+  // Filter result has two pieces: the *actual* matched ids (for the
+  // count badge) and the *visible* tree (matches + every ancestor on
+  // the path to a match so the match remains reachable in context).
+  const filterResult = useMemo<{ matchCount: number; tree: TreeNode[] }>(() => {
+    const q = search.trim();
+    if (!q) return { matchCount: 0, tree };
+    const matchedIds = new Set(fuse.search(q).map(r => r.item.id));
+    if (matchedIds.size === 0) return { matchCount: 0, tree: [] };
+    const byId = new Map(flat.map(r => [r.id, r] as const));
+    const keep = new Set(matchedIds);
+    for (const id of matchedIds) {
+      let cur = byId.get(id);
+      while (cur?.parent_initiative_id) {
+        keep.add(cur.parent_initiative_id);
+        cur = byId.get(cur.parent_initiative_id);
+      }
+    }
+    function prune(nodes: TreeNode[]): TreeNode[] {
+      return nodes
+        .filter(n => keep.has(n.id))
+        .map(n => ({ ...n, children: prune(n.children) }));
+    }
+    return { matchCount: matchedIds.size, tree: prune(tree) };
+  }, [tree, search, fuse, flat]);
+  const visibleTree = filterResult.tree;
+
+  // Expansion state lifted into the parent so the rail header's
+  // Expand-all / Collapse-all controls can flip every row at once.
+  // `null` value for a node = use the default (expanded). Explicit
+  // false = collapsed by user.
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const setNodeCollapsed = useCallback((id: string, collapsed: boolean) => {
+    setCollapsedIds(prev => {
+      const next = new Set(prev);
+      if (collapsed) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const collapseAll = useCallback(() => {
+    // Collect every node id that has children — leaves don't need to
+    // appear in the set.
+    const ids = new Set<string>();
+    function walk(rows: Initiative[]) {
+      const byParent = new Map<string | null, Initiative[]>();
+      for (const r of rows) {
+        const arr = byParent.get(r.parent_initiative_id) ?? [];
+        arr.push(r);
+        byParent.set(r.parent_initiative_id, arr);
+      }
+      for (const r of rows) {
+        if ((byParent.get(r.id) ?? []).length > 0) ids.add(r.id);
+      }
+    }
+    walk(flat);
+    setCollapsedIds(ids);
+  }, [flat]);
+  const expandAll = useCallback(() => setCollapsedIds(new Set()), []);
   const pickableInitiatives = useMemo(
     () => (showCancelled ? flat : flat.filter(i => i.status !== 'cancelled')),
     [flat, showCancelled],
@@ -229,18 +355,76 @@ export default function InitiativesPage() {
     [refresh],
   );
 
-  return (
-    <div className="min-h-screen bg-mc-bg p-6">
-      <header className="max-w-5xl mx-auto mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-mc-text">Initiatives</h1>
-          <p className="text-sm text-mc-text-secondary">Planning tree (Phase 1 — list view).</p>
+  // Page header is intentionally minimal — the heavy controls
+  // (New / Show cancelled / Search / Expand-all / Collapse-all) live in
+  // the tree rail since they operate on the tree itself, not on the
+  // currently-selected initiative.
+  const header = (
+    <div className="flex items-center gap-3">
+      <h1 className="text-base font-semibold text-mc-text">Initiatives</h1>
+      <span className="text-[11px] text-mc-text-secondary">Planning tree</span>
+    </div>
+  );
+
+  // Left rail: the planning tree. Selection drives the URL; the right
+  // pane (main column) renders the full <InitiativeDetailView> for the
+  // selected row. Sticky rail header carries Expand/Collapse all so the
+  // operator can flatten or restore the entire hierarchy without
+  // hunting for chevrons.
+  const totalCollapsibleCount = useMemo(() => {
+    const byParent = new Map<string | null, number>();
+    for (const r of flat) {
+      byParent.set(r.parent_initiative_id, (byParent.get(r.parent_initiative_id) ?? 0) + 1);
+    }
+    return flat.filter(r => (byParent.get(r.id) ?? 0) > 0).length;
+  }, [flat]);
+  const allCollapsed = totalCollapsibleCount > 0 && collapsedIds.size >= totalCollapsibleCount;
+  const allExpanded = collapsedIds.size === 0;
+
+  const trimmedSearch = search.trim();
+  const leftRail = (
+    <div className="text-sm flex flex-col h-full">
+      <div className="sticky top-0 z-10 -mt-1 pt-1 pb-2 bg-mc-bg/95 backdrop-blur-sm space-y-2 mb-1">
+        {/* Primary action — full-width so it doesn't fight the tree
+            rows for attention. */}
+        <button
+          onClick={() => setCreating({ parent_id: null })}
+          className="w-full px-3 py-1.5 rounded-lg bg-mc-accent text-white hover:bg-mc-accent/90 text-sm flex items-center justify-center gap-2"
+        >
+          <Plus className="w-4 h-4" /> New initiative
+        </button>
+
+        {/* Search — Fuse fuzzy match over title + description. While
+            non-empty, the tree filters to matched nodes + their
+            ancestors so the matched row stays reachable in context. */}
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-mc-text-secondary/70 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by title…"
+            className="w-full pl-7 pr-7 py-1.5 rounded bg-mc-bg-secondary border border-mc-border text-xs text-mc-text placeholder:text-mc-text-secondary/60 focus:border-mc-accent/60 focus:outline-hidden"
+          />
+          {trimmedSearch && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              title="Clear search"
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          {/* "Workspaces" button removed — global workspace switcher lives
-              in the unified left nav now. */}
+
+        {/* Filter row — Show-cancelled toggle lives here now (was in
+            the page header), grouped with the other tree-scoped
+            filters. */}
+        <div className="flex items-center justify-between gap-2 px-1">
           <label
-            className="inline-flex items-center gap-1.5 text-xs text-mc-text-secondary cursor-pointer select-none"
+            className="inline-flex items-center gap-1.5 text-[11px] text-mc-text-secondary cursor-pointer select-none"
             title="Toggle visibility of cancelled initiatives. Persisted in URL (?show_cancelled=1) and localStorage."
           >
             <input
@@ -251,63 +435,131 @@ export default function InitiativesPage() {
             />
             Show cancelled
             {cancelledCount > 0 && (
-              <span className="text-[11px] text-mc-text-secondary/70">({cancelledCount})</span>
+              <span className="text-[10px] text-mc-text-secondary/70">({cancelledCount})</span>
             )}
           </label>
+          <span className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
+            {trimmedSearch
+              ? `${filterResult.matchCount} match${filterResult.matchCount === 1 ? '' : 'es'}`
+              : `${flat.length} total`}
+          </span>
+        </div>
+
+        {/* Expand/Collapse — now disabled while search is active since
+            search controls visibility instead of the collapsed-set. */}
+        <div className="flex items-center justify-end gap-1 px-1">
           <button
-            onClick={() => setCreating({ parent_id: null })}
-            className="px-3 py-2 rounded-lg bg-mc-accent text-white hover:bg-mc-accent/90 text-sm flex items-center gap-2"
+            type="button"
+            onClick={expandAll}
+            disabled={allExpanded || !!trimmedSearch}
+            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
+            title={trimmedSearch ? 'Clear search to use Expand all' : 'Expand every subtree'}
           >
-            <Plus className="w-4 h-4" /> New initiative
+            Expand all
+          </button>
+          <button
+            type="button"
+            onClick={collapseAll}
+            disabled={allCollapsed || !!trimmedSearch}
+            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
+            title={trimmedSearch ? 'Clear search to use Collapse all' : 'Collapse every subtree'}
+          >
+            Collapse all
           </button>
         </div>
-      </header>
+      </div>
+      {error && (
+        <div className="mb-3 p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
+          {error}
+        </div>
+      )}
+      {loading ? (
+        <p className="text-mc-text-secondary">Loading…</p>
+      ) : tree.length === 0 ? (
+        <p className="text-mc-text-secondary text-xs">
+          No initiatives yet. Click <em>New initiative</em> above to start a
+          planning tree.
+        </p>
+      ) : visibleTree.length === 0 ? (
+        <p className="text-mc-text-secondary text-xs px-1">
+          No initiatives match <strong className="text-mc-text">&quot;{trimmedSearch}&quot;</strong>.
+        </p>
+      ) : (
+        <ul className="space-y-0.5">
+          {visibleTree.map(node => (
+            <InitiativeRow
+              key={node.id}
+              node={node}
+              depth={0}
+              selectedId={selectedId}
+              onSelect={selectInitiative}
+              collapsedIds={collapsedIds}
+              onSetCollapsed={setNodeCollapsed}
+              forceExpand={!!trimmedSearch}
+              allInitiatives={flat}
+              pickableInitiatives={pickableInitiatives}
+              taskCounts={taskCounts}
+              onEdit={setEditing}
+              onAddChild={parent => setCreating({ parent_id: parent.id })}
+              onMove={setMoving}
+              onMoveToWorkspace={setMovingToWorkspace}
+              onConvert={setConverting}
+              onPromote={setPromoting}
+              onShowHistory={setHistoryFor}
+              onAddDependency={setAddingDepFor}
+              onDetach={detach}
+              onDecompose={setDecomposing}
+              onDelete={async (init) => {
+                if (!confirm(`Delete "${init.title}"?`)) return;
+                const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({}));
+                  showAlertDialog('Delete failed', body.error || 'Delete failed');
+                  return;
+                }
+                if (selectedId === init.id) selectInitiative(null);
+                refresh();
+              }}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 
-      <main className="max-w-5xl mx-auto">
-        {error && (
-          <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
-            {error}
-          </div>
-        )}
-        {loading ? (
-          <p className="text-mc-text-secondary">Loading…</p>
-        ) : tree.length === 0 ? (
-          <p className="text-mc-text-secondary">No initiatives yet. Click <em>New initiative</em> to start a planning tree.</p>
-        ) : (
-          <ul className="space-y-1">
-            {tree.map(node => (
-              <InitiativeRow
-                key={node.id}
-                node={node}
-                depth={0}
-                allInitiatives={flat}
-                pickableInitiatives={pickableInitiatives}
-                taskCounts={taskCounts}
-                onEdit={setEditing}
-                onAddChild={parent => setCreating({ parent_id: parent.id })}
-                onMove={setMoving}
-                onMoveToWorkspace={setMovingToWorkspace}
-                onConvert={setConverting}
-                onPromote={setPromoting}
-                onShowHistory={setHistoryFor}
-                onAddDependency={setAddingDepFor}
-                onDetach={detach}
-                onDecompose={setDecomposing}
-                onDelete={async (init) => {
-                  if (!confirm(`Delete "${init.title}"?`)) return;
-                  const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
-                  if (!res.ok) {
-                    const body = await res.json().catch(() => ({}));
-                    showAlertDialog('Delete failed', body.error || 'Delete failed');
-                    return;
-                  }
-                  refresh();
-                }}
-              />
-            ))}
-          </ul>
-        )}
-      </main>
+  return (
+    <>
+      <PageWithRails
+        header={header}
+        leftRail={leftRail}
+        leftRailWidth="w-[24rem]"
+        mainMaxWidth=""
+        outerMaxWidth={null}
+        outerPaddingX="px-4"
+      >
+        <>
+          {selectedId ? (
+            <InitiativeDetailView
+              key={selectedId}
+              initiativeId={selectedId}
+              variant="pane"
+              onDeleted={() => {
+                selectInitiative(null);
+                refresh();
+              }}
+              onSelectInitiative={(id) => {
+                revealAncestors(id);
+                selectInitiative(id);
+              }}
+            />
+          ) : (
+            <div className="rounded-lg border border-dashed border-mc-border bg-mc-bg-secondary/30 p-12 text-center text-sm text-mc-text-secondary">
+              Select an initiative on the left to view and edit it here, or
+              click <em>New initiative</em> above to start a planning tree.
+            </div>
+          )}
+        </>
+      </PageWithRails>
 
       {creating && (
         <CreateModal
@@ -398,7 +650,7 @@ export default function InitiativesPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -436,6 +688,11 @@ function buildTree(rows: Initiative[], hideCancelled: boolean): TreeNode[] {
 function InitiativeRow({
   node,
   depth,
+  selectedId,
+  onSelect,
+  collapsedIds,
+  onSetCollapsed,
+  forceExpand,
   allInitiatives,
   pickableInitiatives,
   taskCounts,
@@ -453,6 +710,14 @@ function InitiativeRow({
 }: {
   node: TreeNode;
   depth: number;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+  collapsedIds: Set<string>;
+  onSetCollapsed: (id: string, collapsed: boolean) => void;
+  /** When true, ignore collapsedIds and always render children. Used
+   *  while a search filter is active so matches under collapsed
+   *  subtrees stay visible. */
+  forceExpand: boolean;
   allInitiatives: Initiative[];
   pickableInitiatives: Initiative[];
   taskCounts: Record<string, TaskCounts>;
@@ -468,19 +733,17 @@ function InitiativeRow({
   onDelete: (init: Initiative) => void;
   onDecompose: (init: Initiative) => void;
 }) {
-  // Two independent expansion states. Earlier the single `expanded`
-  // controlled the details panel AND children stayed always-rendered,
-  // which made the tree exhausting to navigate (collapsing a parent
-  // didn't actually collapse the subtree below). Splitting into two
-  // gestures:
-  //   1. Chevron toggles CHILDREN visibility (default: expanded).
-  //      Collapsing shows a compact "(N direct, M total)" summary.
-  //   2. Clicking the title toggles the DETAILS panel inline (description
-  //      + dependencies + parent-history). Default: collapsed.
-  // Plus an explicit ExternalLink icon next to the title that navigates
-  // to /initiatives/[id] for the full-page edit UI.
-  const [childrenExpanded, setChildrenExpanded] = useState(true);
-  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  // Expansion is parent-controlled so the rail header's Expand-all /
+  // Collapse-all can flip every row at once. Default is expanded
+  // (membership in `collapsedIds` means the operator has explicitly
+  // collapsed this subtree). `forceExpand` overrides while a search
+  // filter is active so matched descendants stay visible.
+  const childrenExpanded = forceExpand || !collapsedIds.has(node.id);
+  const setChildrenExpanded = (v: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof v === 'function' ? v(childrenExpanded) : v;
+    onSetCollapsed(node.id, !next);
+  };
+  const isSelected = selectedId === node.id;
   const counts = taskCounts[node.id];
   const isStory = node.kind === 'story';
   const isContainer = node.kind !== 'story';
@@ -539,10 +802,12 @@ function InitiativeRow({
   return (
     <>
       <li
-        className={`flex items-center gap-2 p-2 rounded-lg bg-mc-bg-secondary border border-mc-border hover:border-mc-accent/40 ${
-          node.status === 'cancelled' ? 'opacity-60' : ''
-        }`}
-        style={{ marginLeft: depth * 24 }}
+        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border transition-colors ${
+          isSelected
+            ? 'bg-mc-accent/10 border-mc-accent/60'
+            : 'bg-mc-bg-secondary border-mc-border hover:border-mc-accent/40'
+        } ${node.status === 'cancelled' ? 'opacity-60' : ''}`}
+        style={{ marginLeft: depth * 16 }}
       >
         <button
           title={
@@ -554,115 +819,62 @@ function InitiativeRow({
           aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
           aria-expanded={childrenExpanded}
           disabled={directChildrenCount === 0}
-          className="p-1 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent"
+          className="p-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent"
         >
-          {childrenExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          {childrenExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         </button>
-        <span className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
+        <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
           {node.kind}
         </span>
         <button
           type="button"
-          onClick={() => setDetailsExpanded(v => !v)}
-          aria-expanded={detailsExpanded}
-          aria-label={detailsExpanded ? `Hide details for ${node.title}` : `Show details for ${node.title}`}
-          title={detailsExpanded ? 'Hide details (description + dependencies + history)' : 'Show details (description + dependencies + history)'}
-          className="font-medium text-mc-text hover:text-mc-accent text-left cursor-pointer"
+          onClick={() => onSelect(node.id)}
+          aria-label={`Select ${node.title}`}
+          aria-current={isSelected ? 'true' : undefined}
+          title={`Open ${node.title} in the right pane`}
+          className={`text-sm text-left cursor-pointer truncate min-w-0 flex-1 ${
+            isSelected ? 'font-semibold text-mc-text' : 'font-medium text-mc-text hover:text-mc-accent'
+          }`}
         >
           {node.title}
         </button>
-        <Link
-          href={`/initiatives/${node.id}`}
-          title="Open the full initiative page (edit UI, full description, etc.)"
-          aria-label={`Open ${node.title} detail page`}
-          className="text-mc-text-secondary hover:text-mc-accent inline-flex items-center"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-        </Link>
-        {node.status === 'cancelled' ? (
+        {node.status === 'cancelled' && (
           <span
-            className="text-[11px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30"
+            className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
             title="This initiative is cancelled"
           >
             cancelled
           </span>
-        ) : (
-          <span className="text-xs text-mc-text-secondary">{node.status}</span>
         )}
         {!childrenExpanded && directChildrenCount > 0 && (
           <span
-            className="text-[11px] text-mc-text-secondary/80"
+            className="text-[10px] text-mc-text-secondary/80 shrink-0"
             title={`${directChildrenCount} direct children, ${totalDescendantCount} total descendants in collapsed subtree`}
           >
-            · {directChildrenCount} direct
-            {totalDescendantCount > directChildrenCount && `, ${totalDescendantCount} total`}
+            +{directChildrenCount}
           </span>
         )}
         {counts && counts.total > 0 && (
           <span
-            className="text-[11px] text-mc-text-secondary"
+            className="text-[10px] text-mc-text-secondary shrink-0"
             title={`${counts.total} tasks: ${counts.draft} draft, ${counts.active} active, ${counts.done} done`}
           >
-            · {counts.total} task{counts.total === 1 ? '' : 's'}
-            {counts.draft > 0 && (
-              <span className="ml-1 px-1 rounded bg-slate-500/20 text-slate-300">{counts.draft} draft</span>
-            )}
-            {counts.active > 0 && (
-              <span className="ml-1 px-1 rounded bg-blue-500/20 text-blue-300">{counts.active} active</span>
-            )}
-            {counts.done > 0 && (
-              <span className="ml-1 px-1 rounded bg-emerald-500/20 text-emerald-300">{counts.done} done</span>
-            )}
+            {counts.total}t
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
-          {isStory && (
-            <button
-              title="Create a draft task linked to this initiative"
-              onClick={() => onPromote(node)}
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-mc-accent/15 text-mc-accent border border-mc-accent/30 hover:bg-mc-accent/25"
-            >
-              <Send className="w-3 h-3" /> Promote to task
-            </button>
-          )}
-          {isContainer && (
-            <button
-              title="Add a child initiative under this one"
-              onClick={() => onAddChild(node)}
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
-            >
-              <Plus className="w-3 h-3" /> Add child
-            </button>
-          )}
-          <ActionMenu items={menuItems} ariaLabel={`Actions for ${node.title}`} />
-        </div>
+        <ActionMenu items={menuItems} ariaLabel={`Actions for ${node.title}`} />
       </li>
-      {detailsExpanded && (
-        <li
-          className="rounded-lg bg-mc-bg border border-mc-border/60 px-3 py-2 -mt-1 text-sm"
-          style={{ marginLeft: depth * 24 + 12 }}
-        >
-          <DetailsPanel
-            initiative={node}
-            allInitiatives={allInitiatives}
-            pickableInitiatives={pickableInitiatives}
-          />
-          <div className="mt-2 pt-2 border-t border-mc-border/60 flex justify-end">
-            <Link
-              href={`/initiatives/${node.id}`}
-              className="text-xs text-mc-text-secondary hover:text-mc-accent inline-flex items-center gap-1"
-            >
-              <ExternalLink className="w-3 h-3" /> Open full page
-            </Link>
-          </div>
-        </li>
-      )}
       {childrenExpanded &&
         node.children.map(c => (
           <InitiativeRow
             key={c.id}
             node={c}
             depth={depth + 1}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            collapsedIds={collapsedIds}
+            onSetCollapsed={onSetCollapsed}
+            forceExpand={forceExpand}
             allInitiatives={allInitiatives}
             pickableInitiatives={pickableInitiatives}
             taskCounts={taskCounts}
