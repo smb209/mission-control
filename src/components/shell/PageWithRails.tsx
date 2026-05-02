@@ -53,6 +53,15 @@ interface PageWithRailsProps {
   leftRailWidth?: string;
   /** Right rail width on `lg+`. Defaults to `w-[28rem]` (~448px). */
   rightRailWidth?: string;
+  /** Outer container max-width (Tailwind class). Defaults to
+   *  `max-w-screen-2xl` (centered on huge monitors). Pass `null` for
+   *  edge-to-edge layouts where the left rail should pin flush to the
+   *  AppNav with no horizontal centering. */
+  outerMaxWidth?: string | null;
+  /** Outer horizontal padding. Defaults to `px-4 sm:px-6`. Edge-to-edge
+   *  pages typically want `px-0` so the left rail starts at viewport x=0
+   *  (right after the AppNav). */
+  outerPaddingX?: string;
   children: ReactNode;
 }
 
@@ -64,19 +73,21 @@ export function PageWithRails({
   mainMaxWidth = 'max-w-4xl',
   leftRailWidth = 'w-64',
   rightRailWidth = 'w-[28rem]',
+  outerMaxWidth = 'max-w-screen-2xl',
+  outerPaddingX = 'px-4 sm:px-6',
   children,
 }: PageWithRailsProps) {
   return (
     <div className="min-h-screen bg-mc-bg text-mc-text flex flex-col">
       {header && (
         <div className="sticky top-0 z-20 bg-mc-bg/95 backdrop-blur-sm border-b border-mc-border/60">
-          <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-3">
+          <div className={clsx(outerMaxWidth, outerMaxWidth && 'mx-auto', outerPaddingX, 'py-3')}>
             {header}
           </div>
         </div>
       )}
 
-      <div className="flex-1 max-w-screen-2xl w-full mx-auto px-4 sm:px-6 py-6">
+      <div className={clsx('flex-1 w-full', outerMaxWidth, outerMaxWidth && 'mx-auto', outerPaddingX, 'py-6')}>
         <div className="flex gap-6 items-start">
           {leftRail && (
             <aside

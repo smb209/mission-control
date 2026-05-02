@@ -224,6 +224,39 @@ export default function InitiativesPage() {
   // re-parent to the cancelled row's effective parent so the subtree
   // doesn't get orphaned.
   const tree = useMemo(() => buildTree(flat, !showCancelled), [flat, showCancelled]);
+
+  // Expansion state lifted into the parent so the rail header's
+  // Expand-all / Collapse-all controls can flip every row at once.
+  // `null` value for a node = use the default (expanded). Explicit
+  // false = collapsed by user.
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const setNodeCollapsed = useCallback((id: string, collapsed: boolean) => {
+    setCollapsedIds(prev => {
+      const next = new Set(prev);
+      if (collapsed) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const collapseAll = useCallback(() => {
+    // Collect every node id that has children — leaves don't need to
+    // appear in the set.
+    const ids = new Set<string>();
+    function walk(rows: Initiative[]) {
+      const byParent = new Map<string | null, Initiative[]>();
+      for (const r of rows) {
+        const arr = byParent.get(r.parent_initiative_id) ?? [];
+        arr.push(r);
+        byParent.set(r.parent_initiative_id, arr);
+      }
+      for (const r of rows) {
+        if ((byParent.get(r.id) ?? []).length > 0) ids.add(r.id);
+      }
+    }
+    walk(flat);
+    setCollapsedIds(ids);
+  }, [flat]);
+  const expandAll = useCallback(() => setCollapsedIds(new Set()), []);
   const pickableInitiatives = useMemo(
     () => (showCancelled ? flat : flat.filter(i => i.status !== 'cancelled')),
     [flat, showCancelled],
@@ -290,9 +323,46 @@ export default function InitiativesPage() {
 
   // Left rail: the planning tree. Selection drives the URL; the right
   // pane (main column) renders the full <InitiativeDetailView> for the
-  // selected row.
+  // selected row. Sticky rail header carries Expand/Collapse all so the
+  // operator can flatten or restore the entire hierarchy without
+  // hunting for chevrons.
+  const totalCollapsibleCount = useMemo(() => {
+    const byParent = new Map<string | null, number>();
+    for (const r of flat) {
+      byParent.set(r.parent_initiative_id, (byParent.get(r.parent_initiative_id) ?? 0) + 1);
+    }
+    return flat.filter(r => (byParent.get(r.id) ?? 0) > 0).length;
+  }, [flat]);
+  const allCollapsed = totalCollapsibleCount > 0 && collapsedIds.size >= totalCollapsibleCount;
+  const allExpanded = collapsedIds.size === 0;
+
   const leftRail = (
-    <div className="text-sm">
+    <div className="text-sm flex flex-col h-full">
+      <div className="sticky top-0 z-10 -mt-1 pt-1 pb-2 bg-mc-bg/95 backdrop-blur-sm flex items-center justify-between gap-2 mb-1">
+        <span className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 px-1">
+          Tree ({flat.length})
+        </span>
+        <div className="inline-flex items-center gap-1">
+          <button
+            type="button"
+            onClick={expandAll}
+            disabled={allExpanded}
+            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Expand every subtree"
+          >
+            Expand all
+          </button>
+          <button
+            type="button"
+            onClick={collapseAll}
+            disabled={allCollapsed}
+            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
+            title="Collapse every subtree"
+          >
+            Collapse all
+          </button>
+        </div>
+      </div>
       {error && (
         <div className="mb-3 p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
           {error}
@@ -314,6 +384,8 @@ export default function InitiativesPage() {
               depth={0}
               selectedId={selectedId}
               onSelect={selectInitiative}
+              collapsedIds={collapsedIds}
+              onSetCollapsed={setNodeCollapsed}
               allInitiatives={flat}
               pickableInitiatives={pickableInitiatives}
               taskCounts={taskCounts}
@@ -350,8 +422,10 @@ export default function InitiativesPage() {
       <PageWithRails
         header={header}
         leftRail={leftRail}
-        leftRailWidth="w-[26rem]"
+        leftRailWidth="w-[24rem]"
         mainMaxWidth=""
+        outerMaxWidth={null}
+        outerPaddingX="px-4"
       >
         <>
           {selectedId ? (
@@ -502,6 +576,8 @@ function InitiativeRow({
   depth,
   selectedId,
   onSelect,
+  collapsedIds,
+  onSetCollapsed,
   allInitiatives,
   pickableInitiatives,
   taskCounts,
@@ -521,6 +597,8 @@ function InitiativeRow({
   depth: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  collapsedIds: Set<string>;
+  onSetCollapsed: (id: string, collapsed: boolean) => void;
   allInitiatives: Initiative[];
   pickableInitiatives: Initiative[];
   taskCounts: Record<string, TaskCounts>;
@@ -536,11 +614,15 @@ function InitiativeRow({
   onDelete: (init: Initiative) => void;
   onDecompose: (init: Initiative) => void;
 }) {
-  // The chevron toggles CHILDREN visibility (default: expanded). The
-  // inline details accordion + ExternalLink-to-detail-page that used to
-  // live here are gone — clicking the title now selects the row, and the
-  // host page renders the full <InitiativeDetailView> in the right pane.
-  const [childrenExpanded, setChildrenExpanded] = useState(true);
+  // Expansion is parent-controlled so the rail header's Expand-all /
+  // Collapse-all can flip every row at once. Default is expanded
+  // (membership in `collapsedIds` means the operator has explicitly
+  // collapsed this subtree).
+  const childrenExpanded = !collapsedIds.has(node.id);
+  const setChildrenExpanded = (v: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof v === 'function' ? v(childrenExpanded) : v;
+    onSetCollapsed(node.id, !next);
+  };
   const isSelected = selectedId === node.id;
   const counts = taskCounts[node.id];
   const isStory = node.kind === 'story';
@@ -670,6 +752,8 @@ function InitiativeRow({
             depth={depth + 1}
             selectedId={selectedId}
             onSelect={onSelect}
+            collapsedIds={collapsedIds}
+            onSetCollapsed={onSetCollapsed}
             allInitiatives={allInitiatives}
             pickableInitiatives={pickableInitiatives}
             taskCounts={taskCounts}
