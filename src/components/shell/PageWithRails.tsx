@@ -34,7 +34,7 @@
  * — same shape the page had before, with consistent outer padding.
  */
 
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 
 interface PageWithRailsProps {
@@ -62,6 +62,18 @@ interface PageWithRailsProps {
    *  pages typically want `px-0` so the left rail starts at viewport x=0
    *  (right after the AppNav). */
   outerPaddingX?: string;
+  /** Make the left rail user-resizable via a drag handle on its right
+   *  edge. Width is persisted to localStorage under
+   *  `leftRailStorageKey` (required when this is on so per-page widths
+   *  don't collide). Initial width comes from `leftRailWidth` if no
+   *  saved value exists; min/max clamps below. */
+  resizableLeftRail?: boolean;
+  /** localStorage key used to persist the dragged left-rail width. */
+  leftRailStorageKey?: string;
+  /** Minimum left-rail width in pixels when resizable. Default 240. */
+  leftRailMinWidth?: number;
+  /** Maximum left-rail width in pixels when resizable. Default 720. */
+  leftRailMaxWidth?: number;
   children: ReactNode;
 }
 
@@ -75,8 +87,70 @@ export function PageWithRails({
   rightRailWidth = 'w-[28rem]',
   outerMaxWidth = 'max-w-screen-2xl',
   outerPaddingX = 'px-4 sm:px-6',
+  resizableLeftRail = false,
+  leftRailStorageKey,
+  leftRailMinWidth = 240,
+  leftRailMaxWidth = 720,
   children,
 }: PageWithRailsProps) {
+  // Drag-resizable rail width. Off → null (rail uses leftRailWidth
+  // tailwind class). On → state-driven inline pixel width persisted to
+  // localStorage so the operator's preferred rail size sticks. We
+  // restore from storage in an effect (not initial state) to avoid
+  // SSR/CSR hydration mismatch on the inline style.
+  const [resizedWidth, setResizedWidth] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!resizableLeftRail || !leftRailStorageKey) return;
+    try {
+      const raw = window.localStorage.getItem(leftRailStorageKey);
+      if (!raw) return;
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n)) {
+        setResizedWidth(Math.max(leftRailMinWidth, Math.min(leftRailMaxWidth, n)));
+      }
+    } catch {
+      /* private mode — ignore */
+    }
+  }, [resizableLeftRail, leftRailStorageKey, leftRailMinWidth, leftRailMaxWidth]);
+
+  const startDrag = useCallback(
+    (startEvent: React.PointerEvent<HTMLDivElement>) => {
+      if (!resizableLeftRail) return;
+      startEvent.preventDefault();
+      const railEl = (startEvent.currentTarget.previousElementSibling as HTMLElement) ?? null;
+      const startX = startEvent.clientX;
+      const startWidth = railEl?.getBoundingClientRect().width ?? leftRailMinWidth;
+      setDragging(true);
+      const onMove = (e: PointerEvent) => {
+        const next = Math.max(
+          leftRailMinWidth,
+          Math.min(leftRailMaxWidth, startWidth + (e.clientX - startX)),
+        );
+        setResizedWidth(next);
+      };
+      const onUp = (e: PointerEvent) => {
+        setDragging(false);
+        const next = Math.max(
+          leftRailMinWidth,
+          Math.min(leftRailMaxWidth, startWidth + (e.clientX - startX)),
+        );
+        if (leftRailStorageKey) {
+          try {
+            window.localStorage.setItem(leftRailStorageKey, String(Math.round(next)));
+          } catch {
+            /* ignore */
+          }
+        }
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    },
+    [resizableLeftRail, leftRailStorageKey, leftRailMinWidth, leftRailMaxWidth],
+  );
+
   return (
     <div className="min-h-screen bg-mc-bg text-mc-text flex flex-col">
       {header && (
@@ -90,15 +164,38 @@ export function PageWithRails({
       <div className={clsx('flex-1 w-full', outerMaxWidth, outerMaxWidth && 'mx-auto', outerPaddingX, 'py-6')}>
         <div className="flex gap-6 items-start">
           {leftRail && (
-            <aside
-              className={clsx(
-                'hidden lg:block shrink-0',
-                leftRailWidth,
-                'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
+            <>
+              <aside
+                className={clsx(
+                  'hidden lg:block shrink-0',
+                  // Fallback width via tailwind class for both modes; the
+                  // inline style below overrides it once the operator has
+                  // dragged a custom width in resizable mode (also avoids
+                  // a flash of zero-width on initial mount when
+                  // localStorage hydration hasn't run yet).
+                  leftRailWidth,
+                  'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
+                )}
+                style={resizableLeftRail && resizedWidth != null ? { width: resizedWidth } : undefined}
+              >
+                {leftRail}
+              </aside>
+              {resizableLeftRail && (
+                <div
+                  onPointerDown={startDrag}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize left rail"
+                  title="Drag to resize"
+                  className={clsx(
+                    'hidden lg:block shrink-0 w-1 -mx-1.5 cursor-col-resize',
+                    'sticky top-[4.5rem] self-stretch z-10',
+                    'before:absolute before:inset-y-0 before:left-1/2 before:-translate-x-1/2 before:w-px before:bg-mc-border before:hover:bg-mc-accent/60',
+                    dragging && 'before:bg-mc-accent',
+                  )}
+                />
               )}
-            >
-              {leftRail}
-            </aside>
+            </>
           )}
 
           <main className={clsx('flex-1 min-w-0', mainMaxWidth, 'mx-auto lg:mx-0')}>
