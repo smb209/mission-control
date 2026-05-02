@@ -16,9 +16,6 @@ import Link from 'next/link';
 import {
   Archive,
   ArchiveRestore,
-  ChevronDown,
-  ChevronUp,
-  ChevronsUpDown,
   Download,
   ExternalLink,
   Package,
@@ -120,12 +117,23 @@ export default function DeliverablesPage() {
   const totalFiles = visible.reduce((acc, r) => acc + r.file_count, 0);
   const totalDownloadable = visible.reduce((acc, r) => acc + r.mc_count, 0);
 
-  const toggleSort = (key: SortKey) => {
-    setSort(prev =>
-      prev.key === key
-        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-        : { key, dir: key === 'updated' ? 'desc' : 'asc' },
-    );
+  // Sort dropdown — combined key+direction so the operator picks one
+  // option ("Newest first") rather than juggling a key dropdown plus a
+  // direction toggle. Replaces the per-column header sort buttons that
+  // came with the old table layout.
+  const SORT_OPTIONS: Array<{ value: string; key: SortKey; dir: SortDir; label: string }> = [
+    { value: 'updated:desc', key: 'updated', dir: 'desc', label: 'Newest first' },
+    { value: 'updated:asc', key: 'updated', dir: 'asc', label: 'Oldest first' },
+    { value: 'title:asc', key: 'title', dir: 'asc', label: 'Title A→Z' },
+    { value: 'title:desc', key: 'title', dir: 'desc', label: 'Title Z→A' },
+    { value: 'files:desc', key: 'files', dir: 'desc', label: 'Most files' },
+    { value: 'files:asc', key: 'files', dir: 'asc', label: 'Fewest files' },
+    { value: 'status:asc', key: 'status', dir: 'asc', label: 'Status A→Z' },
+  ];
+  const sortValue = `${sort.key}:${sort.dir}`;
+  const setSortFromValue = (v: string) => {
+    const opt = SORT_OPTIONS.find(o => o.value === v);
+    if (opt) setSort({ key: opt.key, dir: opt.dir });
   };
 
   return (
@@ -146,6 +154,18 @@ export default function DeliverablesPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <select
+              value={sortValue}
+              onChange={e => setSortFromValue(e.target.value)}
+              className="text-xs px-2 py-1.5 rounded border border-mc-border bg-mc-bg text-mc-text hover:border-mc-accent/40 focus:outline-none focus:border-mc-accent/60"
+              title="Sort cards"
+            >
+              {SORT_OPTIONS.map(o => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
             <label className="flex items-center gap-2 text-xs text-mc-text-secondary cursor-pointer">
               <input
                 type="checkbox"
@@ -194,33 +214,10 @@ export default function DeliverablesPage() {
             .
           </div>
         ) : (
-          <div className="rounded-lg border border-mc-border bg-mc-bg-secondary overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-mc-bg/50 border-b border-mc-border">
-                  <tr className="text-left text-xs uppercase tracking-wide text-mc-text-secondary">
-                    <Th onSort={() => toggleSort('title')} sortDir={sort.key === 'title' ? sort.dir : null}>
-                      Task
-                    </Th>
-                    <Th onSort={() => toggleSort('status')} sortDir={sort.key === 'status' ? sort.dir : null}>
-                      Status
-                    </Th>
-                    <Th onSort={() => toggleSort('files')} sortDir={sort.key === 'files' ? sort.dir : null}>
-                      Files
-                    </Th>
-                    <Th onSort={() => toggleSort('updated')} sortDir={sort.key === 'updated' ? sort.dir : null}>
-                      Updated
-                    </Th>
-                    <Th>Actions</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map(r => (
-                    <DeliverableRow key={r.task_id} row={r} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {visible.map(r => (
+              <DeliverableCard key={r.task_id} row={r} />
+            ))}
           </div>
         )}
       </main>
@@ -228,41 +225,7 @@ export default function DeliverablesPage() {
   );
 }
 
-function Th({
-  children,
-  onSort,
-  sortDir,
-  width,
-}: {
-  children?: React.ReactNode;
-  onSort?: () => void;
-  sortDir?: SortDir | null;
-  width?: string;
-}) {
-  return (
-    <th className={`px-3 py-2 ${width ?? ''}`}>
-      {onSort ? (
-        <button
-          onClick={onSort}
-          className="inline-flex items-center gap-1 hover:text-mc-text"
-        >
-          <span>{children}</span>
-          {sortDir === 'asc' ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : sortDir === 'desc' ? (
-            <ChevronDown className="w-3 h-3" />
-          ) : (
-            <ChevronsUpDown className="w-3 h-3 opacity-40" />
-          )}
-        </button>
-      ) : (
-        <span>{children}</span>
-      )}
-    </th>
-  );
-}
-
-function DeliverableRow({ row }: { row: Row }) {
+function DeliverableCard({ row }: { row: Row }) {
   const statusCls = STATUS_PALETTE[row.status] ?? 'bg-mc-bg-tertiary text-mc-text-secondary border-mc-border';
   const ago = (() => {
     try {
@@ -272,47 +235,56 @@ function DeliverableRow({ row }: { row: Row }) {
     }
   })();
   return (
-    <tr
-      className={`border-t border-mc-border/60 hover:bg-mc-bg/40 ${
+    <article
+      className={`flex flex-col gap-3 p-4 rounded-lg border border-mc-border bg-mc-bg-secondary hover:border-mc-accent/40 ${
         row.is_archived ? 'opacity-60' : ''
       }`}
     >
-      <td className="px-3 py-2">
-        <Link
-          href={`/?task=${row.task_id}`}
-          className="font-medium text-mc-text hover:text-mc-accent inline-flex items-center gap-1"
-          title={row.task_title}
+      <header className="flex items-start gap-2 min-w-0">
+        <span
+          className={`inline-block px-1.5 py-0.5 rounded-sm text-[10px] capitalize border shrink-0 ${statusCls}`}
         >
-          <span className="truncate max-w-[420px]">{row.task_title}</span>
-          <ExternalLink className="w-3 h-3 opacity-60 shrink-0" />
-        </Link>
+          {row.status.replace(/_/g, ' ')}
+        </span>
         {row.is_archived === 1 && (
-          <span className="ml-2 inline-flex items-center gap-0.5 text-[10px] text-mc-text-secondary uppercase tracking-wide">
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-mc-text-secondary uppercase tracking-wide shrink-0">
             <Archive className="w-3 h-3" /> archived
           </span>
         )}
-      </td>
-      <td className="px-3 py-2">
-        <span className={`inline-block px-1.5 py-0.5 rounded-sm text-[11px] capitalize border ${statusCls}`}>
-          {row.status.replace(/_/g, ' ')}
-        </span>
-      </td>
-      <td className="px-3 py-2 tabular-nums">
-        {row.file_count}
-        {row.mc_count < row.file_count && (
-          <span className="text-mc-text-secondary text-xs ml-1" title="Some files are host-only">
-            ({row.mc_count} web)
-          </span>
-        )}
-      </td>
-      <td className="px-3 py-2 text-mc-text-secondary text-xs whitespace-nowrap">
-        {ago}
-      </td>
-      <td className="px-3 py-2">
+      </header>
+
+      <Link
+        href={`/?task=${row.task_id}`}
+        className="font-medium text-sm text-mc-text hover:text-mc-accent inline-flex items-start gap-1 min-w-0"
+        title={row.task_title}
+      >
+        <span className="line-clamp-2 break-words">{row.task_title}</span>
+        <ExternalLink className="w-3 h-3 opacity-60 shrink-0 mt-1" />
+      </Link>
+
+      <dl className="flex items-center gap-4 text-xs text-mc-text-secondary mt-auto">
+        <div>
+          <dt className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">Files</dt>
+          <dd className="text-mc-text tabular-nums">
+            {row.file_count}
+            {row.mc_count < row.file_count && (
+              <span className="text-mc-text-secondary text-[11px] ml-1" title="Some files are host-only">
+                ({row.mc_count} web)
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">Updated</dt>
+          <dd className="text-mc-text whitespace-nowrap">{ago}</dd>
+        </div>
+      </dl>
+
+      <footer className="flex items-center justify-end">
         {row.mc_count > 0 ? (
           <a
             href={`/api/tasks/${row.task_id}/deliverables/download`}
-            className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-mc-accent/40 text-mc-accent hover:bg-mc-accent/10"
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-mc-accent/40 text-mc-accent hover:bg-mc-accent/10"
             title={`Download ${row.mc_count} file${row.mc_count === 1 ? '' : 's'}`}
           >
             <Download className="w-3.5 h-3.5" />
@@ -324,9 +296,9 @@ function DeliverableRow({ row }: { row: Row }) {
             Archived
           </span>
         ) : (
-          <span className="text-xs text-mc-text-secondary">—</span>
+          <span className="text-xs text-mc-text-secondary">No downloadable files</span>
         )}
-      </td>
-    </tr>
+      </footer>
+    </article>
   );
 }

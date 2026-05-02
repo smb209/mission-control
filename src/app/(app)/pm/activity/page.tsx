@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, ChevronRight, RotateCcw, ExternalLink } from 'lucide-react';
+import { RotateCcw, ExternalLink } from 'lucide-react';
 import { ProposalDiffsList, summarizeDiff, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import { showAlertDialog } from '@/lib/show-alert';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
+import { PageWithRails } from '@/components/shell/PageWithRails';
 
 interface PmProposal {
   id: string;
@@ -49,8 +50,22 @@ export default function PmActivityPage() {
   const [initiatives, setInitiatives] = useState<Record<string, InitiativeLite>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [reverting, setReverting] = useState<string | null>(null);
+
+  // Master-detail selection — URL-backed via `?selected=<proposal_id>` so
+  // deep links + back/forward work; local state is the source of truth so
+  // the right pane re-renders immediately on click.
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URL(window.location.href).searchParams.get('selected');
+  });
+  const selectProposal = useCallback((id: string | null) => {
+    setSelectedId(id);
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set('selected', id);
+    else url.searchParams.delete('selected');
+    window.history.replaceState(window.history.state, '', url.toString());
+  }, []);
 
   // Filter state. trigger_kinds is a Set so each chip toggles independently.
   const [activeKinds, setActiveKinds] = useState<Set<string>>(new Set());
@@ -162,74 +177,230 @@ export default function PmActivityPage() {
     });
   };
 
-  return (
-    <div className="min-h-screen bg-mc-bg p-6">
-      <header className="max-w-5xl mx-auto mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-mc-text">PM activity</h1>
-            <p className="text-sm text-mc-text-secondary">
-              Accepted proposals, newest first. Click any row to inspect the diff list, or
-              use <strong>Revert</strong> to draft an inverse proposal for review.
-            </p>
-          </div>
-          <Link
-            href="/pm"
-            className="text-sm text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
-          >
-            <ExternalLink className="w-3.5 h-3.5" /> Open PM chat
-          </Link>
+  const selectedProposal = selectedId ? proposals.find(p => p.id === selectedId) ?? null : null;
+
+  const header = (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <h1 className="text-base font-semibold text-mc-text">PM activity</h1>
+        <p className="text-[11px] text-mc-text-secondary">Accepted proposals — newest first</p>
+      </div>
+      <Link
+        href="/pm"
+        className="text-xs text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
+      >
+        <ExternalLink className="w-3.5 h-3.5" /> Open PM chat
+      </Link>
+    </div>
+  );
+
+  // Left rail = filters + scrollable proposal list (compact rows).
+  const leftRail = (
+    <div className="text-sm flex flex-col h-full space-y-2">
+      <FilterBar
+        availableKinds={availableKinds}
+        availableAgents={availableAgents}
+        agents={agents}
+        activeKinds={activeKinds}
+        activeAgent={activeAgent}
+        dateRange={dateRange}
+        onToggleKind={toggleKind}
+        onSetAgent={setActiveAgent}
+        onSetDateRange={setDateRange}
+        totalCount={proposals.length}
+        shownCount={visibleProposals.length}
+      />
+      {error && (
+        <div className="p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs">
+          {error}
         </div>
+      )}
+      {loading ? (
+        <p className="text-mc-text-secondary text-xs">Loading activity…</p>
+      ) : visibleProposals.length === 0 ? (
+        <p className="text-mc-text-secondary text-xs">
+          No accepted proposals match these filters.
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {visibleProposals.map(p => (
+            <ActivityListItem
+              key={p.id}
+              proposal={p}
+              agent={p.applied_by_agent_id ? agents[p.applied_by_agent_id] : undefined}
+              targetTitle={
+                p.target_initiative_id ? initiatives[p.target_initiative_id]?.title : undefined
+              }
+              selected={selectedId === p.id}
+              onSelect={() => selectProposal(p.id)}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  return (
+    <PageWithRails
+      header={header}
+      leftRail={leftRail}
+      leftRailWidth="w-[24rem]"
+      mainMaxWidth=""
+      outerMaxWidth={null}
+      outerPaddingX="px-4"
+    >
+      {selectedProposal ? (
+        <ProposalDetailPane
+          proposal={selectedProposal}
+          agent={selectedProposal.applied_by_agent_id ? agents[selectedProposal.applied_by_agent_id] : undefined}
+          targetTitle={
+            selectedProposal.target_initiative_id
+              ? initiatives[selectedProposal.target_initiative_id]?.title
+              : undefined
+          }
+          onRevert={() => onRevert(selectedProposal)}
+          reverting={reverting === selectedProposal.id}
+        />
+      ) : (
+        <div className="rounded-lg border border-dashed border-mc-border bg-mc-bg-secondary/30 p-12 text-center text-sm text-mc-text-secondary">
+          Select an accepted proposal on the left to inspect its diffs and
+          revert if needed.
+        </div>
+      )}
+    </PageWithRails>
+  );
+}
+
+/** Compact list row used inside the left rail. */
+function ActivityListItem({
+  proposal,
+  agent,
+  targetTitle,
+  selected,
+  onSelect,
+}: {
+  proposal: PmProposal;
+  agent?: AgentLite;
+  targetTitle?: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const badge = triggerBadgeFor(proposal.trigger_kind);
+  const summary = proposal.proposed_changes.length > 0
+    ? proposal.proposed_changes.length === 1
+      ? summarizeDiff(proposal.proposed_changes[0])
+      : `${proposal.proposed_changes.length} changes`
+    : '(no diffs)';
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={selected ? 'true' : undefined}
+        aria-label={`Select proposal ${proposal.id}`}
+        className={`w-full text-left p-2 rounded-lg border transition-colors ${
+          selected
+            ? 'bg-mc-accent/10 border-mc-accent/60'
+            : 'bg-mc-bg-secondary border-mc-border hover:border-mc-accent/40'
+        }`}
+      >
+        <div className="flex items-center gap-2 mb-0.5">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${badge.cls}`}>
+            {badge.label}
+          </span>
+          <span className="text-[10px] text-mc-text-secondary ml-auto shrink-0">
+            {proposal.applied_at && relativeTime(proposal.applied_at)}
+          </span>
+        </div>
+        <div className="text-xs text-mc-text truncate">
+          {targetTitle ?? <span className="text-mc-text-secondary italic">(no target)</span>}
+        </div>
+        <div className="text-[11px] text-mc-text-secondary truncate">{summary}</div>
+        {agent && (
+          <div className="text-[10px] text-mc-text-secondary/80 mt-0.5">
+            {agent.avatar_emoji ? `${agent.avatar_emoji} ` : ''}{agent.name}
+          </div>
+        )}
+      </button>
+    </li>
+  );
+}
+
+/** Right-pane detail view for the selected accepted proposal. */
+function ProposalDetailPane({
+  proposal,
+  agent,
+  targetTitle,
+  onRevert,
+  reverting,
+}: {
+  proposal: PmProposal;
+  agent?: AgentLite;
+  targetTitle?: string;
+  onRevert: () => void;
+  reverting: boolean;
+}) {
+  const badge = triggerBadgeFor(proposal.trigger_kind);
+  const isRevertItself = proposal.trigger_kind === 'revert';
+  return (
+    <div className="space-y-4">
+      <header className="rounded-lg bg-mc-bg-secondary border border-mc-border p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <span className={`text-xs px-2 py-0.5 rounded border ${badge.cls}`}>{badge.label}</span>
+          {agent && (
+            <span className="text-xs text-mc-text-secondary">
+              {agent.avatar_emoji ? `${agent.avatar_emoji} ` : ''}{agent.name}
+            </span>
+          )}
+          {proposal.applied_at && (
+            <span className="text-xs text-mc-text-secondary" title={proposal.applied_at}>
+              · applied {relativeTime(proposal.applied_at)}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Link
+              href={`/pm/proposals/${proposal.id}`}
+              title="Open the standalone proposal page"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
+            >
+              <ExternalLink className="w-3 h-3" /> Full page
+            </Link>
+            <button
+              onClick={onRevert}
+              disabled={reverting}
+              title={
+                isRevertItself
+                  ? 'Revert this revert (synthesizes another inverse — produces the original forward state)'
+                  : 'Synthesize an inverse proposal in draft status. Nothing mutates until you accept the revert.'
+              }
+              className="text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40 inline-flex items-center gap-1 disabled:opacity-50"
+            >
+              <RotateCcw className="w-3 h-3" /> {reverting ? 'Reverting…' : 'Revert'}
+            </button>
+          </div>
+        </div>
+        <h2 className="text-lg font-semibold text-mc-text">
+          {targetTitle ?? <span className="text-mc-text-secondary italic">(no target initiative)</span>}
+        </h2>
+        {proposal.reverts_proposal_id && (
+          <div className="mt-2 text-xs text-mc-text-secondary">
+            Reverts proposal{' '}
+            <Link
+              href={`/pm/proposals/${proposal.reverts_proposal_id}`}
+              className="text-mc-accent hover:underline font-mono"
+            >
+              {proposal.reverts_proposal_id.slice(0, 8)}
+            </Link>
+          </div>
+        )}
       </header>
 
-      <main className="max-w-5xl mx-auto space-y-4">
-        <FilterBar
-          availableKinds={availableKinds}
-          availableAgents={availableAgents}
-          agents={agents}
-          activeKinds={activeKinds}
-          activeAgent={activeAgent}
-          dateRange={dateRange}
-          onToggleKind={toggleKind}
-          onSetAgent={setActiveAgent}
-          onSetDateRange={setDateRange}
-          totalCount={proposals.length}
-          shownCount={visibleProposals.length}
-        />
-
-        {error && (
-          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <p className="text-mc-text-secondary">Loading activity…</p>
-        ) : visibleProposals.length === 0 ? (
-          <p className="text-mc-text-secondary">
-            No accepted proposals match these filters.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {visibleProposals.map(p => (
-              <ActivityRow
-                key={p.id}
-                proposal={p}
-                agent={p.applied_by_agent_id ? agents[p.applied_by_agent_id] : undefined}
-                targetTitle={
-                  p.target_initiative_id ? initiatives[p.target_initiative_id]?.title : undefined
-                }
-                expanded={!!expanded[p.id]}
-                onToggle={() =>
-                  setExpanded(prev => ({ ...prev, [p.id]: !prev[p.id] }))
-                }
-                onRevert={() => onRevert(p)}
-                reverting={reverting === p.id}
-              />
-            ))}
-          </ul>
-        )}
-      </main>
+      <section className="rounded-lg bg-mc-bg-secondary border border-mc-border p-4">
+        <h3 className="text-xs uppercase tracking-wide text-mc-text-secondary/70 mb-3">
+          Diffs ({proposal.proposed_changes.length})
+        </h3>
+        <ProposalDiffsList diffs={proposal.proposed_changes} showAll />
+      </section>
     </div>
   );
 }
@@ -345,108 +516,6 @@ function FilterBar({
         </div>
       </div>
     </div>
-  );
-}
-
-function ActivityRow({
-  proposal,
-  agent,
-  targetTitle,
-  expanded,
-  onToggle,
-  onRevert,
-  reverting,
-}: {
-  proposal: PmProposal;
-  agent?: AgentLite;
-  targetTitle?: string;
-  expanded: boolean;
-  onToggle: () => void;
-  onRevert: () => void;
-  reverting: boolean;
-}) {
-  const badge = triggerBadgeFor(proposal.trigger_kind);
-  const appliedRaw = proposal.applied_at;
-  const applied = appliedRaw ? new Date(
-    /T.*Z$|[+-]\d{2}:?\d{2}$/.test(appliedRaw) ? appliedRaw : appliedRaw.replace(' ', 'T') + 'Z',
-  ) : null;
-  const summary = proposal.proposed_changes.length > 0
-    ? proposal.proposed_changes.length === 1
-      ? summarizeDiff(proposal.proposed_changes[0])
-      : `${proposal.proposed_changes.length} changes`
-    : '(no diffs)';
-  const isRevertItself = proposal.trigger_kind === 'revert';
-
-  return (
-    <li className="rounded-lg bg-mc-bg-secondary border border-mc-border hover:border-mc-accent/40">
-      <div className="flex items-center gap-2 p-3">
-        <button
-          onClick={onToggle}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Collapse diff list' : 'Expand diff list'}
-          className="p-1 rounded hover:bg-mc-bg text-mc-text-secondary"
-        >
-          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </button>
-        <span className={`text-xs px-2 py-0.5 rounded border ${badge.cls}`}>
-          {badge.label}
-        </span>
-        <button onClick={onToggle} className="text-left flex-1 min-w-0 hover:text-mc-accent">
-          <div className="text-sm text-mc-text truncate">
-            {targetTitle ?? <span className="text-mc-text-secondary italic">(no target)</span>}
-          </div>
-          <div className="text-xs text-mc-text-secondary truncate">{summary}</div>
-        </button>
-        <div className="text-xs text-mc-text-secondary text-right shrink-0">
-          {applied && appliedRaw && (
-            <div title={applied.toISOString()}>
-              {relativeTime(appliedRaw)}
-            </div>
-          )}
-          {agent && (
-            <div className="text-[11px]">
-              {agent.avatar_emoji ? `${agent.avatar_emoji} ` : ''}
-              {agent.name}
-            </div>
-          )}
-        </div>
-        <Link
-          href={`/pm/proposals/${proposal.id}`}
-          title="Open proposal detail page"
-          className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text"
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-        </Link>
-        <button
-          onClick={onRevert}
-          disabled={reverting}
-          title={
-            isRevertItself
-              ? 'Revert this revert (synthesizes another inverse — produces the original forward state)'
-              : 'Synthesize an inverse proposal in draft status. Nothing mutates until you accept the revert.'
-          }
-          className="text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40 inline-flex items-center gap-1 disabled:opacity-50"
-        >
-          <RotateCcw className="w-3 h-3" /> {reverting ? 'Reverting…' : 'Revert'}
-        </button>
-      </div>
-      {expanded && (
-        <div className="border-t border-mc-border/60 px-3 py-2">
-          <ProposalDiffsList diffs={proposal.proposed_changes} showAll />
-          {proposal.reverts_proposal_id && (
-            <div className="mt-2 text-[11px] text-mc-text-secondary">
-              Reverts proposal{' '}
-              <Link
-                href={`/pm/proposals/${proposal.reverts_proposal_id}`}
-                className="text-mc-accent hover:underline font-mono"
-              >
-                {proposal.reverts_proposal_id.slice(0, 8)}
-              </Link>
-            </div>
-          )}
-        </div>
-      )}
-    </li>
   );
 }
 
