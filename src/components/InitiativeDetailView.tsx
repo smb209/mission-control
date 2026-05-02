@@ -190,12 +190,18 @@ export interface InitiativeDetailViewProps {
   /** Called after a successful delete so the host can navigate / clear
    *  the master-detail selection. Defaults to no-op. */
   onDeleted?: () => void;
+  /** Optional handler for the "Parent" breadcrumb. When provided, we
+   *  call this with the parent's id instead of navigating to its own
+   *  detail route — the master-detail host uses this to flip the
+   *  selection and expand the parent's subtree in the rail. */
+  onSelectParent?: (parentId: string) => void;
 }
 
 export function InitiativeDetailView({
   initiativeId,
   variant,
   onDeleted,
+  onSelectParent,
 }: InitiativeDetailViewProps) {
   const id = initiativeId;
   const router = useRouter();
@@ -551,12 +557,23 @@ export function InitiativeDetailView({
             {initiative.parent_initiative_id && (
               <>
                 {isFull && <ChevronRight className="w-4 h-4 text-mc-text-secondary" />}
-                <Link
-                  href={`/initiatives/${initiative.parent_initiative_id}`}
-                  className="text-mc-text-secondary hover:text-mc-text text-sm"
-                >
-                  ↑ Parent: {titleFor(initiative.parent_initiative_id)}
-                </Link>
+                {onSelectParent ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectParent(initiative.parent_initiative_id!)}
+                    className="text-mc-text-secondary hover:text-mc-text text-sm"
+                    title="Select parent in the tree"
+                  >
+                    ↑ Parent: {titleFor(initiative.parent_initiative_id)}
+                  </button>
+                ) : (
+                  <Link
+                    href={`/initiatives/${initiative.parent_initiative_id}`}
+                    className="text-mc-text-secondary hover:text-mc-text text-sm"
+                  >
+                    ↑ Parent: {titleFor(initiative.parent_initiative_id)}
+                  </Link>
+                )}
               </>
             )}
           </div>
