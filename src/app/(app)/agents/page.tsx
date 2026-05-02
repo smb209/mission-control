@@ -306,7 +306,10 @@ export default function AgentsPage() {
   const doResetAllSessions = async () => {
     setResetSessionsBusy(true);
     try {
-      const res = await fetch('/api/openclaw/sessions', { method: 'DELETE' });
+      const res = await fetch(
+        `/api/openclaw/sessions?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { method: 'DELETE' },
+      );
       const data = await res.json();
       if (!res.ok) {
         showAlertDialog('Reset failed', data.error || 'Failed to reset sessions');

@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { queryAll } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import type { Agent, DiscoveredAgent } from '@/lib/types';
@@ -30,8 +30,15 @@ function normaliseModel(
 }
 
 // GET /api/agents/discover - Discover existing agents from the OpenClaw Gateway
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // `already_imported` reflects "this gateway agent has a row in the
+    // operator's current workspace" — without scoping, an agent imported
+    // into workspace A would appear non-importable from workspace B even
+    // though cloning into B is exactly what the operator wants.
+    const { searchParams } = new URL(request.url);
+    const workspaceId = searchParams.get('workspace_id') || 'default';
+
     const client = getOpenClawClient();
 
     if (!client.isConnected()) {
@@ -63,9 +70,12 @@ export async function GET() {
       );
     }
 
-    // Get all agents already imported from the gateway
+    // Get all agents already imported from the gateway in THIS workspace.
     const existingAgents = queryAll<Agent>(
-      `SELECT * FROM agents WHERE gateway_agent_id IS NOT NULL`
+      `SELECT * FROM agents
+         WHERE gateway_agent_id IS NOT NULL
+           AND COALESCE(workspace_id, 'default') = ?`,
+      [workspaceId]
     );
     const importedGatewayIds = new Map(
       existingAgents.map((a) => [a.gateway_agent_id, a.id])

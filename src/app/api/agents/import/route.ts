@@ -37,11 +37,21 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check for conflicts (already imported)
+    // Conflict check is per-workspace: a gateway agent already cloned into
+    // workspace A should still be importable into workspace B. Globally
+    // scoped, a single import would block every other workspace from ever
+    // adopting that persona. Build the set as workspace_id → gateway_agent_id
+    // pairs so the per-row check below filters on both axes.
     const existingImports = queryAll<Agent>(
-      `SELECT * FROM agents WHERE gateway_agent_id IS NOT NULL`
+      `SELECT workspace_id, gateway_agent_id FROM agents WHERE gateway_agent_id IS NOT NULL`
     );
-    const importedGatewayIds = new Set(existingImports.map((a) => a.gateway_agent_id));
+    const importedKey = (workspaceId: string, gatewayAgentId: string) =>
+      `${workspaceId}::${gatewayAgentId}`;
+    const importedGatewayIds = new Set(
+      existingImports.map((a) =>
+        importedKey(a.workspace_id || 'default', a.gateway_agent_id || ''),
+      ),
+    );
 
     const results: { imported: Agent[]; skipped: { gateway_agent_id: string; reason: string }[] } = {
       imported: [],
@@ -52,8 +62,11 @@ export async function POST(request: NextRequest) {
       const now = new Date().toISOString();
 
       for (const agentReq of body.agents) {
-        // Skip if already imported
-        if (importedGatewayIds.has(agentReq.gateway_agent_id)) {
+        const workspaceId = agentReq.workspace_id || 'default';
+
+        // Skip if already imported into THIS workspace; cloning into
+        // sibling workspaces remains allowed.
+        if (importedGatewayIds.has(importedKey(workspaceId, agentReq.gateway_agent_id))) {
           results.skipped.push({
             gateway_agent_id: agentReq.gateway_agent_id,
             reason: 'Already imported',
@@ -62,7 +75,6 @@ export async function POST(request: NextRequest) {
         }
 
         const id = uuidv4();
-        const workspaceId = agentReq.workspace_id || 'default';
 
         // Generate default identity files referencing the gateway agent.
         // The gateway does not expose SOUL.md/USER.md/AGENTS.md via its API,
