@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText, BookOpen, Send } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, ImageIcon, Truck, Radio, MessageSquare, ExternalLink, HardDrive, Archive, ArchiveRestore, Paperclip, Upload, Link as LinkIcon, FileText, BookOpen, Send, Maximize2, Minimize2 } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -151,6 +151,27 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>(
     task?.status === 'planning' ? 'planning' : task?.status === 'convoy_active' ? 'convoy' : 'overview'
   );
+  // "Focus" toggle — promotes the modal from the default ~1024px width
+  // to near-full viewport so long descriptions and tab content (planning
+  // diffs, deliverables, activity feed) get real horizontal room.
+  // Persisted in localStorage so once the operator opts into the wider
+  // layout it sticks across task opens.
+  const FOCUS_LS_KEY = 'mc:taskModal:focus';
+  const [focused, setFocused] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(FOCUS_LS_KEY) === '1';
+  });
+  const toggleFocus = () => {
+    setFocused(v => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(FOCUS_LS_KEY, next ? '1' : '0');
+      } catch {
+        /* private mode — ignore */
+      }
+      return next;
+    });
+  };
 
   // Stable callback for when spec is locked - use window.location.reload() to refresh data
   const handleSpecLocked = useCallback(() => {
@@ -482,10 +503,16 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
-      <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full max-w-5xl max-h-[92vh] sm:max-h-[92vh] h-[92vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0">
+    <div className={`fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 ${
+      focused ? 'p-2' : 'p-3 sm:p-4'
+    }`}>
+      <div className={`bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0 ${
+        focused
+          ? 'max-w-[1700px] max-h-[96vh] h-[96vh]'
+          : 'max-w-5xl max-h-[92vh] sm:max-h-[92vh] h-[92vh]'
+      }`}>
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-mc-border shrink-0">
+        <div className="flex items-center justify-between p-4 border-b border-mc-border shrink-0 gap-2">
           <div className="flex items-center gap-3 min-w-0">
             {task && (
               <span
@@ -502,12 +529,22 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               {task ? task.title : 'Create New Task'}
             </h2>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-mc-bg-tertiary rounded-sm shrink-0"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={toggleFocus}
+              title={focused ? 'Exit focus mode (compact width)' : 'Enter focus mode (use full viewport width)'}
+              aria-label={focused ? 'Exit focus mode' : 'Enter focus mode'}
+              className="hidden sm:flex p-1.5 hover:bg-mc-bg-tertiary rounded-sm text-mc-text-secondary hover:text-mc-text"
+            >
+              {focused ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 hover:bg-mc-bg-tertiary rounded-sm"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Tabs - only show for existing tasks */}
