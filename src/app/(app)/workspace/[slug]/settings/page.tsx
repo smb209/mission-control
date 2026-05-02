@@ -18,6 +18,8 @@
 import { useEffect, useState, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -34,6 +36,7 @@ import {
   useCurrentWorkspaceId,
   useSetCurrentWorkspaceId,
 } from '@/components/shell/workspace-context';
+import { PageWithRails, SectionNav } from '@/components/shell/PageWithRails';
 import type { WorkspaceCascadeCounts } from '@/lib/db/workspaces';
 
 interface WorkspaceWithDefault {
@@ -70,6 +73,9 @@ export default function WorkspaceSettingsPage({
   const [showDelete, setShowDelete] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [includeTransient, setIncludeTransient] = useState(false);
+  // Live keystroke draft for the conventions textarea so the right-rail
+  // preview updates as the operator types — `null` means "use saved value".
+  const [conventionsDraft, setConventionsDraft] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -167,30 +173,47 @@ export default function WorkspaceSettingsPage({
     }
   };
 
-  return (
-    <div className="min-h-screen bg-mc-bg text-mc-text">
-      <div className="max-w-3xl mx-auto p-6">
-        <div className="mb-4 flex items-center gap-2 text-sm">
-          <Link
-            href={`/workspace/${workspace.slug}`}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded text-mc-text-secondary hover:text-mc-text"
-          >
-            <ArrowLeft className="w-4 h-4" /> Back to workspace
-          </Link>
-        </div>
+  const sections = [
+    { id: 'identity', label: 'Identity' },
+    { id: 'project-root', label: 'Project root' },
+    { id: 'conventions', label: 'Workspace conventions' },
+    { id: 'export', label: 'Export' },
+    { id: 'danger-zone', label: 'Danger zone' },
+  ];
 
-        <header className="mb-6 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
-          <div className="flex items-start gap-3">
-            <span className="text-3xl shrink-0">{workspace.icon}</span>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-xl font-semibold">{workspace.name}</h1>
-              <div className="text-xs text-mc-text-secondary font-mono">
-                /workspace/{workspace.slug}
-              </div>
-            </div>
+  const header = (
+    <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-3 min-w-0">
+        <Link
+          href={`/workspace/${workspace.slug}`}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-mc-text-secondary hover:text-mc-text text-sm shrink-0"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back
+        </Link>
+        <span className="text-2xl shrink-0">{workspace.icon}</span>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold truncate">{workspace.name}</h1>
+          <div className="text-[11px] text-mc-text-secondary font-mono truncate">
+            /workspace/{workspace.slug} — settings
           </div>
-        </header>
+        </div>
+      </div>
+    </div>
+  );
 
+  return (
+    <PageWithRails
+      header={header}
+      leftRail={<SectionNav sections={sections} />}
+      rightRail={
+        <AgentPromptPreview
+          contextMd={conventionsDraft ?? workspace.context_md ?? ''}
+          dirty={conventionsDraft !== null && conventionsDraft !== (workspace.context_md ?? '')}
+        />
+      }
+      rightRailTitle="Agent prompt preview"
+    >
+      <>
         {actionError && (
           <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
             {actionError}
@@ -198,7 +221,7 @@ export default function WorkspaceSettingsPage({
         )}
 
         {/* Identity */}
-        <Section title="Identity">
+        <Section id="identity" title="Identity">
           <Field label="Name">
             <InlineText
               value={workspace.name}
@@ -232,6 +255,7 @@ export default function WorkspaceSettingsPage({
 
         {/* Path */}
         <Section
+          id="project-root"
           title="Project root"
           description={
             <>
@@ -282,6 +306,7 @@ export default function WorkspaceSettingsPage({
             inherits the workspace's testing / git / package-manager /
             push rules without having to rediscover them per task. */}
         <Section
+          id="conventions"
           title="Workspace conventions"
           description={
             <>
@@ -302,6 +327,7 @@ export default function WorkspaceSettingsPage({
               placeholder={`# Repos\n- ...\n\n# Testing\n- yarn test\n\n# Git rules\n- Never push to main\n- ...`}
               minRows={8}
               label="Edit workspace conventions"
+              onDraftChange={setConventionsDraft}
             />
           </Field>
         </Section>
@@ -311,6 +337,7 @@ export default function WorkspaceSettingsPage({
             workspace into a checkpoint. Backed by the same lib the CLI
             script uses (src/lib/db/workspace-export.ts). */}
         <Section
+          id="export"
           title="Export"
           description="Download a JSON snapshot of every initiative, task, agent, proposal, knowledge entry, and supporting row attached to this workspace. Useful for retention before a database reset or for staging an import elsewhere."
         >
@@ -344,7 +371,10 @@ export default function WorkspaceSettingsPage({
             thing the operator clicks. Delete is the only one for now;
             the rename action lives inline above (no separate row needed
             — InlineText handles it). */}
-        <section className="mt-10 rounded-lg border border-red-500/40 bg-red-500/5">
+        <section
+          id="danger-zone"
+          className="mt-10 rounded-lg border border-red-500/40 bg-red-500/5 scroll-mt-20"
+        >
           <header className="px-5 py-3 border-b border-red-500/30">
             <h2 className="text-sm font-semibold text-red-300 flex items-center gap-2">
               <AlertTriangle className="w-4 h-4" /> Danger Zone
@@ -381,46 +411,103 @@ export default function WorkspaceSettingsPage({
             </button>
           </div>
         </section>
-      </div>
 
-      {showDelete && (
-        <DeleteModal
-          workspace={workspace}
-          onClose={() => setShowDelete(false)}
-          onDeleted={async () => {
-            setShowDelete(false);
-            // If we just deleted the active workspace, switch to whichever
-            // is left and route back to its task board.
-            try {
-              const r = await fetch('/api/workspaces');
-              const list = (await r.json()) as Array<{ id: string; slug: string }>;
-              if (list.length > 0) {
-                setCurrentWorkspaceId(list[0].id);
-                router.replace(`/workspace/${list[0].slug}`);
-              } else {
+        {showDelete && (
+          <DeleteModal
+            workspace={workspace}
+            onClose={() => setShowDelete(false)}
+            onDeleted={async () => {
+              setShowDelete(false);
+              // If we just deleted the active workspace, switch to whichever
+              // is left and route back to its task board.
+              try {
+                const r = await fetch('/api/workspaces');
+                const list = (await r.json()) as Array<{ id: string; slug: string }>;
+                if (list.length > 0) {
+                  setCurrentWorkspaceId(list[0].id);
+                  router.replace(`/workspace/${list[0].slug}`);
+                } else {
+                  router.replace('/');
+                }
+              } catch {
                 router.replace('/');
               }
-            } catch {
-              router.replace('/');
-            }
-          }}
-        />
-      )}
+            }}
+          />
+        )}
+      </>
+    </PageWithRails>
+  );
+}
+
+/**
+ * Live preview of what a dispatched agent will actually see for this
+ * workspace. Mirrors the assembly in src/app/api/tasks/[id]/dispatch/route.ts —
+ * the workspace's `context_md` is wrapped in a `## Workspace conventions`
+ * heading and prepended above every task body. Showing this side-by-side
+ * with the editor lets the operator catch malformed markdown / wrong tone
+ * before a real dispatch carries it.
+ */
+function AgentPromptPreview({
+  contextMd,
+  dirty = false,
+}: {
+  contextMd: string;
+  dirty?: boolean;
+}) {
+  const trimmed = contextMd.trim();
+  if (!trimmed) {
+    return (
+      <div className="rounded-lg border border-mc-border/60 bg-mc-bg-secondary p-4 text-xs text-mc-text-secondary">
+        <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-2">
+          Agent prompt preview
+        </div>
+        Conventions are empty — agents won&apos;t receive a{' '}
+        <code className="text-mc-text">## Workspace conventions</code> block.
+        Anything you type into the Conventions editor will appear here exactly
+        as the agent sees it on dispatch.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-mc-border/60 bg-mc-bg-secondary">
+      <header className="px-4 py-2 border-b border-mc-border/60 flex items-center justify-between gap-2">
+        <h2 className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
+          Agent prompt preview
+        </h2>
+        {dirty ? (
+          <span className="text-[10px] text-amber-300/80">unsaved draft</span>
+        ) : (
+          <span className="text-[10px] text-mc-text-secondary/60">
+            prepended to every dispatch
+          </span>
+        )}
+      </header>
+      <div className="p-4 mc-md text-xs text-mc-text break-words">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {`## Workspace conventions\n\n${trimmed}\n\n---`}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
 
 function Section({
+  id,
   title,
   description,
   children,
 }: {
+  id?: string;
   title: string;
   description?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="mb-6 rounded-lg border border-mc-border bg-mc-bg-secondary">
+    <section
+      id={id}
+      className="mb-6 rounded-lg border border-mc-border bg-mc-bg-secondary scroll-mt-20"
+    >
       <header className="px-5 py-3 border-b border-mc-border/60">
         <h2 className="text-sm font-semibold text-mc-text">{title}</h2>
         {description && (

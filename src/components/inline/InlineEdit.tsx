@@ -214,6 +214,11 @@ interface InlineTextareaProps extends CommonProps<string> {
   preWrap?: boolean;
   /** Apply mono font in both display and edit. */
   mono?: boolean;
+  /** Fires on every keystroke during editing with the live draft value. Use
+   *  for live previews (markdown, prompt rendering) without waiting for save.
+   *  Fires with `null` when the editor is closed via cancel/save so the
+   *  consumer can revert to displaying the saved value. */
+  onDraftChange?: (draft: string | null) => void;
 }
 
 export function InlineTextarea({
@@ -228,6 +233,7 @@ export function InlineTextarea({
   preWrap = true,
   mono = false,
   label,
+  onDraftChange,
 }: InlineTextareaProps) {
   const { editing, draft, setDraft, saving, err, begin, cancel, commit } =
     useInlineEdit<string>(value, onSave);
@@ -242,7 +248,14 @@ export function InlineTextarea({
         ta.setSelectionRange(ta.value.length, ta.value.length);
         autoResize(ta);
       }
+    } else {
+      // Editor closed (cancel or save committed) — clear any live preview
+      // state in the parent so it falls back to the saved value.
+      onDraftChange?.(null);
     }
+    // onDraftChange identity intentionally excluded: callers typically pass
+    // an inline arrow which would re-fire this effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   const autoResize = (ta: HTMLTextAreaElement) => {
@@ -267,8 +280,10 @@ export function InlineTextarea({
           ref={taRef}
           value={draft}
           onChange={e => {
-            setDraft(e.target.value);
+            const next = e.target.value;
+            setDraft(next);
             autoResize(e.currentTarget);
+            onDraftChange?.(next);
           }}
           onKeyDown={onKey}
           rows={minRows}
