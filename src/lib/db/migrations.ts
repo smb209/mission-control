@@ -3912,6 +3912,70 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: '070',
+    name: 'runner_is_pm',
+    up: (db) => {
+      // Phase H: the runner agent IS the PM. Single org-wide row
+      // (mc-runner for prod, mc-runner-dev for dev) carries is_pm=1 +
+      // is_master=1. The pre-Phase-F per-workspace PM placeholders
+      // are retired in place, and the migration-049 'Margaret /
+      // mc-project-manager' artifact is dropped.
+      //
+      // Selection: MC_RUNNER_GATEWAY_ID env var wins; otherwise
+      // dev-vs-prod is inferred from NODE_ENV / MC_ENV. Both runner
+      // gateway rows are promoted when both exist (idempotent — the
+      // ones not actively used stay flagged but inert).
+
+      // 1. Retire pre-Phase-F per-workspace PM placeholders. Don't
+      //    delete (FK refs from pm_proposals etc. need to stay valid)
+      //    — flip is_pm/is_master to 0 and is_active to 0 so they
+      //    don't show up in any "is the workspace operational" check.
+      const retired = db.prepare(
+        `UPDATE agents
+            SET is_pm = 0,
+                is_master = 0,
+                is_active = 0,
+                updated_at = datetime('now')
+          WHERE is_pm = 1
+            AND gateway_agent_id NOT IN ('mc-runner', 'mc-runner-dev')`,
+      ).run();
+      console.log(
+        `[Migration 070] retired ${retired.changes} pre-runner-as-PM placeholder agent row(s).`,
+      );
+
+      // 2. Drop the migration-049 'mc-project-manager' artifact.
+      //    These rows have gateway_agent_id='mc-project-manager' but
+      //    that gateway agent no longer exists in openclaw config
+      //    (Phase F decommissioned the per-role agents). The row is
+      //    a dead breadcrumb. Delete is safe because the only FK
+      //    references are ON DELETE SET NULL or ON DELETE CASCADE
+      //    workspace-scoped (no orphan rows after delete).
+      const dropped = db.prepare(
+        `DELETE FROM agents
+          WHERE gateway_agent_id IN ('mc-project-manager', 'mc-project-manager-dev')`,
+      ).run();
+      console.log(
+        `[Migration 070] dropped ${dropped.changes} legacy mc-project-manager artifact row(s).`,
+      );
+
+      // 3. Promote runner rows to PM + master. Both runner pairs get
+      //    flagged so dev and prod each have a single PM in their
+      //    catalog. The MC_RUNNER_GATEWAY_ID env knob (read at
+      //    request time) decides which one this MC instance prefers.
+      const promoted = db.prepare(
+        `UPDATE agents
+            SET is_pm = 1,
+                is_master = 1,
+                is_active = 1,
+                updated_at = datetime('now')
+          WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')`,
+      ).run();
+      console.log(
+        `[Migration 070] promoted ${promoted.changes} runner row(s) to is_pm=1 + is_master=1.`,
+      );
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

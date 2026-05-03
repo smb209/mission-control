@@ -134,3 +134,79 @@ test('assertWorkspacePm: silent when PM is correctly configured', () => {
 // tests. The migration's effect is logged at template-build time
 // (`[Migration 069] is_master=1 backfilled on N PM agent row(s).`)
 // and exercised in the production migration suite.
+
+// ─── Phase H: runner-as-PM ─────────────────────────────────────────
+
+function ensureRunner(gatewayId: 'mc-runner' | 'mc-runner-dev'): string {
+  const id = uuidv4();
+  run(
+    `INSERT OR IGNORE INTO agents (
+       id, name, role, workspace_id, gateway_agent_id, source,
+       is_pm, is_master, is_active, created_at, updated_at
+     ) VALUES (?, ?, 'pm', 'default', ?, 'gateway', 1, 1, 1,
+              datetime('now'), datetime('now'))`,
+    [id, `Runner ${gatewayId}`, gatewayId],
+  );
+  return id;
+}
+
+function dropRunners(): void {
+  run(`DELETE FROM agents WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')`);
+}
+
+test('hasWorkspacePm: runner with both flags satisfies any workspace', () => {
+  dropRunners();
+  ensureRunner('mc-runner-dev');
+  const ws = freshWorkspace();
+  // The workspace has no per-workspace PM placeholder, but the runner does.
+  assert.equal(hasWorkspacePm(ws), true);
+});
+
+test('hasWorkspacePm: runner without flags does NOT satisfy', () => {
+  dropRunners();
+  // Insert runner with is_pm=0 (pre-Phase-H state).
+  run(
+    `INSERT INTO agents (id, name, role, workspace_id, gateway_agent_id, source,
+                          is_pm, is_master, is_active, created_at, updated_at)
+     VALUES (?, 'rn', 'runner', 'default', 'mc-runner-dev', 'gateway',
+             0, 0, 1, datetime('now'), datetime('now'))`,
+    [uuidv4()],
+  );
+  const ws = freshWorkspace();
+  assert.equal(hasWorkspacePm(ws), false);
+});
+
+test('ensurePmAgent: short-circuits to runner when present', () => {
+  dropRunners();
+  const runnerId = ensureRunner('mc-runner-dev');
+  const ws = freshWorkspace();
+  const result = ensurePmAgent(ws);
+  assert.equal(result.id, runnerId);
+  assert.equal(result.created, false);
+  // Should NOT have inserted a per-workspace placeholder.
+  const placeholders = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM agents WHERE workspace_id = ? AND source = 'local'`,
+    [ws],
+  );
+  assert.equal(placeholders?.n, 0);
+});
+
+test('getPmAgent: returns the runner regardless of workspace_id', async () => {
+  dropRunners();
+  const runnerId = ensureRunner('mc-runner-dev');
+  const wsA = freshWorkspace();
+  const wsB = freshWorkspace();
+  const { getPmAgent } = await import('./agents/pm-resolver');
+  assert.equal(getPmAgent(wsA)?.id, runnerId);
+  assert.equal(getPmAgent(wsB)?.id, runnerId);
+});
+
+test('migration 070: legacy mc-project-manager artifact is dropped on apply', () => {
+  // After migration 070 runs (template-build time), no rows should
+  // exist with the legacy gateway_agent_id values.
+  const legacy = queryOne<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM agents
+       WHERE gateway_agent_id IN ('mc-project-manager', 'mc-project-manager-dev')`,
+  );
+  assert.equal(legacy?.n, 0);
+});
