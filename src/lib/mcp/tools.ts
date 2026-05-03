@@ -33,6 +33,21 @@ import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask } from '@/lib/convoy';
 import { internalDispatch } from '@/lib/internal-dispatch';
+import {
+  archiveNote as archiveNoteDb,
+  createNote,
+  getNote,
+  listNotes,
+  markNoteConsumed as markNoteConsumedDb,
+  parseAttachedFiles,
+  parseConsumedStages,
+  AgentNoteValidationError,
+  NOTE_BODY_MAX,
+  type AgentNote,
+  type NoteImportance,
+  type NoteKind,
+} from '@/lib/db/agent-notes';
+import { broadcast } from '@/lib/events';
 import type { Task } from '@/lib/types';
 
 // Common shape: agent_id on every state-changing tool.
@@ -112,6 +127,25 @@ function textResult(text: string, structured?: Record<string, unknown>): CallToo
     content: [{ type: 'text', text }],
     ...(structured ? { structuredContent: structured } : {}),
   };
+}
+
+/**
+ * Resolve the workspace_id for the calling agent. Used by tools whose
+ * scope is workspace-bound (notes spine, etc.). Strict — refuses
+ * gateway_agent_id on principle: callers must pass the MC UUID, which
+ * matches one row unambiguously per spec §1.4 (post-migration the
+ * runner is the only org-wide gateway id; non-PM agents have NULL).
+ *
+ * Throws AuthzError on miss so the trace wrapper produces a clean
+ * error result.
+ */
+function deriveWorkspaceFromAgent(agentId: string): string {
+  const row = queryOne<{ workspace_id: string }>(
+    `SELECT workspace_id FROM agents WHERE id = ? LIMIT 1`,
+    [agentId],
+  );
+  if (row) return row.workspace_id;
+  throw new AuthzError('agent_not_found', `agent ${agentId} not found`);
 }
 
 // ─── tool registrations ─────────────────────────────────────────────
@@ -603,6 +637,252 @@ export function registerAllTools(server: McpServer): void {
         evidence_qualifying_activities_on_task: Number(totals?.evidence_count ?? 0),
       };
       return textResult(JSON.stringify(summary, null, 2), summary);
+    }),
+  );
+
+  // ── Notes spine (scope-keyed sessions Phase A) ───────────────────
+  // take_note / read_notes / mark_note_consumed / archive_note
+  // See specs/scope-keyed-sessions.md §3 for the full design.
+  // No agents call these yet — this is the surface area; role-souls
+  // start using it in Phase C when the notetaker addendum lands.
+
+  const noteKindArg = z
+    .enum(['discovery', 'blocker', 'uncertainty', 'decision', 'observation', 'question', 'breadcrumb'])
+    .describe('What kind of note this is. See agent-templates/_shared/notetaker.md for guidance.');
+
+  const noteImportanceArg = z
+    .union([z.literal(0), z.literal(1), z.literal(2)])
+    .describe('0 = low (default), 1 = normal, 2 = high (PM Chat surfaces this in real time).');
+
+  function noteToPayload(note: AgentNote): Record<string, unknown> {
+    return {
+      id: note.id,
+      workspace_id: note.workspace_id,
+      agent_id: note.agent_id,
+      task_id: note.task_id,
+      initiative_id: note.initiative_id,
+      scope_key: note.scope_key,
+      role: note.role,
+      run_group_id: note.run_group_id,
+      kind: note.kind,
+      audience: note.audience,
+      body: note.body,
+      attached_files: parseAttachedFiles(note),
+      importance: note.importance,
+      created_at: note.created_at,
+    };
+  }
+
+  // take_note ──────────────────────────────────────────────────────
+  server.registerTool(
+    'take_note',
+    {
+      title: 'Record an observation, decision, blocker, or breadcrumb',
+      description:
+        "Cheap, spammable observability primitive. Use liberally — every meaningful moment of your work should leave a trail here. NOT evidence: notes don't unblock status transitions (use log_activity for that). Set importance=2 only for genuinely high-stakes findings (security issues, broken assumptions); the PM sees those in PM Chat in real time.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        kind: noteKindArg,
+        body: z
+          .string()
+          .min(1)
+          .max(NOTE_BODY_MAX)
+          .describe('Concrete > aspirational. One thought per note. Reference file paths in attached_files.'),
+        scope_key: z
+          .string()
+          .min(1)
+          .describe('The openclaw sessionKey you are running under. Take this verbatim from your dispatch briefing.'),
+        role: z
+          .string()
+          .min(1)
+          .describe("Your role-of-the-moment ('builder', 'tester', 'pm', 'researcher', etc.). From the briefing."),
+        run_group_id: z
+          .string()
+          .min(1)
+          .describe('UUID minted at session start that groups all notes from one run/stage. From the briefing.'),
+        task_id: z.string().optional().describe('Set when the note relates to a specific task.'),
+        initiative_id: z
+          .string()
+          .optional()
+          .describe('Set when the note relates to an initiative directly (no task scope).'),
+        audience: z
+          .string()
+          .optional()
+          .describe("Who this note is for: 'pm', 'reviewer', 'next-stage', 'tester', etc. Omit for anyone."),
+        attached_files: z
+          .array(z.string())
+          .optional()
+          .describe('File paths the note references. Helps the next session navigate without re-reading.'),
+        importance: noteImportanceArg.optional(),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('take_note', async (args) => {
+      try {
+        const note = createNote({
+          workspace_id: deriveWorkspaceFromAgent(args.agent_id),
+          agent_id: args.agent_id,
+          task_id: args.task_id ?? null,
+          initiative_id: args.initiative_id ?? null,
+          scope_key: args.scope_key,
+          role: args.role,
+          run_group_id: args.run_group_id,
+          kind: args.kind as NoteKind,
+          audience: args.audience ?? null,
+          body: args.body,
+          attached_files: args.attached_files ?? null,
+          importance: (args.importance ?? 0) as NoteImportance,
+        });
+
+        const payload = noteToPayload(note);
+        broadcast({ type: 'agent_note_created', payload });
+
+        return textResult(JSON.stringify(payload, null, 2), payload);
+      } catch (err) {
+        if (err instanceof AgentNoteValidationError) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: err.message }],
+            structuredContent: { error: 'validation', message: err.message },
+          };
+        }
+        throw err;
+      }
+    }),
+  );
+
+  // read_notes ─────────────────────────────────────────────────────
+  server.registerTool(
+    'read_notes',
+    {
+      title: 'List notes visible to the calling agent',
+      description:
+        "Query notes — by task, by initiative, by audience, by kind. Use this BEFORE committing to an approach: scan for prior decisions, blockers, and breadcrumbs from earlier stages. Returns up to 50 by default (capped at 200). Default order is created_at ASC so prior context comes first.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        task_id: z.string().optional(),
+        initiative_id: z.string().optional(),
+        audience: z
+          .string()
+          .optional()
+          .describe("Restrict to notes addressed to this audience or to anyone (NULL audience). Common values: 'pm', 'next-stage', 'reviewer', or your own role."),
+        kinds: z.array(noteKindArg).optional().describe('Restrict to specific kinds.'),
+        not_consumed_by_stage: z
+          .string()
+          .optional()
+          .describe('Skip notes already marked consumed by this stage slug. Useful when filtering "what is new for me".'),
+        scope_key: z.string().optional(),
+        run_group_id: z.string().optional(),
+        min_importance: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+        include_archived: z.boolean().optional(),
+        limit: z.number().int().positive().max(200).optional(),
+        order: z.enum(['asc', 'desc']).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    trace('read_notes', async (args) => {
+      const workspaceId = deriveWorkspaceFromAgent(args.agent_id);
+      const notes = listNotes({
+        workspace_id: workspaceId,
+        task_id: args.task_id,
+        initiative_id: args.initiative_id,
+        audience: args.audience,
+        kinds: args.kinds as ReadonlyArray<NoteKind> | undefined,
+        not_consumed_by_stage: args.not_consumed_by_stage,
+        scope_key: args.scope_key,
+        run_group_id: args.run_group_id,
+        min_importance: args.min_importance as NoteImportance | undefined,
+        include_archived: args.include_archived,
+        limit: args.limit,
+        order: args.order,
+      });
+      const payload = { count: notes.length, notes: notes.map(noteToPayload) };
+      return textResult(JSON.stringify(payload, null, 2), payload);
+    }),
+  );
+
+  // mark_note_consumed ─────────────────────────────────────────────
+  server.registerTool(
+    'mark_note_consumed',
+    {
+      title: 'Record that this stage has read a note',
+      description:
+        "Idempotent. Call this when you've actually processed a note from a prior stage so the next briefing for this stage doesn't re-show it. Pass your stage slug (your current role) — e.g., 'tester' if you're the tester reading a builder breadcrumb.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        note_id: z.string().min(1),
+        stage_slug: z
+          .string()
+          .min(1)
+          .describe("Your stage slug (typically your current role). Idempotent — duplicate calls are no-ops."),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('mark_note_consumed', async (args) => {
+      const note = markNoteConsumedDb(args.note_id, args.stage_slug);
+      if (!note) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `note ${args.note_id} not found` }],
+          structuredContent: { error: 'not_found', note_id: args.note_id },
+        };
+      }
+      const payload = noteToPayload(note);
+      broadcast({
+        type: 'agent_note_consumed',
+        payload: {
+          note_id: note.id,
+          workspace_id: note.workspace_id,
+          stage_slug: args.stage_slug,
+          consumed_by_stages: parseConsumedStages(note),
+        },
+      });
+      return textResult(JSON.stringify(payload, null, 2), payload);
+    }),
+  );
+
+  // archive_note ───────────────────────────────────────────────────
+  server.registerTool(
+    'archive_note',
+    {
+      title: 'Soft-archive a note',
+      description:
+        "Hide a note from future briefings and the live feed. The row stays for audit. Use when a blocker is resolved, an uncertainty clarified, or an observation has gone stale. Idempotent — already-archived notes are no-ops.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        note_id: z.string().min(1),
+        reason: z.string().max(500).optional(),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('archive_note', async (args) => {
+      const existing = getNote(args.note_id);
+      if (!existing) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `note ${args.note_id} not found` }],
+          structuredContent: { error: 'not_found', note_id: args.note_id },
+        };
+      }
+      const note = archiveNoteDb(args.note_id, args.reason ?? null);
+      if (!note) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `note ${args.note_id} archive failed` }],
+          structuredContent: { error: 'archive_failed', note_id: args.note_id },
+        };
+      }
+      const payload = noteToPayload(note);
+      broadcast({
+        type: 'agent_note_archived',
+        payload: {
+          note_id: note.id,
+          workspace_id: note.workspace_id,
+          reason: note.archived_reason,
+          archived_at: note.archived_at,
+        },
+      });
+      return textResult(JSON.stringify(payload, null, 2), payload);
     }),
   );
 
