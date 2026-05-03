@@ -796,9 +796,15 @@ Removed (Phase F):
 - [x] Audit complete (openclaw session internals + MC planning flows)
 - [x] Architecture locked
 - [x] Spec drafted (this document)
-- [ ] Phase A implementation
-- [ ] Phase B implementation
-- [ ] Phase C implementation
-- [ ] Phase D implementation
-- [ ] Phase E implementation
-- [ ] Phase F implementation
+- [x] Phase A — foundations (agent-templates, notes spine, SSE) — PR #148
+- [x] Phase B — buildBriefing() + dispatchScope() primitive — PR #149
+- [x] Phase C — workers via scope-keyed dispatch (feature-flagged) — PR #150
+- [x] Phase D — observability surfaces (NotesRail, /feed, badges, PM Chat) — PR #151
+- [x] Phase E — recurring jobs scheduler + heartbeat coordinator — PR #152
+- [x] Phase F — decommission durable workers, flip flag default — PR pending
+- [ ] Run full validation pack (specs/scope-keyed-sessions-validation/)
+      end-to-end against spark-lb/agent
+- [ ] Run scripts/decommission-durable-workers.ts in production
+- [ ] Run scripts/archive-old-worker-workspaces.ts in production
+- [ ] Run scripts/neutralize-runner-host.ts in production
+- [ ] Remove MC_USE_SCOPE_KEYED_DISPATCH env lever after a release cycle

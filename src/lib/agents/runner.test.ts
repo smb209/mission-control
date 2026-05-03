@@ -126,13 +126,16 @@ test('nextWorkerAttempt: increments per (task,role) based on mc_sessions count',
   assert.equal(nextWorkerAttempt(taskId, 'tester'), 2);
 });
 
-test('isScopeKeyedDispatchEnabled: respects env flag', () => {
+test('isScopeKeyedDispatchEnabled: defaults on, opt-out via env=0', () => {
   const prev = process.env.MC_USE_SCOPE_KEYED_DISPATCH;
   delete process.env.MC_USE_SCOPE_KEYED_DISPATCH;
-  assert.equal(isScopeKeyedDispatchEnabled(), false);
+  // Phase F default — on.
+  assert.equal(isScopeKeyedDispatchEnabled(), true);
   process.env.MC_USE_SCOPE_KEYED_DISPATCH = '1';
   assert.equal(isScopeKeyedDispatchEnabled(), true);
   process.env.MC_USE_SCOPE_KEYED_DISPATCH = '0';
+  assert.equal(isScopeKeyedDispatchEnabled(), false);
+  process.env.MC_USE_SCOPE_KEYED_DISPATCH = 'false';
   assert.equal(isScopeKeyedDispatchEnabled(), false);
   if (prev === undefined) delete process.env.MC_USE_SCOPE_KEYED_DISPATCH;
   else process.env.MC_USE_SCOPE_KEYED_DISPATCH = prev;

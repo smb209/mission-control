@@ -50,9 +50,17 @@ export function getRunnerAgent(): Agent | null {
 
 /**
  * Cheap check used by request handlers and middleware.
+ *
+ * Phase F default: ON. Set MC_USE_SCOPE_KEYED_DISPATCH=0 to opt back
+ * into the legacy per-role dispatch path (preserved as a fallback in
+ * dispatch/route.ts). This lever exists so an emergency rollback
+ * doesn't require a code revert; expect to remove it once we've run
+ * Phase F in production for a release cycle.
  */
 export function isScopeKeyedDispatchEnabled(): boolean {
-  return process.env.MC_USE_SCOPE_KEYED_DISPATCH === '1';
+  const v = process.env.MC_USE_SCOPE_KEYED_DISPATCH;
+  if (v === '0' || v === 'false') return false;
+  return true;
 }
 
 /**
