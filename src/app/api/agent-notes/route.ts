@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { queryAll } from '@/lib/db';
 import {
   listNotes,
   parseAttachedFiles,
@@ -85,19 +86,75 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const notes = listNotes({
-    workspace_id: workspaceId,
-    task_id: taskId,
-    initiative_id: initiativeId,
-    audience,
-    scope_key: scopeKey,
-    run_group_id: runGroupId,
-    kinds,
-    include_archived: includeArchived,
-    min_importance: minImportance,
-    limit,
-    order,
-  });
+  const includeChildTasks = searchParams.get('include_child_tasks') === 'true';
+
+  // Initiative rollup: union of (notes for this initiative) +
+  // (notes for tasks under this initiative). The hook's initiative
+  // detail panel uses this so an operator viewing an initiative sees
+  // activity across all child tasks.
+  let notes: AgentNote[];
+  if (initiativeId && includeChildTasks) {
+    const directNotes = listNotes({
+      workspace_id: workspaceId,
+      initiative_id: initiativeId,
+      audience,
+      scope_key: scopeKey,
+      run_group_id: runGroupId,
+      kinds,
+      include_archived: includeArchived,
+      min_importance: minImportance,
+      limit,
+      order,
+    });
+    const childTaskIds = queryAll<{ id: string }>(
+      `SELECT id FROM tasks WHERE initiative_id = ?`,
+      [initiativeId],
+    ).map((r) => r.id);
+    const taskNotes: AgentNote[] = [];
+    for (const tid of childTaskIds) {
+      const partial = listNotes({
+        workspace_id: workspaceId,
+        task_id: tid,
+        audience,
+        scope_key: scopeKey,
+        run_group_id: runGroupId,
+        kinds,
+        include_archived: includeArchived,
+        min_importance: minImportance,
+        limit: 50,
+        order,
+      });
+      taskNotes.push(...partial);
+    }
+    // Dedupe + cap to limit, importance DESC then created_at order.
+    const merged = [...directNotes, ...taskNotes];
+    const seen = new Set<string>();
+    const dedup = merged.filter((n) => {
+      if (seen.has(n.id)) return false;
+      seen.add(n.id);
+      return true;
+    });
+    dedup.sort((a, b) => {
+      if (a.importance !== b.importance) return b.importance - a.importance;
+      const dir = order === 'desc' ? -1 : 1;
+      return a.created_at.localeCompare(b.created_at) * dir;
+    });
+    notes = dedup.slice(0, limit ?? 50);
+  } else {
+    notes = listNotes({
+      workspace_id: workspaceId,
+      task_id: taskId,
+      initiative_id: initiativeId,
+      audience,
+      scope_key: scopeKey,
+      run_group_id: runGroupId,
+      kinds,
+      include_archived: includeArchived,
+      min_importance: minImportance,
+      limit,
+      order,
+    });
+  }
 
   return NextResponse.json({
     count: notes.length,

@@ -52,15 +52,18 @@ test('getRunnerAgent: prefers mc-runner-dev in dev environment', () => {
   ensureRunnerRow('mc-runner', 'default');
   const prevEnv = process.env.NODE_ENV;
   const prevMcEnv = process.env.MC_ENV;
-  Object.assign(process.env, { NODE_ENV: 'development', MC_ENV: 'dev' });
+  // process.env's typed as readonly NODE_ENV by next; cast to mutate for the test.
+  const env = process.env as Record<string, string | undefined>;
+  env.NODE_ENV = 'development';
+  env.MC_ENV = 'dev';
   try {
     const r = getRunnerAgent();
     assert.equal(r?.gateway_agent_id, 'mc-runner-dev');
   } finally {
-    if (prevEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = prevEnv;
-    if (prevMcEnv === undefined) delete process.env.MC_ENV;
-    else process.env.MC_ENV = prevMcEnv;
+    if (prevEnv === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = prevEnv;
+    if (prevMcEnv === undefined) delete env.MC_ENV;
+    else env.MC_ENV = prevMcEnv;
   }
 });
 

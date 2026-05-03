@@ -33,6 +33,7 @@ import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask } from '@/lib/convoy';
 import { internalDispatch } from '@/lib/internal-dispatch';
+import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
 import {
   archiveNote as archiveNoteDb,
   createNote,
@@ -736,6 +737,29 @@ export function registerAllTools(server: McpServer): void {
 
         const payload = noteToPayload(note);
         broadcast({ type: 'agent_note_created', payload });
+
+        // D5: importance=2 notes auto-post to PM Chat so the operator
+        // sees high-stakes findings in their primary chat surface in
+        // real time. Best-effort: failures don't fail the take_note.
+        if (note.importance === 2) {
+          try {
+            const fileTrail = parseAttachedFiles(note);
+            const filesLine = fileTrail.length > 0
+              ? `\n\nFiles: ${fileTrail.map((f) => `\`${f}\``).join(', ')}`
+              : '';
+            postPmChatMessage({
+              workspace_id: note.workspace_id,
+              role: 'assistant',
+              content:
+                `**🚩 ${note.kind} (from ${note.role})**\n\n${note.body}${filesLine}`,
+            });
+          } catch (chatErr) {
+            console.warn(
+              '[take_note] importance=2 PM Chat post failed:',
+              (chatErr as Error).message,
+            );
+          }
+        }
 
         return textResult(JSON.stringify(payload, null, 2), payload);
       } catch (err) {
