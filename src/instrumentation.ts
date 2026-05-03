@@ -40,4 +40,19 @@ export async function register() {
   } catch (err) {
     console.warn('[Instrumentation] backup registration failed:', (err as Error).message);
   }
+
+  // Register the recurring_jobs scheduler — wakes every 60s, picks
+  // jobs whose next_run_at has elapsed, dispatches each via
+  // dispatchScope. See specs/scope-keyed-sessions.md §4.
+  try {
+    const { ensureRecurringSchedulerStarted } = await import(
+      '@/lib/agents/recurring-scheduler'
+    );
+    ensureRecurringSchedulerStarted();
+  } catch (err) {
+    console.warn(
+      '[Instrumentation] recurring-jobs scheduler registration failed:',
+      (err as Error).message,
+    );
+  }
 }
