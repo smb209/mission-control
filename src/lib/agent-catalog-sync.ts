@@ -53,6 +53,20 @@ function compileGlobList(env: string | undefined): ((id: string) => boolean) | n
 }
 
 /**
+ * Phase H: pick the runner gateway id this MC instance prefers, mirroring
+ * `src/lib/agents/runner.ts:getRunnerAgent` selection logic. Dev MCs
+ * use `mc-runner-dev`; prod uses `mc-runner`. The opposite is
+ * auto-excluded from catalog sync so a dev DB never grows a prod
+ * runner row (and vice versa).
+ */
+function preferredRunnerGatewayId(env: NodeJS.ProcessEnv = process.env): 'mc-runner' | 'mc-runner-dev' {
+  const explicit = env.MC_RUNNER_GATEWAY_ID;
+  if (explicit === 'mc-runner' || explicit === 'mc-runner-dev') return explicit;
+  const isDev = env.NODE_ENV === 'development' || env.MC_ENV === 'dev';
+  return isDev ? 'mc-runner-dev' : 'mc-runner';
+}
+
+/**
  * Decide which gateway agent ids should sync into the catalog. Returns
  * the included subset and the set of gateway ids that were filtered
  * out, so the caller can mark previously-synced excluded rows offline.
@@ -62,13 +76,16 @@ function compileGlobList(env: string | undefined): ((id: string) => boolean) | n
  */
 export function selectGatewayAgents(
   gatewayAgents: GatewayAgent[],
-  env: { include?: string; exclude?: string } = {
+  env: { include?: string; exclude?: string; processEnv?: NodeJS.ProcessEnv } = {
     include: process.env.MC_AGENT_SYNC_INCLUDE,
     exclude: process.env.MC_AGENT_SYNC_EXCLUDE,
+    processEnv: process.env,
   },
 ): { included: GatewayAgent[]; excludedGatewayIds: Set<string> } {
   const includeMatch = compileGlobList(env.include);
   const excludeMatch = compileGlobList(env.exclude);
+  const preferredRunner = preferredRunnerGatewayId(env.processEnv ?? process.env);
+  const otherRunner = preferredRunner === 'mc-runner' ? 'mc-runner-dev' : 'mc-runner';
 
   const included: GatewayAgent[] = [];
   const excludedGatewayIds = new Set<string>();
@@ -76,6 +93,13 @@ export function selectGatewayAgents(
   for (const ga of gatewayAgents) {
     const id = ga.id || ga.name;
     if (!id) continue;
+    // Phase H: auto-exclude the non-preferred runner so a dev DB never
+    // grows a `mc-runner` row (and vice versa for prod). Operator-set
+    // INCLUDE/EXCLUDE still apply on top of this default.
+    if (id === otherRunner) {
+      excludedGatewayIds.add(id);
+      continue;
+    }
     // Include defaults to match-all when not configured. Exclude is then
     // applied on top — so an id can be in the include list and still be
     // dropped if exclude matches it.
@@ -183,29 +207,53 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
           // workspace that has an agent linked to it). Flip status off
           // 'offline' if a previous sync had marked it filtered-out and
           // the operator has now included it again.
-          run(
-            `UPDATE agents
-                SET name = ?,
-                    role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
-                    model = COALESCE(?, model),
-                    source = 'gateway',
-                    status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
-                    updated_at = ?
-              WHERE gateway_agent_id = ?`,
-            [name, role, normaliseModel(ga.model), ts, gatewayId]
-          );
+          //
+          // Phase H: runner rows are also re-asserted as is_pm=1 +
+          // is_master=1 so a stale row that lost the flags (manual DB
+          // edit, partial migration) self-heals on the next sync.
+          const isRunner = gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev';
+          if (isRunner) {
+            run(
+              `UPDATE agents
+                  SET name = ?,
+                      role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
+                      model = COALESCE(?, model),
+                      source = 'gateway',
+                      status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
+                      is_pm = 1,
+                      is_master = 1,
+                      is_active = 1,
+                      updated_at = ?
+                WHERE gateway_agent_id = ?`,
+              [name, role, normaliseModel(ga.model), ts, gatewayId]
+            );
+          } else {
+            run(
+              `UPDATE agents
+                  SET name = ?,
+                      role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
+                      model = COALESCE(?, model),
+                      source = 'gateway',
+                      status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
+                      updated_at = ?
+                WHERE gateway_agent_id = ?`,
+              [name, role, normaliseModel(ga.model), ts, gatewayId]
+            );
+          }
           changed += 1;
         } else if (gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev') {
           // Phase F: only auto-create rows for the org-wide runner.
           // Per-role workers (mc-builder, mc-tester, etc.) are no
           // longer durable agents — work routes through the runner
-          // with role-specific briefings. Discovering a per-role
-          // gateway agent here is a no-op so we don't recreate the
-          // durable rows the decommission script just nulled.
+          // with role-specific briefings.
+          //
+          // Phase H: the runner IS the PM. Insert with is_pm=1 +
+          // is_master=1 so a fresh DB has a working PM the moment
+          // catalog sync completes.
           run(
-            `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, model, source, gateway_agent_id, created_at, updated_at)
-             VALUES (lower(hex(randomblob(16))), ?, ?, ?, '🎯', 0, 'default', ?, 'gateway', ?, ?, ?)`,
-            [name, role, `Org-wide scope-keyed-session host (${gatewayId})`, normaliseModel(ga.model), gatewayId, ts, ts]
+            `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, is_pm, is_active, workspace_id, model, source, gateway_agent_id, created_at, updated_at)
+             VALUES (lower(hex(randomblob(16))), ?, 'pm', ?, '🎯', 1, 1, 1, 'default', ?, 'gateway', ?, ?, ?)`,
+            [name, `Org-wide PM + scope-keyed-session host (${gatewayId})`, normaliseModel(ga.model), gatewayId, ts, ts]
           );
           changed += 1;
         } else {
@@ -224,10 +272,28 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
       // will flip status back to 'idle' automatically (above).
       for (const gatewayId of excludedGatewayIds) {
         if (!existingGatewayIds.has(gatewayId)) continue;
-        const result = run(
-          `UPDATE agents SET status = 'offline', updated_at = ? WHERE gateway_agent_id = ? AND status != 'offline'`,
-          [ts, gatewayId]
-        );
+        // Phase H: when a runner is excluded (the non-preferred one
+        // for this MC instance's env), also demote it from PM/master
+        // and deactivate so hasWorkspacePm / getPmAgent don't pick
+        // it up as the PM. Workers that were previously synced fall
+        // back to the legacy status='offline' update.
+        const isRunner = gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev';
+        const result = isRunner
+          ? run(
+              `UPDATE agents
+                  SET status = 'offline',
+                      is_active = 0,
+                      is_pm = 0,
+                      is_master = 0,
+                      updated_at = ?
+                WHERE gateway_agent_id = ?
+                  AND (status != 'offline' OR is_active = 1 OR is_pm = 1 OR is_master = 1)`,
+              [ts, gatewayId]
+            )
+          : run(
+              `UPDATE agents SET status = 'offline', updated_at = ? WHERE gateway_agent_id = ? AND status != 'offline'`,
+              [ts, gatewayId]
+            );
         if (result.changes > 0) markedOffline += result.changes;
       }
 
