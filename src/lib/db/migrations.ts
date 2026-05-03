@@ -3717,6 +3717,183 @@ const migrations: Migration[] = [
       console.log('[Migration 063] pm_proposals.trigger_kind extended with decompose_story.');
     },
   },
+  {
+    id: '064',
+    name: 'agent_role_overrides',
+    up: (db) => {
+      // Per-workspace customizations of role-template SOUL/AGENTS/IDENTITY.
+      // Empty by default; the briefing builder falls back to
+      // `agent-templates/<role>/` when no row exists.
+      // See specs/scope-keyed-sessions.md §2.2.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_role_overrides (
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          soul_md TEXT,
+          agents_md TEXT,
+          identity_md TEXT,
+          attempt_strategy TEXT CHECK (attempt_strategy IN ('fresh','reuse')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (workspace_id, role)
+        );
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_agent_role_overrides_workspace
+          ON agent_role_overrides(workspace_id);
+      `);
+      console.log('[Migration 064] agent_role_overrides table created.');
+    },
+  },
+  {
+    id: '065',
+    name: 'agent_notes',
+    up: (db) => {
+      // The observability spine. Every meaningful agent moment becomes
+      // a queryable, SSE-broadcast row: discovery, blocker, uncertainty,
+      // decision, observation, question, breadcrumb. Cheap and
+      // spammable — no evidence-gate side-effects.
+      // See specs/scope-keyed-sessions.md §3.1.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_notes (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          scope_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          run_group_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN (
+            'discovery','blocker','uncertainty','decision',
+            'observation','question','breadcrumb'
+          )),
+          audience TEXT,
+          body TEXT NOT NULL,
+          attached_files TEXT,
+          importance INTEGER NOT NULL DEFAULT 0 CHECK (importance IN (0,1,2)),
+          consumed_by_stages TEXT,
+          archived_at TEXT,
+          archived_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_task ON agent_notes(task_id, created_at DESC) WHERE task_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_initiative ON agent_notes(initiative_id, created_at DESC) WHERE initiative_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_workspace ON agent_notes(workspace_id, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_run_group ON agent_notes(run_group_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_importance ON agent_notes(workspace_id, importance, created_at DESC) WHERE archived_at IS NULL`);
+      console.log('[Migration 065] agent_notes table + indexes created.');
+    },
+  },
+  {
+    id: '066',
+    name: 'mc_sessions',
+    up: (db) => {
+      // Bookkeeping for active scope-keyed openclaw sessions. Openclaw
+      // owns the trajectory file; MC owns the metadata so we can list
+      // "active sessions for task X" or reap stale scopes.
+      // See specs/scope-keyed-sessions.md §1.3.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mc_sessions (
+          scope_key TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          scope_type TEXT NOT NULL CHECK (scope_type IN (
+            'pm_chat','plan','decompose','decompose_story',
+            'notes_intake','task_coord','task_role',
+            'recurring','heartbeat'
+          )),
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          recurring_job_id TEXT,
+          attempt INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+            'active','idle','closed','failed'
+          )),
+          last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          closed_at TEXT
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_task ON mc_sessions(task_id) WHERE task_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_workspace ON mc_sessions(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_role ON mc_sessions(role, status)`);
+      console.log('[Migration 066] mc_sessions table + indexes created.');
+    },
+  },
+  {
+    id: '067',
+    name: 'recurring_jobs',
+    up: (db) => {
+      // Native scheduled work: researcher every 2 days, optional
+      // heartbeat coordinator, etc. Each row → one scope-keyed session
+      // dispatched on cadence. See specs/scope-keyed-sessions.md §4.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS recurring_jobs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          role TEXT NOT NULL,
+          scope_key_template TEXT NOT NULL,
+          briefing_template TEXT NOT NULL,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          cadence_seconds INTEGER NOT NULL CHECK (cadence_seconds > 0),
+          attempt_strategy TEXT NOT NULL DEFAULT 'reuse'
+            CHECK (attempt_strategy IN ('reuse','fresh')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+            'active','paused','done'
+          )),
+          last_run_at TEXT,
+          last_run_scope_key TEXT,
+          next_run_at TEXT NOT NULL,
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          created_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_recurring_jobs_next_run ON recurring_jobs(next_run_at, status) WHERE status = 'active'`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_recurring_jobs_workspace ON recurring_jobs(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_recurring_jobs_task ON recurring_jobs(task_id) WHERE task_id IS NOT NULL`);
+      console.log('[Migration 067] recurring_jobs table + indexes created.');
+    },
+  },
+  {
+    id: '068',
+    name: 'coordinator_mode',
+    up: (db) => {
+      // Workspace + per-task coordinator mode flag. Defaults preserve
+      // today's behavior ('reactive' = coordinator runs only on stage
+      // transitions). 'heartbeat' opts in to recurring check-ins via
+      // a recurring_jobs row auto-created at task assignment.
+      // See specs/scope-keyed-sessions.md §5.
+      const wsCols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!wsCols.some(c => c.name === 'coordinator_mode')) {
+        db.exec(`
+          ALTER TABLE workspaces
+            ADD COLUMN coordinator_mode TEXT NOT NULL DEFAULT 'reactive'
+            CHECK (coordinator_mode IN ('off','reactive','heartbeat'))
+        `);
+      }
+      if (!wsCols.some(c => c.name === 'coordinator_heartbeat_seconds')) {
+        db.exec(`
+          ALTER TABLE workspaces
+            ADD COLUMN coordinator_heartbeat_seconds INTEGER NOT NULL DEFAULT 1800
+        `);
+      }
+      const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>;
+      if (!taskCols.some(c => c.name === 'coordinator_mode')) {
+        // Nullable on tasks → NULL means "inherit workspace setting".
+        db.exec(`
+          ALTER TABLE tasks
+            ADD COLUMN coordinator_mode TEXT
+            CHECK (coordinator_mode IN ('off','reactive','heartbeat'))
+        `);
+      }
+      console.log('[Migration 068] coordinator_mode columns added to workspaces + tasks.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
