@@ -194,14 +194,26 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
               WHERE gateway_agent_id = ?`,
             [name, role, normaliseModel(ga.model), ts, gatewayId]
           );
-        } else {
+          changed += 1;
+        } else if (gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev') {
+          // Phase F: only auto-create rows for the org-wide runner.
+          // Per-role workers (mc-builder, mc-tester, etc.) are no
+          // longer durable agents — work routes through the runner
+          // with role-specific briefings. Discovering a per-role
+          // gateway agent here is a no-op so we don't recreate the
+          // durable rows the decommission script just nulled.
           run(
             `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, model, source, gateway_agent_id, created_at, updated_at)
-             VALUES (lower(hex(randomblob(16))), ?, ?, ?, '🔗', 0, 'default', ?, 'gateway', ?, ?, ?)`,
-            [name, role, `Auto-synced from OpenClaw (${gatewayId})`, normaliseModel(ga.model), gatewayId, ts, ts]
+             VALUES (lower(hex(randomblob(16))), ?, ?, ?, '🎯', 0, 'default', ?, 'gateway', ?, ?, ?)`,
+            [name, role, `Org-wide scope-keyed-session host (${gatewayId})`, normaliseModel(ga.model), gatewayId, ts, ts]
           );
+          changed += 1;
+        } else {
+          // Non-runner, non-existing gateway id: skip insert. The
+          // gateway exposes per-role agents for backwards compat
+          // with operators who haven't migrated, but Phase F+ MC
+          // doesn't materialize them as DB rows.
         }
-        changed += 1;
       }
 
       // Mark previously-synced rows whose gateway id is now filtered
