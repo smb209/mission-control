@@ -52,6 +52,7 @@ import {
 } from '@/lib/openclaw/send-chat';
 import { buildNotesIntakeMessage } from './pm-prompts/notes-intake';
 import { getPmAgent } from './pm-resolver';
+import { dispatchScope } from './dispatch-scope';
 import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -266,16 +267,18 @@ async function runDisruptionDispatchInBackground(
   params: RunDisruptionDispatchInput,
 ): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
   const { input, snapshot, pm, placeholder } = params;
-  // Re-mint the message + sinceIso so we can poll for the agent's row.
+  // Re-mint the trigger body + sinceIso so we can poll for the agent's row.
+  // The dispatch flows through the generic dispatchScope primitive
+  // (Phase B): briefing builder prepends the identity preamble + the PM
+  // role section + notetaker addendum. Trigger-specific text below is
+  // the `trigger_body` parameter.
   const correlationId = uuidv4();
   const sinceIso = new Date().toISOString();
   const summary = buildSnapshotSummary(snapshot);
-  const preamble = buildIdentityPreamble(pm);
-  const message =
+  const trigger_body =
     input.trigger_kind === 'notes_intake'
-      ? preamble + buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
-      : preamble +
-        `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
+      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
+      : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator-reported event:\n> ${input.trigger_text}\n\n` +
         `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
         `${summary}\n\n` +
@@ -287,13 +290,17 @@ async function runDisruptionDispatchInBackground(
 
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
   try {
-    result = await sendChatAndAwaitReply({
+    const dispatch = await dispatchScope({
+      workspace_id: input.workspace_id,
+      role: 'pm',
       agent: pm,
-      message,
+      session_suffix: sessionSuffix,
+      trigger_body,
+      trigger_kind: input.trigger_kind ?? 'manual',
       idempotencyKey: `pm-dispatch-${correlationId}`,
       timeoutMs: namedAgentTimeoutMs(),
-      sessionSuffix,
     });
+    result = dispatch.reply;
   } catch (err) {
     console.warn(
       '[pm-dispatch] disruption named-agent dispatch failed:',
@@ -541,16 +548,20 @@ async function runNamedAgentDispatchInBackground(
 
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
   try {
-    result = await sendChatAndAwaitReply({
+    const dispatch = await dispatchScope({
+      workspace_id: input.workspace_id,
+      role: 'pm',
       agent: pm,
-      message:
-        buildIdentityPreamble(pm) +
+      session_suffix: sessionSuffix,
+      trigger_body:
         `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
         input.agent_prompt,
+      trigger_kind: input.trigger_kind,
+      initiative_id: input.target_initiative_id ?? null,
       idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
       timeoutMs,
-      sessionSuffix,
     });
+    result = dispatch.reply;
   } catch (err) {
     console.warn(
       '[pm-dispatch] synthesized named-agent dispatch failed:',
