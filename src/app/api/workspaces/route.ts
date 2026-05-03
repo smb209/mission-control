@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
-import { bootstrapCoreAgents, cloneAgentsFromWorkspace, cloneWorkflowTemplates, ensurePmAgent } from '@/lib/bootstrap-agents';
+import { bootstrapCoreAgents, cloneAgentsFromWorkspace, cloneWorkflowTemplates, ensurePmAgent, hasWorkspacePm, WorkspacePmRequiredError } from '@/lib/bootstrap-agents';
 import type { Workspace, WorkspaceStats, TaskStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -106,35 +106,63 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'A workspace with this name already exists' }, { status: 400 });
     }
 
-    db.prepare(`
-      INSERT INTO workspaces (id, name, slug, description, icon)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(id, name.trim(), slug, description || null, icon || '📁');
+    // Phase G: workspace creation atomically seeds + verifies the PM.
+    // If any of the steps fail (PM placeholder couldn't insert, clone
+    // returned without bringing a PM across, etc.), the whole
+    // workspace is rolled back. The PM is the workspace's only required
+    // agent — without it, no dispatch / proposal / planning works.
+    const tx = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO workspaces (id, name, slug, description, icon)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, name.trim(), slug, description || null, icon || '📁');
 
-    // Clone workflow templates and bootstrap core agents for the new workspace
-    cloneWorkflowTemplates(db, id);
-    bootstrapCoreAgents(id);
+      cloneWorkflowTemplates(db, id);
+      bootstrapCoreAgents(id);
 
-    // Optional: copy the agent roster from another workspace. Useful when
-    // gateway sync only keys to one workspace and a fresh row would
-    // otherwise start empty. ensurePmAgent below is a no-op if any
-    // cloned agent already has is_pm=1.
-    if (clone_agents_from && typeof clone_agents_from === 'string') {
-      const source = db.prepare(
-        'SELECT id FROM workspaces WHERE id = ?',
-      ).get(clone_agents_from);
-      if (!source) {
+      // Optional: copy the agent roster from another workspace.
+      if (clone_agents_from && typeof clone_agents_from === 'string') {
+        const source = db.prepare(
+          'SELECT id FROM workspaces WHERE id = ?',
+        ).get(clone_agents_from);
+        if (!source) {
+          throw new Error(`SOURCE_NOT_FOUND:${clone_agents_from}`);
+        }
+        cloneAgentsFromWorkspace(clone_agents_from, id);
+      }
+
+      ensurePmAgent(id);
+
+      // Final gate: workspace MUST have a PM with is_pm=1 AND is_master=1
+      // before we commit. ensurePmAgent throws on insert failure but a
+      // legacy code path (e.g. clone source missing PM) could still
+      // leave the workspace PM-less; the assertion catches that.
+      if (!hasWorkspacePm(id)) {
+        throw new WorkspacePmRequiredError(
+          id,
+          'workspace creation completed but no PM is present after seeding',
+        );
+      }
+    });
+
+    try {
+      tx();
+    } catch (err) {
+      if (err instanceof WorkspacePmRequiredError) {
         return NextResponse.json(
-          { error: `Source workspace not found: ${clone_agents_from}` },
+          { error: 'PM required', message: err.message },
+          { status: 500 },
+        );
+      }
+      const msg = (err as Error).message ?? '';
+      if (msg.startsWith('SOURCE_NOT_FOUND:')) {
+        return NextResponse.json(
+          { error: `Source workspace not found: ${msg.slice('SOURCE_NOT_FOUND:'.length)}` },
           { status: 400 },
         );
       }
-      cloneAgentsFromWorkspace(clone_agents_from, id);
+      throw err;
     }
-
-    // Seed the workspace's PM agent (planning layer, role='pm'). Idempotent
-    // — bails out if cloneAgentsFromWorkspace already brought a PM across.
-    ensurePmAgent(id);
 
     const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
     return NextResponse.json(workspace, { status: 201 });

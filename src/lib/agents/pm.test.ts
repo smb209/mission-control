@@ -937,3 +937,20 @@ test('dispatchPmSynthesized: plan_initiative — agent omits target dates → re
     __setNamedAgentTimeoutForTests(null);
   }
 });
+
+// ─── Phase G: PM-required gating ────────────────────────────────────
+
+test('dispatchPm: throws WorkspacePmRequiredError when workspace has no PM', async () => {
+  // Fresh workspace, no ensurePmAgent — bootstrapCoreAgents is a no-op
+  // and we never seeded a PM. Phase G gates dispatch on PM presence.
+  const id = `ws-no-pm-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO workspaces (id, name, slug, created_at) VALUES (?, ?, ?, datetime('now'))`,
+    [id, id, id],
+  );
+  const { WorkspacePmRequiredError } = await import('@/lib/bootstrap-agents');
+  assert.throws(
+    () => dispatchPm({ workspace_id: id, trigger_text: 'no pm here' }),
+    WorkspacePmRequiredError,
+  );
+});

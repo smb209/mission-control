@@ -92,6 +92,17 @@ implement this conversion in `pm-resolver.ts` — left as a Phase G
 follow-up item. The manual repoint sidesteps it for the e2e.
 
 ### 4. **The actual blocker — MCP tools not surfaced to runner sessions**
+
+**Note (post-run, per operator confirmation):** the openclaw config is
+correct. Both MCP servers are configured and the runner's tool profile
+allow/deny scopes them properly (dev runner allows
+`sc-mission-control-dev__*`, denies `sc-mission-control__*`; prod
+runner is the inverse). The dev runner used for this run was
+`mc-runner-dev` — verified end-to-end (FOIA PM was repointed at
+`mc-runner-dev`, dev MC runs on port 4010, MCP launcher's `MC_URL`
+points at port 4010). The remaining gap is openclaw-side MCP server
+*activation* at session start — not configuration.
+
 **Symptom:** Runner agent receives the dispatch, reasons through it,
 tries `browser`, `exec`, every available tool, then concludes:
 > "I'm in an isolated session without MCP tool access. The PM tools

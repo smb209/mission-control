@@ -69,14 +69,33 @@ export function bootstrapCoreAgentsRaw(
  * untouched — operators may have customized it, and migration 061
  * backfilled is_pm for legacy rows.
  */
+export class WorkspacePmRequiredError extends Error {
+  constructor(public workspaceId: string, reason: string) {
+    super(`workspace ${workspaceId} requires a PM: ${reason}`);
+    this.name = 'WorkspacePmRequiredError';
+  }
+}
+
 export function ensurePmAgent(workspaceId: string): { id: string; created: boolean } {
   const db = getDb();
   const existing = db.prepare(
-    `SELECT id FROM agents
+    `SELECT id, COALESCE(is_master, 0) AS is_master
+       FROM agents
        WHERE workspace_id = ? AND (is_pm = 1 OR LOWER(role) = 'pm')
        LIMIT 1`,
-  ).get(workspaceId) as { id: string } | undefined;
-  if (existing) return { id: existing.id, created: false };
+  ).get(workspaceId) as { id: string; is_master: number } | undefined;
+  if (existing) {
+    // Phase G: the PM is the workspace's master orchestrator. Forgive
+    // legacy rows that pre-date that contract by upgrading them in
+    // place; treat this as not-created so callers don't double-emit
+    // setup events.
+    if (existing.is_master !== 1) {
+      db.prepare(
+        `UPDATE agents SET is_master = 1, updated_at = datetime('now') WHERE id = ?`,
+      ).run(existing.id);
+    }
+    return { id: existing.id, created: false };
+  }
 
   // Lazy-import to avoid circular deps during migration startup.
   // pm-agent.ts is plain TS with no DB imports so it's safe everywhere.
@@ -89,20 +108,29 @@ export function ensurePmAgent(workspaceId: string): { id: string; created: boole
   // either edits this row to point at a gateway PM, or (more likely)
   // promotes a different existing gateway agent via the AgentModal
   // checkbox, which clears is_pm here and sets it on the new target.
-  db.prepare(`
-    INSERT INTO agents (
-      id, name, role, description, avatar_emoji, status, is_master, is_pm,
-      workspace_id, soul_md, source,
-      is_active, created_at, updated_at
-    ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 0, 1, ?, ?, 'local', 1, ?, ?)
-  `).run(
-    id,
-    PM_AGENT_DESCRIPTION,
-    workspaceId,
-    getPmSoulMd(),
-    now,
-    now,
-  );
+  // Phase G: is_master=1 so the PM is the master orchestrator from
+  // the moment the workspace is born.
+  try {
+    db.prepare(`
+      INSERT INTO agents (
+        id, name, role, description, avatar_emoji, status, is_master, is_pm,
+        workspace_id, soul_md, source,
+        is_active, created_at, updated_at
+      ) VALUES (?, 'PM', 'pm', ?, '📋', 'standby', 1, 1, ?, ?, 'local', 1, ?, ?)
+    `).run(
+      id,
+      PM_AGENT_DESCRIPTION,
+      workspaceId,
+      getPmSoulMd(),
+      now,
+      now,
+    );
+  } catch (err) {
+    throw new WorkspacePmRequiredError(
+      workspaceId,
+      `PM placeholder insert failed: ${(err as Error).message}`,
+    );
+  }
   return { id, created: true };
 }
 
@@ -214,4 +242,43 @@ export function cloneWorkflowTemplates(db: Database.Database, targetWorkspaceId:
   }
 
   console.log(`[Bootstrap] Cloned ${templates.length} workflow template(s) to workspace ${targetWorkspaceId}`);
+}
+
+// ─── PM presence gating (Phase G) ───────────────────────────────────
+
+/**
+ * Cheap presence check used by request handlers and pre-dispatch
+ * guards. Returns true iff the workspace has at least one row with
+ * `is_pm = 1` AND `is_master = 1`. Phase G makes this the canonical
+ * "is this workspace operational?" signal.
+ */
+export function hasWorkspacePm(workspaceId: string): boolean {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT 1 FROM agents
+       WHERE workspace_id = ?
+         AND is_pm = 1
+         AND is_master = 1
+         AND COALESCE(is_active, 1) = 1
+       LIMIT 1`,
+  ).get(workspaceId);
+  return Boolean(row);
+}
+
+/**
+ * Throws WorkspacePmRequiredError if the workspace doesn't have a
+ * configured PM. Call from request handlers before kicking off any
+ * dispatch / proposal / decompose / planning flow — these all assume
+ * a PM exists; without one, MC's behavior is undefined.
+ *
+ * The PM is the only required agent per workspace. Workers come and
+ * go; the PM is the workspace's spine.
+ */
+export function assertWorkspacePm(workspaceId: string): void {
+  if (!hasWorkspacePm(workspaceId)) {
+    throw new WorkspacePmRequiredError(
+      workspaceId,
+      'no agent with is_pm=1 AND is_master=1 found',
+    );
+  }
 }

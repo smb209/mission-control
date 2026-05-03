@@ -53,6 +53,7 @@ import {
 import { buildNotesIntakeMessage } from './pm-prompts/notes-intake';
 import { getPmAgent } from './pm-resolver';
 import { dispatchScope } from './dispatch-scope';
+import { assertWorkspacePm } from '@/lib/bootstrap-agents';
 import type { Agent } from '@/lib/types';
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -168,6 +169,12 @@ function buildIdentityPreamble(pm: Agent): string {
  * `PmDispatchGatewayUnavailableError` instead of persisting a synth row.
  */
 export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
+  // Phase G: every dispatch path is gated on the workspace having a
+  // PM agent (is_pm=1 AND is_master=1). The workspace's POST handler
+  // enforces this on creation; the gate here protects against late
+  // operator actions (manual DB edits, demoted PM, etc.) that would
+  // otherwise leave dispatch undefined.
+  assertWorkspacePm(input.workspace_id);
   const snapshot = getRoadmapSnapshot({ workspace_id: input.workspace_id });
   const pm = lookupPmAgent(input.workspace_id);
   const allowFallback = input.allowFallback ?? true;
@@ -498,6 +505,9 @@ const RECONCILER_POLL_MS = 2_000;
 export function dispatchPmSynthesized(
   input: DispatchSynthesizedInput,
 ): DispatchSynthesizedResult {
+  // Phase G: gate every PM dispatch on the workspace having a PM. See
+  // dispatchPm above for the rationale.
+  assertWorkspacePm(input.workspace_id);
   const pm = lookupPmAgent(input.workspace_id);
   const gw = gatewayClient();
   const gatewayUp = !!(pm && pm.gateway_agent_id && gw.isConnected());
