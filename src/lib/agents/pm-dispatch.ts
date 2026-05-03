@@ -137,6 +137,21 @@ function namedAgentTimeoutMs(): number {
 }
 
 /**
+ * Identity preamble prepended to every PM dispatch message. Required because
+ * `gateway_agent_id` is org-wide (PR #133): a single gateway id like
+ * `mc-project-manager` legitimately maps to N rows after workspace cloning,
+ * so `whoami({ agent_id: gateway_agent_id })` returns `ambiguous_gateway_id`.
+ * Embedding the workspace-scoped UUID up front lets the agent skip whoami
+ * entirely and call `propose_changes` immediately.
+ */
+function buildIdentityPreamble(pm: Agent): string {
+  return (
+    `Your agent_id is: ${pm.id}\n` +
+    `Your gateway_agent_id is: ${pm.gateway_agent_id ?? '(unset)'}\n\n`
+  );
+}
+
+/**
  * Top-level disruption dispatch. Returns the synth placeholder row
  * synchronously so the API can respond fast; the named-agent dispatch
  * runs in the background and either supersedes the placeholder via SSE
@@ -255,10 +270,12 @@ async function runDisruptionDispatchInBackground(
   const correlationId = uuidv4();
   const sinceIso = new Date().toISOString();
   const summary = buildSnapshotSummary(snapshot);
+  const preamble = buildIdentityPreamble(pm);
   const message =
     input.trigger_kind === 'notes_intake'
-      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
-      : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
+      ? preamble + buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
+      : preamble +
+        `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator-reported event:\n> ${input.trigger_text}\n\n` +
         `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
         `${summary}\n\n` +
@@ -527,6 +544,7 @@ async function runNamedAgentDispatchInBackground(
     result = await sendChatAndAwaitReply({
       agent: pm,
       message:
+        buildIdentityPreamble(pm) +
         `**PM ${input.trigger_kind} (correlation_id: ${correlationId})**\n\n` +
         input.agent_prompt,
       idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
