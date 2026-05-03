@@ -24,9 +24,54 @@ import {
   type RoleName,
 } from '@/lib/gates/config';
 import { formatRoleSoulSection } from '@/lib/agents/role-souls';
+import { dispatchScope } from '@/lib/agents/dispatch-scope';
+import {
+  computeWorkerScopeSuffix,
+  getRunnerAgent,
+  isScopeKeyedDispatchEnabled,
+  nextWorkerAttempt,
+} from '@/lib/agents/runner';
+import type { BriefingRole } from '@/lib/agents/briefing';
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
 import type { Task, Agent, Product, OpenClawSession, WorkflowStage, TaskImage } from '@/lib/types';
+
+/**
+ * Map a per-role gateway agent (`mc-builder-dev`, etc.) onto the
+ * scope-keyed-dispatch role label. Falls back to inspecting the
+ * agent's `role` column when the gateway id doesn't match a known
+ * role pattern.
+ */
+function resolveBriefingRole(agent: Agent): BriefingRole | null {
+  const gw = (agent as Agent & { gateway_agent_id?: string | null }).gateway_agent_id ?? '';
+  const baseId = gw.replace(/^mc-/, '').replace(/-dev$/, '');
+  if (
+    baseId === 'builder' ||
+    baseId === 'tester' ||
+    baseId === 'reviewer' ||
+    baseId === 'researcher' ||
+    baseId === 'writer' ||
+    baseId === 'learner' ||
+    baseId === 'coordinator'
+  ) {
+    return baseId;
+  }
+  if (baseId === 'project-manager') return 'pm';
+  const role = (agent as Agent & { role?: string | null }).role ?? '';
+  switch (role) {
+    case 'builder':
+    case 'tester':
+    case 'reviewer':
+    case 'researcher':
+    case 'writer':
+    case 'learner':
+    case 'coordinator':
+    case 'pm':
+      return role;
+    default:
+      return null;
+  }
+}
 
 export const dynamic = 'force-dynamic';
 interface RouteParams {
@@ -892,12 +937,65 @@ If you need help or clarification, ask the orchestrator.`;
     try {
       const idempotencyKey = `dispatch-${task.id}-${Date.now()}`;
       const chatSendStart = Date.now();
-      const sendResult = await sendChatToAgent({
-        agent,
-        message: finalMessage,
-        idempotencyKey,
-        sessionSuffix: session.openclaw_session_id,
-      });
+
+      // Phase C scope-keyed dispatch path. Gated by
+      // MC_USE_SCOPE_KEYED_DISPATCH=1. When enabled, the chat.send
+      // routes through the org-wide mc-runner-dev agent with a
+      // briefing composed by buildBriefing(). The legacy per-role
+      // agent stays as the task's `assigned_agent_id` for the
+      // operator UI (and remains the fallback when the runner is
+      // missing).
+      const useScopeKeyed = isScopeKeyedDispatchEnabled();
+      const runner = useScopeKeyed ? getRunnerAgent() : null;
+      const briefingRole = runner ? resolveBriefingRole(agent) : null;
+
+      let sendResult: Awaited<ReturnType<typeof sendChatToAgent>>;
+
+      if (useScopeKeyed && runner && briefingRole) {
+        // Scope-keyed branch: the runner receives the briefing; the
+        // briefing carries the role-soul + identity preamble carrying
+        // the runner's UUID + a notetaker addendum + the legacy
+        // task message as the trigger body. Workers retry-attempt
+        // strategy is `fresh`: each retry mints a new attempt
+        // segment so the trajectory starts clean.
+        const attempt = nextWorkerAttempt(task.id, briefingRole);
+        const sessionSuffix = computeWorkerScopeSuffix({
+          workspace_id: task.workspace_id ?? '',
+          task_id: task.id,
+          role: briefingRole,
+          attempt,
+        });
+        const dispatchResult = await dispatchScope({
+          workspace_id: task.workspace_id ?? '',
+          role: briefingRole,
+          agent: runner,
+          session_suffix: sessionSuffix,
+          trigger_body: finalMessage,
+          scope_type: 'task_role',
+          task_id: task.id,
+          attempt_strategy: 'fresh',
+          idempotencyKey,
+          dry_run: true,
+        });
+        // dispatchScope dry-runs the briefing assembly + mc_sessions
+        // upsert; the actual chat.send still goes through
+        // sendChatToAgent for the existing logging / error-path
+        // behavior (logDebugEvent, sendResult shape, etc.).
+        sendResult = await sendChatToAgent({
+          agent: runner,
+          message: dispatchResult.briefing,
+          idempotencyKey,
+          sessionSuffix,
+        });
+      } else {
+        // Legacy path (default until MC_USE_SCOPE_KEYED_DISPATCH=1).
+        sendResult = await sendChatToAgent({
+          agent,
+          message: finalMessage,
+          idempotencyKey,
+          sessionSuffix: session.openclaw_session_id,
+        });
+      }
       const sessionKey = sendResult.sessionKey;
       // Debug console capture. No-op unless collection is enabled. Stores
       // the full dispatch payload so operators can see exactly what the
