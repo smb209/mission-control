@@ -351,6 +351,17 @@ test('dispatchPm: routes through named agent when openclaw is connected; mock cr
     assert.ok(send);
     const sk = (send!.params as { sessionKey?: string }).sessionKey;
     assert.equal(sk, `agent:${TEST_PM_GATEWAY_AGENT_ID}:main:dispatch-main`);
+    // Identity preamble must embed the PM's MC agent_id (UUID) so the agent
+    // can call propose_changes without round-tripping whoami — required since
+    // PR #133 made gateway_agent_id ambiguous across cloned workspaces.
+    const pm = queryOne<{ id: string }>(
+      `SELECT id FROM agents WHERE workspace_id = ? AND is_pm = 1`,
+      [ws],
+    );
+    assert.ok(pm);
+    const msg = (send!.params as { message?: string }).message ?? '';
+    assert.match(msg, new RegExp(`Your agent_id is: ${pm!.id}`));
+    assert.match(msg, new RegExp(`Your gateway_agent_id is: ${TEST_PM_GATEWAY_AGENT_ID}`));
   } finally {
     __setOpenClawClientForTests(null);
     __setNamedAgentTimeoutForTests(null);
