@@ -3894,6 +3894,24 @@ const migrations: Migration[] = [
       console.log('[Migration 068] coordinator_mode columns added to workspaces + tasks.');
     },
   },
+  {
+    id: '069',
+    name: 'pm_is_master_required',
+    up: (db) => {
+      // Phase G: the PM is the workspace's only required agent and is
+      // also the master orchestrator (is_master=1). Backfill the flag
+      // on every existing PM placeholder so legacy workspaces converge
+      // without operator intervention. New PMs are created with both
+      // flags by ensurePmAgent (see src/lib/bootstrap-agents.ts).
+      const result = db.prepare(
+        `UPDATE agents SET is_master = 1, updated_at = datetime('now')
+          WHERE is_pm = 1 AND COALESCE(is_master, 0) = 0`,
+      ).run();
+      console.log(
+        `[Migration 069] is_master=1 backfilled on ${result.changes} PM agent row(s).`,
+      );
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
