@@ -3976,6 +3976,34 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: '071',
+    name: 'per_workspace_pms',
+    up: (db) => {
+      // Phase I: workspace-scoped PMs replace the org-wide singleton
+      // runner from Phase H. Each MC workspace has its own openclaw
+      // agent with gateway_agent_id `mc-pm-<slug>-(dev)?`, providing
+      // per-workspace memory isolation (separate SQLite + LanceDB).
+      // The `mc-runner` / `mc-runner-dev` rows stay in the catalog
+      // (operators may still use them for non-workspace duties) but
+      // are demoted from PM/master so hasWorkspacePm / getPmAgent
+      // skip them.
+      const demoted = db.prepare(
+        `UPDATE agents
+            SET is_pm = 0,
+                is_master = 0,
+                role = 'runner',
+                description = 'Org-wide session host (demoted from PM in Phase I; per-workspace mc-pm-<slug>-* takes over)',
+                updated_at = datetime('now')
+          WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
+            AND (is_pm = 1 OR is_master = 1)`,
+      ).run();
+      console.log(
+        `[Migration 071] demoted ${demoted.changes} legacy runner row(s) from PM. ` +
+          `Per-workspace mc-pm-<slug> agents are now the canonical PM.`,
+      );
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

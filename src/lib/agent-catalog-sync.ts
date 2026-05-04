@@ -67,6 +67,43 @@ function preferredRunnerGatewayId(env: NodeJS.ProcessEnv = process.env): 'mc-run
 }
 
 /**
+ * Phase I: are we running in a dev environment? Drives whether we
+ * accept `mc-pm-<slug>-dev` (dev) or `mc-pm-<slug>` (prod) as
+ * workspace PM gateway ids.
+ */
+function isDevEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.MC_RUNNER_GATEWAY_ID === 'mc-runner-dev') return true;
+  if (env.MC_RUNNER_GATEWAY_ID === 'mc-runner') return false;
+  return env.NODE_ENV === 'development' || env.MC_ENV === 'dev';
+}
+
+/**
+ * Phase I: parse a workspace PM gateway id and return the slug if it
+ * matches the canonical shape for this environment, else null.
+ *   dev:  mc-pm-<slug>-dev → <slug>
+ *   prod: mc-pm-<slug>     → <slug>
+ *
+ * The `<slug>` itself must match the openclaw segment grammar
+ * (`[a-z0-9][a-z0-9_-]{0,63}` minus reserved prefixes/suffixes) and
+ * cannot contain a colon.
+ */
+export function parseWorkspacePmGatewayId(
+  gatewayId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!gatewayId.startsWith('mc-pm-')) return null;
+  const tail = gatewayId.slice('mc-pm-'.length);
+  if (isDevEnv(env)) {
+    if (!tail.endsWith('-dev')) return null;
+    const slug = tail.slice(0, -'-dev'.length);
+    return slug.length > 0 ? slug : null;
+  }
+  // prod: must NOT end in -dev (otherwise it's the dev variant)
+  if (tail.endsWith('-dev')) return null;
+  return tail.length > 0 ? tail : null;
+}
+
+/**
  * Decide which gateway agent ids should sync into the catalog. Returns
  * the included subset and the set of gateway ids that were filtered
  * out, so the caller can mark previously-synced excluded rows offline.
@@ -202,30 +239,58 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
         const name = ga.name || ga.label || gatewayId;
         const role = normalizeRole(name);
 
+        // Phase I: gateway id classification.
+        //   - workspace-PM gateway id matches `mc-pm-<slug>-(dev)?` → bind to that
+        //     workspace and flag as PM/master.
+        //   - org-wide runner (`mc-runner` / `mc-runner-dev`) → keep as session
+        //     host, NOT PM. (Phase H promoted it; Phase I demotes back.)
+        //   - anything else → skip insert (legacy per-role workers etc.).
+        const wsPmSlug = parseWorkspacePmGatewayId(gatewayId);
+        const isOrgRunner = gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev';
+        let wsPmWorkspaceId: string | null = null;
+        if (wsPmSlug) {
+          const ws = queryOne<{ id: string }>(
+            `SELECT id FROM workspaces WHERE slug = ? LIMIT 1`,
+            [wsPmSlug],
+          );
+          wsPmWorkspaceId = ws?.id ?? null;
+        }
+
         if (existingGatewayIds.has(gatewayId)) {
-          // Update every existing row for this gateway_agent_id (one per
-          // workspace that has an agent linked to it). Flip status off
-          // 'offline' if a previous sync had marked it filtered-out and
-          // the operator has now included it again.
-          //
-          // Phase H: runner rows are also re-asserted as is_pm=1 +
-          // is_master=1 so a stale row that lost the flags (manual DB
-          // edit, partial migration) self-heals on the next sync.
-          const isRunner = gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev';
-          if (isRunner) {
+          // Update every existing row for this gateway_agent_id. Self-heal
+          // the PM/master flags so a stale row recovers from a manual DB
+          // edit or partial migration.
+          if (wsPmSlug && wsPmWorkspaceId) {
             run(
               `UPDATE agents
                   SET name = ?,
-                      role = CASE WHEN role IS NULL OR role = 'builder' THEN ? ELSE role END,
+                      role = 'pm',
                       model = COALESCE(?, model),
                       source = 'gateway',
                       status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
                       is_pm = 1,
                       is_master = 1,
                       is_active = 1,
+                      workspace_id = ?,
                       updated_at = ?
                 WHERE gateway_agent_id = ?`,
-              [name, role, normaliseModel(ga.model), ts, gatewayId]
+              [name, normaliseModel(ga.model), wsPmWorkspaceId, ts, gatewayId]
+            );
+          } else if (isOrgRunner) {
+            // Phase I: org-wide runner is no longer the PM. Demote on
+            // every sync so a previously-promoted row settles back.
+            run(
+              `UPDATE agents
+                  SET name = ?,
+                      role = 'runner',
+                      model = COALESCE(?, model),
+                      source = 'gateway',
+                      status = CASE WHEN status = 'offline' THEN 'standby' ELSE status END,
+                      is_pm = 0,
+                      is_master = 0,
+                      updated_at = ?
+                WHERE gateway_agent_id = ?`,
+              [name, normaliseModel(ga.model), ts, gatewayId]
             );
           } else {
             run(
@@ -241,26 +306,56 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
             );
           }
           changed += 1;
-        } else if (gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev') {
-          // Phase F: only auto-create rows for the org-wide runner.
-          // Per-role workers (mc-builder, mc-tester, etc.) are no
-          // longer durable agents — work routes through the runner
-          // with role-specific briefings.
-          //
-          // Phase H: the runner IS the PM. Insert with is_pm=1 +
-          // is_master=1 so a fresh DB has a working PM the moment
-          // catalog sync completes.
+        } else if (wsPmSlug && wsPmWorkspaceId) {
+          // Phase I: insert per-workspace PM agent. The workspace must
+          // exist already (POST /api/workspaces created it before the
+          // operator added the openclaw agent). If the workspace
+          // matching the slug doesn't exist yet, skip — next sync tick
+          // will pick it up.
           run(
             `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, is_pm, is_active, workspace_id, model, source, gateway_agent_id, created_at, updated_at)
-             VALUES (lower(hex(randomblob(16))), ?, 'pm', ?, '🎯', 1, 1, 1, 'default', ?, 'gateway', ?, ?, ?)`,
-            [name, `Org-wide PM + scope-keyed-session host (${gatewayId})`, normaliseModel(ga.model), gatewayId, ts, ts]
+             VALUES (lower(hex(randomblob(16))), ?, 'pm', ?, '🎯', 1, 1, 1, ?, ?, 'gateway', ?, ?, ?)`,
+            [
+              name,
+              `Workspace PM (${gatewayId}) — owns workspace memory + dispatches workers`,
+              wsPmWorkspaceId,
+              normaliseModel(ga.model),
+              gatewayId,
+              ts,
+              ts,
+            ]
           );
           changed += 1;
+        } else if (isOrgRunner) {
+          // Phase I: org-wide runner stays in the catalog as a session
+          // host (no PM flags). Operators may still use it for
+          // cross-workspace org-knowledge or as their personal
+          // assistant; MC doesn't dispatch workspace work here.
+          run(
+            `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, is_pm, is_active, workspace_id, model, source, gateway_agent_id, created_at, updated_at)
+             VALUES (lower(hex(randomblob(16))), ?, 'runner', ?, '🎯', 0, 0, 1, 'default', ?, 'gateway', ?, ?, ?)`,
+            [
+              name,
+              `Org-wide session host (${gatewayId}) — not used for workspace dispatch in Phase I`,
+              normaliseModel(ga.model),
+              gatewayId,
+              ts,
+              ts,
+            ]
+          );
+          changed += 1;
+        } else if (wsPmSlug && !wsPmWorkspaceId) {
+          // Workspace-PM-shaped gateway id, but no matching workspace
+          // exists yet. Log and move on — the operator either typoed
+          // the slug or the openclaw agent was created before the MC
+          // workspace. Next sync will pick it up automatically.
+          console.warn(
+            `[AgentCatalog] gateway agent ${gatewayId} matches mc-pm-<slug>-(dev)? but no workspace with slug "${wsPmSlug}" exists; skipping insert`,
+          );
         } else {
-          // Non-runner, non-existing gateway id: skip insert. The
-          // gateway exposes per-role agents for backwards compat
-          // with operators who haven't migrated, but Phase F+ MC
-          // doesn't materialize them as DB rows.
+          // Non-PM, non-runner, non-existing gateway id: skip insert.
+          // (Legacy per-role workers fall through here — Phase F
+          // intentionally stopped materializing them as DB rows.)
         }
       }
 

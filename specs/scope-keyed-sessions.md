@@ -801,7 +801,39 @@ Removed (Phase F):
 - [x] Phase C — workers via scope-keyed dispatch (feature-flagged) — PR #150
 - [x] Phase D — observability surfaces (NotesRail, /feed, badges, PM Chat) — PR #151
 - [x] Phase E — recurring jobs scheduler + heartbeat coordinator — PR #152
-- [x] Phase F — decommission durable workers, flip flag default — PR pending
+- [x] Phase F — decommission durable workers, flip flag default — PR #153
+- [x] Phase G — PM is the workspace's only required agent (PM+master flags) — PR #154
+- [x] Phase H — runner IS the PM (singleton runner with PM flags) — PR #155
+- [x] Phase I — per-workspace PMs (mc-pm-<slug>-*) — current PR; **supersedes Phase H**
+
+### Architectural correction in Phase I
+
+Phase H concentrated all PM duties on a singleton org-wide runner. Subsequent
+audit of openclaw's memory subsystem (per-agent SQLite + LanceDB at
+`~/.openclaw/memory/<agentId>.sqlite`) revealed that one runner serving
+multiple workspaces leaks memory (`memory_search`, vector recall, heartbeat
+writes) across workspace boundaries — the QMD scope filter is opt-in and
+default-allow.
+
+Phase I splits that out:
+
+- **Per-workspace PM** (`mc-pm-<slug>-(dev)?`) — one openclaw agent per MC
+  workspace. Memory storage is per-agent → workspace-scoped by construction.
+  Carries `is_pm=1, is_master=1, workspace_id=<workspace>`.
+- **Org-wide runner** (`mc-runner` / `mc-runner-dev`) — stays in the catalog
+  as a session host but is no longer the PM. Operators can still use it
+  for cross-workspace org-knowledge or as a personal assistant; MC doesn't
+  dispatch workspace work through it.
+
+Operator-side: each MC workspace gets a corresponding openclaw agent
+provisioned via `yarn workspace:provision <slug>`. For 10 workspaces that's
+10 openclaw agents — bounded and manageable.
+
+### Outstanding follow-ups
+
+- [ ] Phase J: optionally migrate worker dispatch from scope-keyed sibling
+      sessions on the workspace PM to openclaw `subagent_spawn` for cleaner
+      coordinator semantics
 - [ ] Run full validation pack (specs/scope-keyed-sessions-validation/)
       end-to-end against spark-lb/agent
 - [ ] Run scripts/decommission-durable-workers.ts in production

@@ -210,3 +210,70 @@ test('migration 070: legacy mc-project-manager artifact is dropped on apply', ()
   );
   assert.equal(legacy?.n, 0);
 });
+
+// ─── Phase I: per-workspace PM ──────────────────────────────────────
+
+function ensureWorkspacePm(workspaceId: string, slug: string): string {
+  const id = uuidv4();
+  const gatewayId = `mc-pm-${slug}-dev`;
+  run(
+    `INSERT OR IGNORE INTO agents (
+       id, name, role, workspace_id, gateway_agent_id, source,
+       is_pm, is_master, is_active, created_at, updated_at
+     ) VALUES (?, ?, 'pm', ?, ?, 'gateway', 1, 1, 1,
+              datetime('now'), datetime('now'))`,
+    [id, `Workspace PM ${slug}`, workspaceId, gatewayId],
+  );
+  return id;
+}
+
+test('Phase I: per-workspace PM satisfies hasWorkspacePm for that workspace only', () => {
+  dropRunners();
+  const wsA = freshWorkspace();
+  const wsB = freshWorkspace();
+  ensureWorkspacePm(wsA, 'foia');
+  // wsA has its PM, wsB does not.
+  assert.equal(hasWorkspacePm(wsA), true);
+  assert.equal(hasWorkspacePm(wsB), false);
+});
+
+test('Phase I: getPmAgent returns the workspace-specific PM, not a sibling workspace\'s', async () => {
+  dropRunners();
+  const wsA = freshWorkspace();
+  const wsB = freshWorkspace();
+  const pmAId = ensureWorkspacePm(wsA, 'foia');
+  const pmBId = ensureWorkspacePm(wsB, 'mktg');
+  const { getPmAgent } = await import('./agents/pm-resolver');
+  assert.equal(getPmAgent(wsA)?.id, pmAId);
+  assert.equal(getPmAgent(wsB)?.id, pmBId);
+});
+
+test('Phase I: workspace PM precedence — workspace-scoped wins over Phase-H singleton runner', async () => {
+  dropRunners();
+  ensureRunner('mc-runner-dev'); // Phase H singleton, would-be PM
+  const ws = freshWorkspace();
+  const wsPmId = ensureWorkspacePm(ws, 'foia');
+  const { getPmAgent } = await import('./agents/pm-resolver');
+  // Even though the singleton runner is flagged as PM (back-compat),
+  // the workspace-scoped PM wins for that workspace.
+  assert.equal(getPmAgent(ws)?.id, wsPmId);
+});
+
+test('Phase I: parseWorkspacePmGatewayId — dev env shape', async () => {
+  const { parseWorkspacePmGatewayId } = await import('./agent-catalog-sync');
+  const dev = { NODE_ENV: 'development' } as NodeJS.ProcessEnv;
+  assert.equal(parseWorkspacePmGatewayId('mc-pm-foia-dev', dev), 'foia');
+  assert.equal(parseWorkspacePmGatewayId('mc-pm-mktg-dev', dev), 'mktg');
+  assert.equal(parseWorkspacePmGatewayId('mc-pm-foia', dev), null, 'dev env should reject prod-shaped id');
+  assert.equal(parseWorkspacePmGatewayId('mc-runner-dev', dev), null);
+  assert.equal(parseWorkspacePmGatewayId('mc-builder-dev', dev), null);
+  assert.equal(parseWorkspacePmGatewayId('mc-pm--dev', dev), null, 'empty slug should be rejected');
+});
+
+test('Phase I: parseWorkspacePmGatewayId — prod env shape', async () => {
+  const { parseWorkspacePmGatewayId } = await import('./agent-catalog-sync');
+  const prod = { NODE_ENV: 'production', MC_RUNNER_GATEWAY_ID: 'mc-runner' } as NodeJS.ProcessEnv;
+  assert.equal(parseWorkspacePmGatewayId('mc-pm-foia', prod), 'foia');
+  assert.equal(parseWorkspacePmGatewayId('mc-pm-foia-dev', prod), null, 'prod env should reject dev-shaped id');
+  assert.equal(parseWorkspacePmGatewayId('mc-runner', prod), null);
+});
