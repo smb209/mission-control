@@ -4004,6 +4004,44 @@ const migrations: Migration[] = [
       );
     },
   },
+  {
+    id: '072',
+    name: 'mc_sessions_run_id',
+    up: (db) => {
+      // Phase J1: openclaw's `sessions_spawn` returns a `runId` distinct
+      // from the session_key. We need both to correlate subagent
+      // lifecycle events (subagent_ended hooks, retries, audit) back to
+      // the dispatch row in mc_sessions. Nullable column — only
+      // populated when register_subagent_dispatch writes the row.
+      const cols = db.prepare(`PRAGMA table_info(mc_sessions)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'run_id')) {
+        db.exec(`ALTER TABLE mc_sessions ADD COLUMN run_id TEXT`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_run_id ON mc_sessions(run_id) WHERE run_id IS NOT NULL`);
+      }
+      console.log('[Migration 072] mc_sessions.run_id column added.');
+    },
+  },
+  {
+    id: '073',
+    name: 'agent_role_overrides_subagent_context_mode',
+    up: (db) => {
+      // Phase J1: per-role default for openclaw subagent context mode.
+      // 'isolated' = clean child session (default for builder/tester/etc.)
+      // 'fork'     = parent transcript forked into child (default for
+      //              future summarization-style roles that need PM context).
+      // NULL       = use the per-role baked default in
+      //              src/lib/agents/dispatch-subagent.ts.
+      const cols = db.prepare(`PRAGMA table_info(agent_role_overrides)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'subagent_context_mode')) {
+        db.exec(`
+          ALTER TABLE agent_role_overrides
+            ADD COLUMN subagent_context_mode TEXT
+            CHECK (subagent_context_mode IN ('isolated', 'fork'))
+        `);
+      }
+      console.log('[Migration 073] agent_role_overrides.subagent_context_mode column added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

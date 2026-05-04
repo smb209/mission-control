@@ -34,6 +34,7 @@ import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask } from '@/lib/convoy';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
+import { upsertSession, type ScopeType } from '@/lib/db/mc-sessions';
 import {
   archiveNote as archiveNoteDb,
   createNote,
@@ -1898,6 +1899,93 @@ export function registerAllTools(server: McpServer): void {
         subtask_id: args.subtask_id,
         child_task_id: row.task_id,
       });
+    }),
+  );
+
+  // ── Phase J: subagent dispatch registration ──────────────────────
+  // register_subagent_dispatch
+  // Called by the workspace PM right after `sessions_spawn` returns.
+  // Writes a row in mc_sessions correlating the openclaw runId +
+  // childSessionKey with the (task | initiative | recurring_job, role,
+  // attempt) tuple. Without this, MC has no way to attribute subagent
+  // activity (notes, deliverables, status transitions) to the right
+  // dispatch.
+  // See specs/scope-keyed-sessions-phase-j.md §D3.
+  server.registerTool(
+    'register_subagent_dispatch',
+    {
+      title: 'Register an openclaw subagent dispatch in mc_sessions',
+      description:
+        "After calling openclaw `sessions_spawn`, call this with the runId + childSessionKey + scope context. MC records the subagent in mc_sessions so deliverables, notes, and status transitions land on the correct (task, role, attempt) tuple. Idempotent on scope_key.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        run_id: z
+          .string()
+          .min(1)
+          .describe(
+            'The runId returned by openclaw `sessions_spawn`. Used to correlate `subagent_ended` events back to this dispatch.',
+          ),
+        child_session_key: z
+          .string()
+          .min(1)
+          .describe(
+            'The childSessionKey returned by openclaw `sessions_spawn` (shape: agent:<parentId>:subagent:<uuid>). Stored as mc_sessions.scope_key.',
+          ),
+        role: z
+          .enum([
+            'pm',
+            'coordinator',
+            'builder',
+            'researcher',
+            'tester',
+            'reviewer',
+            'writer',
+            'learner',
+          ])
+          .describe('Role the subagent is dispatched to perform.'),
+        scope_type: z
+          .enum(['task_role', 'recurring', 'heartbeat'])
+          .describe('Why this subagent was spawned. task_role = per-task worker dispatch.'),
+        task_id: z.string().min(1).optional().describe('Task UUID for task_role spawns.'),
+        initiative_id: z.string().min(1).optional().describe('Initiative UUID for initiative-scoped spawns.'),
+        recurring_job_id: z.string().min(1).optional().describe('Recurring job UUID for scope_type=recurring.'),
+        attempt: z
+          .number()
+          .int()
+          .positive()
+          .default(1)
+          .describe('Attempt number (1 = first dispatch, 2 = retry, etc.).'),
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    trace('register_subagent_dispatch', async (args) => {
+      assertAgentActive(args.agent_id);
+      const workspaceId = deriveWorkspaceFromAgent(args.agent_id);
+      const result = upsertSession({
+        scope_key: args.child_session_key,
+        workspace_id: workspaceId,
+        role: args.role,
+        scope_type: args.scope_type as ScopeType,
+        task_id: args.task_id ?? null,
+        initiative_id: args.initiative_id ?? null,
+        recurring_job_id: args.recurring_job_id ?? null,
+        attempt: args.attempt,
+        run_id: args.run_id,
+      });
+      const payload = {
+        scope_key: result.session.scope_key,
+        run_id: result.session.run_id,
+        workspace_id: result.session.workspace_id,
+        role: result.session.role,
+        scope_type: result.session.scope_type,
+        task_id: result.session.task_id,
+        initiative_id: result.session.initiative_id,
+        recurring_job_id: result.session.recurring_job_id,
+        attempt: result.session.attempt,
+        status: result.session.status,
+        is_new: result.is_new,
+      };
+      return textResult(JSON.stringify(payload, null, 2), payload);
     }),
   );
 }
