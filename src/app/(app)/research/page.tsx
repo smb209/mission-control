@@ -142,7 +142,7 @@ export default function ResearchHubPage() {
               onClick={() => setSuggestKind('topic')}
               className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-accent hover:bg-mc-bg-tertiary"
               aria-label="Suggest topics"
-              title="Suggest topics from project state"
+              title="Suggest topics — ask the PM to propose long-lived areas to track based on workspace state"
             >
               <Sparkles className="w-4 h-4" />
             </button>
@@ -208,11 +208,11 @@ export default function ResearchHubPage() {
             <button
               type="button"
               onClick={() => setSuggestKind('brief')}
-              title="Suggest briefs from project state"
+              title="Suggest briefs — ask the PM to propose specific research questions based on workspace state"
               className="px-3 py-1.5 text-sm rounded-sm border border-mc-border text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-1.5"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              Suggest
+              Suggest briefs
             </button>
             <button
               type="button"
