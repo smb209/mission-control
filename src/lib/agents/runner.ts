@@ -64,6 +64,21 @@ export function isScopeKeyedDispatchEnabled(): boolean {
 }
 
 /**
+ * Phase J2: feature flag for the openclaw `sessions_spawn`-based
+ * worker dispatch path. Default OFF. Set MC_USE_SUBAGENT_SPAWN=1 to
+ * route worker dispatches via the workspace PM's per-task coord
+ * session (which then calls openclaw's sessions_spawn) instead of the
+ * Phase C scope-keyed sibling-session path.
+ *
+ * Flips to default-on in Phase K once we've validated against
+ * spark-lb/agent.
+ */
+export function isSubagentSpawnEnabled(): boolean {
+  return process.env.MC_USE_SUBAGENT_SPAWN === '1' ||
+    process.env.MC_USE_SUBAGENT_SPAWN === 'true';
+}
+
+/**
  * Compute the scope_suffix for a worker dispatch.
  *
  * Format: `ws-<wsid>:task-<task_id>:<role>:<attempt>`

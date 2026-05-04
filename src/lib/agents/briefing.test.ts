@@ -192,6 +192,109 @@ test('buildBriefing: role + addendum + trigger order is identity → role → ad
   }
 });
 
+// ─── Phase J2: active-subagent manifest ────────────────────────────
+
+test('Phase J2: buildBriefing injects active-subagent manifest when task_id set + active sessions exist', () => {
+  const fx = makeFixtureTemplates();
+  __setTemplatesDirForTests(fx.dir);
+  const ws = freshWorkspace();
+  try {
+    const taskId = uuidv4();
+    // Seed a task + an active mc_session for it.
+    run(
+      `INSERT INTO tasks (id, workspace_id, title, status, created_at, updated_at)
+       VALUES (?, ?, 't', 'in_progress', datetime('now'), datetime('now'))`,
+      [taskId, ws],
+    );
+    run(
+      `INSERT INTO mc_sessions (scope_key, workspace_id, role, scope_type, task_id,
+                                  attempt, status, run_id, last_used_at, created_at)
+       VALUES (?, ?, 'builder', 'task_role', ?, 1, 'active', 'run-abc12345-xx',
+               datetime('now'), datetime('now'))`,
+      [`agent:mc-pm-test-dev:subagent:${uuidv4()}`, ws, taskId],
+    );
+
+    const out = buildBriefing({
+      workspace_id: ws,
+      role: 'pm',
+      scope_key: `agent:mc-pm-test-dev:coord-task-${taskId}`,
+      agent_id: 'pm-uuid',
+      gateway_agent_id: 'mc-pm-test-dev',
+      run_group_id: 'rg',
+      task_id: taskId,
+      trigger_body: 'TRIGGER',
+    });
+    assert.match(out, /Active subagents for this task:/);
+    assert.match(out, /\*\*builder\*\* attempt 1/);
+    assert.match(out, /run-abc12345/);
+    assert.match(out, /status=active/);
+    // Manifest precedes the trigger body.
+    const manifestIdx = out.indexOf('Active subagents');
+    const triggerIdx = out.indexOf('TRIGGER');
+    assert.ok(manifestIdx > 0 && manifestIdx < triggerIdx, 'manifest should come before trigger');
+  } finally {
+    __setTemplatesDirForTests(null);
+    fx.cleanup();
+  }
+});
+
+test('Phase J2: buildBriefing skips manifest when task_id missing', () => {
+  const fx = makeFixtureTemplates();
+  __setTemplatesDirForTests(fx.dir);
+  const ws = freshWorkspace();
+  try {
+    const out = buildBriefing({
+      workspace_id: ws,
+      role: 'pm',
+      scope_key: 'sk',
+      agent_id: 'aid',
+      gateway_agent_id: 'mc-pm-test-dev',
+      run_group_id: 'rg',
+      trigger_body: 'body',
+    });
+    assert.doesNotMatch(out, /Active subagents/);
+  } finally {
+    __setTemplatesDirForTests(null);
+    fx.cleanup();
+  }
+});
+
+test('Phase J2: buildBriefing skips manifest when no active sessions for the task', () => {
+  const fx = makeFixtureTemplates();
+  __setTemplatesDirForTests(fx.dir);
+  const ws = freshWorkspace();
+  try {
+    const taskId = uuidv4();
+    run(
+      `INSERT INTO tasks (id, workspace_id, title, status, created_at, updated_at)
+       VALUES (?, ?, 't', 'done', datetime('now'), datetime('now'))`,
+      [taskId, ws],
+    );
+    // Closed session shouldn't appear in the manifest.
+    run(
+      `INSERT INTO mc_sessions (scope_key, workspace_id, role, scope_type, task_id,
+                                  attempt, status, last_used_at, created_at, closed_at)
+       VALUES ('sk-closed', ?, 'builder', 'task_role', ?, 1, 'closed',
+               datetime('now'), datetime('now'), datetime('now'))`,
+      [ws, taskId],
+    );
+    const out = buildBriefing({
+      workspace_id: ws,
+      role: 'pm',
+      scope_key: 'sk',
+      agent_id: 'aid',
+      gateway_agent_id: 'mc-pm-test-dev',
+      run_group_id: 'rg',
+      task_id: taskId,
+      trigger_body: 'body',
+    });
+    assert.doesNotMatch(out, /Active subagents/);
+  } finally {
+    __setTemplatesDirForTests(null);
+    fx.cleanup();
+  }
+});
+
 test('briefingByteLength matches buildBriefing UTF-8 length', () => {
   const fx = makeFixtureTemplates();
   __setTemplatesDirForTests(fx.dir);
