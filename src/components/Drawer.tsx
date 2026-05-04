@@ -28,6 +28,16 @@ export default function Drawer({
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  // Stash onClose in a ref so the open/setup effect can depend on
+  // `open` ALONE. Including onClose in the dep array re-ran the
+  // effect on every parent render (typical onClose props are fresh
+  // closures), which re-stole focus to the first focusable element
+  // (the X close button) on every keystroke in form fields. The
+  // keydown handler reads from the ref, so it always sees the
+  // current onClose without needing a re-subscription.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
   // Render via portal so the fixed-positioned panel can't get trapped by
   // an ancestor that creates a containing block (e.g. a parent flex column,
   // CSS containment, or future transform). Mount-gated to keep SSR happy.
@@ -40,19 +50,27 @@ export default function Drawer({
 
     previouslyFocused.current = (document.activeElement as HTMLElement) || null;
 
-    // Move focus into the drawer.
+    // Move focus into the drawer. Prefer an autoFocus'd input over
+    // the close button so opening the drawer lands the cursor where
+    // the operator most likely wants it. Falls back to the first
+    // focusable if no autofocus target exists.
     const panel = panelRef.current;
     if (panel) {
-      const focusable = panel.querySelector<HTMLElement>(
-        'input, textarea, select, button, [tabindex]:not([tabindex="-1"])',
-      );
-      focusable?.focus();
+      const autofocus =
+        panel.querySelector<HTMLElement>('[autofocus]') ??
+        panel.querySelector<HTMLElement>(
+          'input, textarea, select, [tabindex]:not([tabindex="-1"])',
+        ) ??
+        panel.querySelector<HTMLElement>(
+          'button, [tabindex]:not([tabindex="-1"])',
+        );
+      autofocus?.focus();
     }
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === 'Tab' && panel) {
@@ -85,7 +103,9 @@ export default function Drawer({
       document.body.style.overflow = prevOverflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onClose
+    // deliberately excluded; see onCloseRef above.
+  }, [open]);
 
   if (!open || !mounted) return null;
 
