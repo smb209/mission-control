@@ -1,16 +1,32 @@
 /**
- * Copies `agent-templates/runner-host/{SOUL,AGENTS,IDENTITY}.md` into
- * `~/.openclaw/workspaces/mc-runner{,-dev}/` so the runner agent's
- * openclaw session loads neutral host docs instead of the
- * PM-flavored copies the user originally seeded those workspaces with.
+ * Provision / re-seed the gateway runner workspaces from the
+ * canonical templates in `agent-templates/runner-host/`.
  *
- * Phase C of specs/scope-keyed-sessions.md. Run once after this PR
- * lands; idempotent (overwrites the three files exactly).
+ * For each of `~/.openclaw/workspaces/mc-runner` and
+ * `~/.openclaw/workspaces/mc-runner-dev`:
+ *   1. Overwrite SOUL.md / AGENTS.md / IDENTITY.md / USER.md from the
+ *      template dir. These are the runner's identity & contract files
+ *      (including the direct-chat persona-init protocol in SOUL.md);
+ *      they should always match the repo's source-of-truth.
+ *   2. Remove `HEARTBEAT.md` and `TOOLS.md` if present. Those are
+ *      artifacts cloned from another openclaw workspace template and
+ *      don't apply to a neutral runner — HEARTBEAT.md is PM-flavored
+ *      and TOOLS.md is environment-specific scratch space. Leaving
+ *      them in place causes the runner to load PM heartbeat behavior
+ *      it shouldn't run.
  *
- * Files outside the host triple (HEARTBEAT.md, USER.md, MEMORY-ORG.md
- * symlink, etc.) are left alone — those are operator state.
+ * Run this:
+ *   - Once after first checkout to neutralize a freshly-cloned
+ *     openclaw workspace (originally PM-flavored).
+ *   - Whenever the templates in `agent-templates/runner-host/`
+ *     change, to push the update to the gateway dirs.
  *
- * Usage: yarn tsx scripts/neutralize-runner-host.ts
+ * Idempotent — copies are content-compared, removals tolerate ENOENT.
+ * The MEMORY-ORG.md / MESSAGING-PROTOCOL.md / SHARED-RULES.md
+ * symlinks, MC-CONTEXT.json, team-roster.md, memory/, and projects/
+ * are left alone — those are operator state.
+ *
+ * Usage: yarn runner-host:reseed
  */
 
 import { promises as fs } from 'node:fs';
@@ -20,7 +36,16 @@ import os from 'node:os';
 const REPO_ROOT = path.resolve(__dirname, '..');
 const TEMPLATE_DIR = path.join(REPO_ROOT, 'agent-templates', 'runner-host');
 const TARGETS = ['mc-runner', 'mc-runner-dev'];
-const FILES = ['SOUL.md', 'AGENTS.md', 'IDENTITY.md'];
+// HEARTBEAT.md ships an explicit empty-stub instead of being deleted —
+// openclaw auto-recreates the file on session start with its own
+// scaffold, so deleting it just produces churn. The repo-managed copy
+// makes the "intentionally empty" intent explicit and survives
+// openclaw's recreation pass.
+const FILES = ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md'];
+// Files that must NOT exist on a neutral runner (cloned-template
+// artifacts). Removed on every run so an upstream re-clone gets
+// cleaned up automatically.
+const FILES_TO_REMOVE = ['TOOLS.md'];
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -42,6 +67,16 @@ async function copyOne(src: string, dest: string): Promise<'copied' | 'identical
   return 'copied';
 }
 
+async function removeOne(p: string): Promise<'removed' | 'absent'> {
+  try {
+    await fs.unlink(p);
+    return 'removed';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'absent';
+    throw err;
+  }
+}
+
 async function neutralize(): Promise<void> {
   process.stderr.write(`Source templates: ${TEMPLATE_DIR}\n`);
   for (const target of TARGETS) {
@@ -58,8 +93,12 @@ async function neutralize(): Promise<void> {
       );
       process.stderr.write(`  ${file.padEnd(15)} ${status}\n`);
     }
+    for (const file of FILES_TO_REMOVE) {
+      const status = await removeOne(path.join(targetDir, file));
+      process.stderr.write(`  ${file.padEnd(15)} ${status}\n`);
+    }
   }
-  process.stderr.write('\nDone. The runner agents now load neutral host docs at session start.\n');
+  process.stderr.write('\nDone. Runner workspaces are aligned with agent-templates/runner-host/.\n');
 }
 
 neutralize().catch((err) => {

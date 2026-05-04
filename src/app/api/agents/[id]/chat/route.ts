@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { sendChatToAgent, buildAgentSessionKey } from '@/lib/openclaw/send-chat';
+import {
+  buildPersonaInitBlock,
+  hasActiveOpenClawSession,
+  markSessionInitialized,
+} from '@/lib/openclaw/persona-init';
 import { attachChatListener, expectAgentReply } from '@/lib/chat-listener';
 import { broadcast } from '@/lib/events';
 import type { Agent, AgentChatMessage } from '@/lib/types';
@@ -91,15 +96,44 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     );
     broadcast({ type: 'agent_chat_message', payload: { agentId, messageId } });
 
-    // Try chat.send with a 5s timeout — same pattern as task chat.
+    // Persona-init: if this is the first send for this agent (no active
+    // openclaw_sessions row yet, or post-reset), prepend the agent's
+    // SOUL/USER/AGENTS as a one-shot system block so the runner can
+    // adopt the persona for the rest of the session. See
+    // `agent-templates/runner-host/SOUL.md` for the runner-side
+    // contract.
+    let outboundMessage = message.trim();
+    let injectedPersona = false;
+    if (!hasActiveOpenClawSession(agent.id)) {
+      const preamble = buildPersonaInitBlock(agent);
+      if (preamble) {
+        outboundMessage = `${preamble}\n${outboundMessage}`;
+        injectedPersona = true;
+      }
+    }
+
+    // Register the reply listener BEFORE we send. The chat.send
+    // round-trip can outlast the route's timeout (openclaw waits for
+    // the model to finish before acking); resolving with
+    // reason='timeout' previously meant we never registered, so the
+    // eventual reply landed with no listener and was silently dropped
+    // — UI stayed pinned on "typing". Pre-registering keeps the
+    // listener in place regardless of how long the send takes;
+    // pendingReplies has a 5min TTL so a truly failed send self-cleans.
+    expectAgentReply(sessionKey, agentId);
+
+    // Try chat.send with a 30s timeout. We don't wait the full
+    // round-trip because the listener will catch the reply
+    // asynchronously; this timeout exists so a wedged transport
+    // doesn't hang the route forever.
     let delivered = false;
     try {
       const result = await sendChatToAgent({
         agent,
-        message: message.trim(),
+        message: outboundMessage,
         idempotencyKey: `agent-chat-${messageId}`,
         sessionSuffix: `chat-${agent.id.slice(0, 8)}`,
-        timeoutMs: 5_000,
+        timeoutMs: 30_000,
       });
       if (result.sent) {
         delivered = true;
@@ -107,7 +141,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `UPDATE agent_chat_messages SET status = 'delivered' WHERE id = ?`,
           [messageId]
         );
-        expectAgentReply(sessionKey, agentId);
+        // Mark the session initialized only after a successful send,
+        // so a transport failure doesn't permanently suppress the
+        // persona block on retry. Persist the literal gateway
+        // sessionKey we just sent on so the per-session reset
+        // endpoint targets the correct session.
+        if (injectedPersona) markSessionInitialized(agent.id, sessionKey);
+        else if (!hasActiveOpenClawSession(agent.id)) markSessionInitialized(agent.id, sessionKey);
+        // Listener was pre-registered above; no second call needed.
       } else if (result.reason === 'send_failed' && result.error) {
         throw result.error;
       }

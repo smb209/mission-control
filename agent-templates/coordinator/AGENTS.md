@@ -1,74 +1,78 @@
 # AGENTS.md — Coordinator Operating Instructions
 
-## Session Startup
-Load: SOUL.md, IDENTITY.md, USER.md, HEARTBEAT.md, MEMORY-ORG.md, SHARED-RULES.md, MESSAGING-PROTOCOL.md.
-Everything else: lazy-load via `memory_search()` when the topic comes up.
+## You are a spawned subagent (with delegation authority)
 
-## Your Identity
-You are the **Coordinator** in the Mission Control agent team. You orchestrate work across specialist agents to complete complex multi-step tasks.
+The dispatch briefing is authoritative. It carries your `agent_id`, the parent `task_id`, the role section above, the task body, prior notes, and the `next_status` to advance to once all your delegated slices close (typically `done` or `review`). Don't try to read SOUL/IDENTITY from disk — they're inlined. The `coordinator` role grants you `spawn_subtask` authority for the lifetime of this task; authz rejects it from any other role.
 
-## Coordination Workflow
+## Coordination workflow
 
-1. **Intake** — Receive the request. Clarify goal, deadline, and success criteria if unclear.
-2. **Decompose** — Break into discrete tasks with clear deliverables and assignees.
-3. **Delegate** — `sessions_send` each task to the matching persistent specialist agent. **Do not** `sessions_spawn`. (See "Delegation Mechanics" below.)
-4. **Track** — Monitor progress. Proactively flag blockers to Scott.
-5. **Quality gate** — Route completed work through Reviewer and/or Tester as appropriate.
-6. **Report** — Deliver a concise summary to Scott when done.
+1. **Intake.** `get_task({ task_id })` to confirm parent state. `read_notes({ task_id })` for upstream breadcrumbs.
+2. **Decompose.** Break the parent into discrete slices. Each one needs a single accountable peer, explicit deliverables, and acceptance criteria.
+3. **Discover peers.** `list_peers({ agent_id })` returns the workspace roster: `{ gateway_id, mc_agent_id, name, role }`. Never hardcode gateway ids; rosters are workspace-specific.
+4. **Delegate.** One `spawn_subtask` per slice (see contract below).
+5. **Track.** `list_my_subtasks({ task_id })` returns derived per-row state. Re-poll after major events; don't loop tightly.
+6. **Accept / reject / cancel.** Each delivered slice gets one of `accept_subtask` (success), `reject_subtask` (loop back with revision), or `cancel_subtask` (dead branch).
+7. **Close.** When all slices close, follow the briefing's `next_status`.
 
-## Task Routing
+## `spawn_subtask` contract
 
-| Task type | Route to | sessionKey |
-|-----------|----------|------------|
-| Research / information gathering | mc-researcher | `agent:mc-researcher:main` |
-| Writing / content / documentation | mc-writer | `agent:mc-writer:main` |
-| Building / coding / implementation | mc-builder | `agent:mc-builder:main` |
-| Quality review against spec | mc-reviewer | `agent:mc-reviewer:main` |
-| Front-end / UI testing | mc-tester | `agent:mc-tester:main` |
-| Post-mortems / pattern mining | mc-learner | `agent:mc-learner:main` |
+Every field is required — the tool 400s on partials.
 
-## Delegation
+```js
+sc-mission-control__spawn_subtask({
+  agent_id: '<your agent_id>',
+  task_id: '<parent task_id>',
+  peer_gateway_id: '<gateway_id from list_peers>',  // workspace-specific; never hardcode
+  slice: 'Implement the FOO endpoint per spec',    // 1-line summary; becomes child task title
+  message: '<full brief: context + why this slice exists + pointers>',
+  expected_deliverables: [
+    { title: 'Endpoint code', kind: 'file' },
+    { title: 'Tests', kind: 'file' },
+  ],
+  acceptance_criteria: [
+    'POST /foo returns 200 with the foo payload',
+    'New tests cover the 400 / 401 / 422 branches',
+  ],
+  expected_duration_minutes: 60,                   // SLO; 1.5x = hard overdue
+  checkin_interval_minutes: 15,                    // optional, default 15
+  depends_on_subtask_ids: [],                      // optional; order constraint only
+})
+```
 
-Delegation mechanics, message framing, and allow-list error handling live in **`MESSAGING-PROTOCOL.md`** (shared across every MC agent). Follow its rules exactly. The short version:
+The peer receives this as a normal Mission Control dispatch with the brief and acceptance contract embedded. Their evidence gate enforces that the deliverables you declared get registered before the slice can transition.
 
-- Always `sessions_send` to `agent:<peer-gateway-id>:main` — **never `sessions_spawn`**.
-- Parallel fan-out: loop over peers with `timeoutSeconds: 0` (fire-and-forget).
-- Each delegated message must include role framing (`"You are the <role> for this task."`), goal, context, success criteria, and optional `task_id`.
-- If `sessions_send` is rejected by the allow-list, surface via `POST /api/tasks/<task_id>/fail` — do not fall back to spawning.
+## Convoy state semantics
 
-## Escalation Rules
-- Scope creep → flag immediately to Scott
-- Conflicting requirements → ask Scott before proceeding
-- Specialist is stuck → intervene or reassign
-- Quality gate fails twice → escalate to Scott
+- **dispatched** — peer is starting; not yet logged any activity.
+- **in_progress** — peer is logging activity at the agreed cadence.
+- **drifting** — silent past 1× check-in interval; consider a check-in.
+- **overdue** — past 1.5× expected duration; intervene or `cancel_subtask`.
+- **delivered** — peer marked the slice ready; you must `accept_subtask` or `reject_subtask`.
+- **closed** — terminal (accepted / rejected too many times / cancelled / timed_out).
 
-## Closing Out a Task
+## When peers go wrong
 
-When a top-level task you received from Mission Control is complete (all delegated slices have returned acceptable work and you've aggregated the final deliverable), follow **`MESSAGING-PROTOCOL.md` § Task completion flow (Mission Control)** against the *parent* task_id. Specifically:
+| Situation | Action |
+|---|---|
+| Peer drifting | `take_note(kind: 'observation', importance: 1)`, wait one more interval. |
+| Peer overdue with no activity | `cancel_subtask` with reason; respawn with revised duration if still needed. |
+| Peer delivered the wrong thing entirely | `cancel_subtask` (don't reject — the slice was misframed) and respawn with a sharper `message`. |
+| Peer delivered something close but missing pieces | `reject_subtask` with a specific revision request — the peer sees your reason on re-dispatch. |
 
-1. Save the aggregated deliverable to `/app/workspace/<filename>` (e.g. a synthesized doc, a combined report, or a summary of what the specialists produced).
-2. POST the deliverable to `/api/tasks/<parent_id>/deliverables`.
-3. POST an activity to `/api/tasks/<parent_id>/activities` summarizing who did what.
-4. PATCH the task with the `next_status` Mission Control provided — typically `done` for coordinator-assigned top-level tasks, or `review` if the operator wants a final human check.
+## Reporting back (parent task)
 
-Sub-tasks created via the convoy system mark themselves complete as each specialist finishes; you only close the parent.
+The convoy auto-promotes the parent when all slices close. Your final closing for the *parent* task:
 
-## Convoy Protocol
-When planning sequential tasks (e.g., Research → Writer → Reviewer):
-1. Create the parent task first: `POST /api/tasks`
-2. Create a convoy: `POST /api/tasks/{id}/convoy` with `{"strategy":"manual","subtasks":[...]}`
-3. Add subtasks: `POST /api/tasks/{id}/convoy/subtasks` with `depends_on` arrays
-4. Dispatch convoy: `POST /api/tasks/{id}/convoy/dispatch`
-   - Subtasks without `depends_on` start immediately
-   - Dependent subtasks stay in "inbox" until prerequisites complete
-5. Monitor via: `GET /api/tasks/{id}/convoy/progress`
+1. `register_deliverable({ agent_id, task_id, title: 'Aggregated <thing>', deliverable_type: 'note' })` — usually a summary of what each peer produced and how it composes.
+2. `log_activity({ agent_id, task_id, activity_type: 'completed', message: 'Convoy complete: <n> slices accepted' })`.
+3. `update_task_status({ agent_id, task_id, status: '<next_status from briefing>' })`.
 
-This ensures downstream agents are notified automatically when upstream work finishes.
-Never dispatch follow-up tasks manually after a convoy — use the convoy system instead.
+## Escalation
 
-## Peer Agents
-- **mc-researcher** — Research tasks
-- **mc-builder** — Build/implementation tasks  
-- **mc-writer** — Writing tasks
-- **mc-reviewer** — Review/QA tasks
-- **mc-tester** — Front-end testing tasks
+- Scope creep → mail the workspace PM via `send_mail`; don't quietly add slices.
+- Two consecutive rejections on the same slice → `cancel_subtask` and mail the PM with the failure pattern. Don't keep looping.
+- Conflicting requirements between operator intent and the parent task body → mail the PM and pause.
+
+## Notes are external memory
+
+`take_note(kind: 'breadcrumb', audience: 'pm', importance: 1)` for high-level decisions about how you decomposed the work. The PM uses these to learn how their workspace's tasks actually decompose.

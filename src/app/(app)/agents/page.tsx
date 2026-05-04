@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Loader2,
   Megaphone,
@@ -36,6 +37,7 @@ import { useMissionControl } from '@/lib/store';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import type { Agent, AgentStatus, AgentHealthState, OpenClawSession } from '@/lib/types';
 import { AgentModal } from '@/components/AgentModal';
+import { AgentChooser } from '@/components/AgentChooser';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DiscoverAgentsModal } from '@/components/DiscoverAgentsModal';
 import { HealthIndicator } from '@/components/HealthIndicator';
@@ -55,6 +57,7 @@ export default function AgentsPage() {
   const { agents, setAgents, agentOpenClawSessions, setAgentOpenClawSession, updateAgent, agentPings, setAgentPings } =
     useMissionControl();
   const workspaceId = useCurrentWorkspaceId();
+  const router = useRouter();
 
   // Hydrate the agents store directly. Other plan pages (workspace,
   // initiatives, pm) hydrate via their own fetches; /agents previously
@@ -80,7 +83,7 @@ export default function AgentsPage() {
   const [filter, setFilter] = useState<FilterTab>('all');
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' });
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [showChooser, setShowChooser] = useState(false);
   const [showDiscoverModal, setShowDiscoverModal] = useState(false);
   const [connectingAgentId, setConnectingAgentId] = useState<string | null>(null);
   const [activeSubAgents, setActiveSubAgents] = useState(0);
@@ -531,7 +534,7 @@ export default function AgentsPage() {
             </HeaderButton>
             <HeaderButton
               icon={<Plus className="w-4 h-4" />}
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => setShowChooser(true)}
               tone="accent"
             >
               Add Agent
@@ -601,7 +604,7 @@ export default function AgentsPage() {
                       emojiPickerOpen={emojiPickerFor === agent.id}
                       onOpenEmojiPicker={open => setEmojiPickerFor(open ? agent.id : null)}
                       onPatchField={patch => patchAgent(agent, patch)}
-                      onEdit={() => setEditingAgent(agent)}
+                      onEdit={() => router.push(`/agents/${agent.id}`)}
                       onTogglePower={() => toggleAgentActive(agent)}
                       onResetSession={() => resetAgentSession(agent)}
                       onToggleOpenClaw={() => handleConnectToOpenClaw(agent)}
@@ -614,9 +617,33 @@ export default function AgentsPage() {
         )}
       </div>
 
-      {showCreateModal && <AgentModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />}
-      {editingAgent && (
-        <AgentModal agent={editingAgent} onClose={() => setEditingAgent(null)} workspaceId={workspaceId} />
+      {showCreateModal && (
+        <AgentModal
+          onClose={() => setShowCreateModal(false)}
+          workspaceId={workspaceId}
+          onAgentCreated={createdId => router.push(`/agents/${createdId}`)}
+        />
+      )}
+      {showChooser && (
+        <AgentChooser
+          workspaceId={workspaceId}
+          workspaceHasPm={agents.some(a => !!a.is_pm && a.workspace_id === workspaceId)}
+          onClose={() => setShowChooser(false)}
+          onCreated={ids => {
+            setShowChooser(false);
+            // Refetch the roster so the new agents appear; if exactly
+            // one was created, route into its detail page so the
+            // operator can immediately fill in USER.md / model / etc.
+            fetch(`/api/agents?workspace_id=${encodeURIComponent(workspaceId)}`)
+              .then(r => (r.ok ? r.json() : null))
+              .then(data => {
+                if (Array.isArray(data)) setAgents(data);
+                if (ids.length === 1) router.push(`/agents/${ids[0]}`);
+              })
+              .catch(() => {});
+          }}
+          onOpenCustomModal={() => setShowCreateModal(true)}
+        />
       )}
       {showDiscoverModal && (
         <DiscoverAgentsModal onClose={() => setShowDiscoverModal(false)} workspaceId={workspaceId} />

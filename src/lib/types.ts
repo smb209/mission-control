@@ -53,6 +53,13 @@ export interface Agent {
   soul_md?: string;
   user_md?: string;
   agents_md?: string;
+  /** Operator-editable section headers used in the direct-chat
+   *  persona-init block. Null/empty falls back to the defaults in
+   *  `lib/openclaw/persona-init.ts` (Who you are / Who the operator
+   *  is / Your team). */
+  soul_header?: string;
+  user_header?: string;
+  agents_header?: string;
   model?: string;
   source: AgentSource;
   gateway_agent_id?: string;
@@ -432,6 +439,12 @@ export interface CreateAgentRequest {
   agents_md?: string;
   model?: string;
   session_key_prefix?: string;
+  /** Optional gateway-agent override. Empty/null clears it (falls back
+   *  to the org runner via session-key resolver). */
+  gateway_agent_id?: string | null;
+  soul_header?: string | null;
+  user_header?: string | null;
+  agents_header?: string | null;
 }
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {

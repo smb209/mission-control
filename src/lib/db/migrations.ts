@@ -4042,6 +4042,24 @@ const migrations: Migration[] = [
       console.log('[Migration 073] agent_role_overrides.subagent_context_mode column added.');
     },
   },
+  {
+    id: '074',
+    name: 'agents_persona_section_headers',
+    up: (db) => {
+      // Per-agent override of the section headers prepended in the
+      // direct-chat persona-init block. Defaults handled in the
+      // builder when the column is null. AGENTS.md isn't always
+      // about "your team" — operators frequently use it for
+      // behavioural rules, output format constraints, or prohibitions
+      // — so the header should be operator-editable.
+      const cols = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
+      const has = (n: string) => cols.some(c => c.name === n);
+      if (!has('soul_header')) db.exec(`ALTER TABLE agents ADD COLUMN soul_header TEXT`);
+      if (!has('user_header')) db.exec(`ALTER TABLE agents ADD COLUMN user_header TEXT`);
+      if (!has('agents_header')) db.exec(`ALTER TABLE agents ADD COLUMN agents_header TEXT`);
+      console.log('[Migration 074] agents.{soul,user,agents}_header columns added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
