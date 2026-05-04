@@ -1027,7 +1027,15 @@ export type SSEEventType =
   | 'pm_proposal_dispatch_state_changed'
   | 'agent_note_created'
   | 'agent_note_consumed'
-  | 'agent_note_archived';
+  | 'agent_note_archived'
+  // Research Area phase 1 (specs/research-area-build-plan.md). Per-brief
+  // execution lifecycle. brief_progress fires for streamed chunks /
+  // status heartbeats while running so the hub's in-progress lane can
+  // animate without polling.
+  | 'brief_started'
+  | 'brief_progress'
+  | 'brief_completed'
+  | 'brief_failed';
 
 export interface SSEEvent {
   type: SSEEventType;
