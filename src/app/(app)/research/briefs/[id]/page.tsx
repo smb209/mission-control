@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink, RefreshCw, RotateCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, RefreshCw, RotateCw, Trash2, Zap } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useMissionControl } from '@/lib/store';
@@ -60,6 +60,8 @@ export default function BriefDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!params.id) return;
@@ -90,6 +92,26 @@ export default function BriefDetailPage() {
     [events],
   );
   useEffect(() => { if (latestRelevantId) load(); }, [latestRelevantId, load]);
+
+  const dispatchQueued = useCallback(async () => {
+    if (!brief || running) return;
+    setRunning(true);
+    setRunError(null);
+    try {
+      const res = await fetch(`/api/briefs/${brief.id}/run`, { method: 'POST' });
+      if (!res.ok && res.status !== 202) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Run failed (${res.status})`);
+      }
+      // SSE will move the status pill to RUNNING shortly; refresh
+      // immediately so the operator gets feedback even if SSE is slow.
+      load();
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : 'Run failed');
+    } finally {
+      setRunning(false);
+    }
+  }, [brief, running, load]);
 
   const rerun = useCallback(async () => {
     if (!brief || rerunning) return;
@@ -131,6 +153,7 @@ export default function BriefDetailPage() {
   if (error) return <div className="p-6 text-red-300">{error}</div>;
   if (!brief || !run) return <div className="p-6 text-mc-text-secondary">{loading ? 'Loading…' : 'Brief not found.'}</div>;
 
+  const isQueued = run.status === 'queued';
   const isTerminal = run.status === 'complete' || run.status === 'failed' || run.status === 'cancelled';
   const stamp = run.completed_at ?? run.started_at ?? brief.created_at;
 
@@ -171,6 +194,18 @@ export default function BriefDetailPage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
+          {isQueued && (
+            <button
+              type="button"
+              onClick={dispatchQueued}
+              disabled={running}
+              title="Dispatch this queued brief now"
+              className="px-3 py-1.5 text-sm bg-mc-accent text-mc-bg rounded-sm hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+            >
+              <Zap className={`w-3.5 h-3.5 ${running ? 'animate-pulse' : ''}`} />
+              {running ? 'Dispatching…' : 'Run'}
+            </button>
+          )}
           <button
             type="button"
             onClick={rerun}
@@ -217,6 +252,12 @@ export default function BriefDetailPage() {
         </div>
       )}
 
+      {runError && (
+        <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
+          {runError}
+        </div>
+      )}
+
       <section className="mb-4">
         <h2 className="text-[11px] uppercase tracking-wider text-mc-text-secondary mb-2">Prompt</h2>
         <pre className="px-3 py-2 bg-mc-bg-secondary border border-mc-border rounded-sm text-xs text-mc-text whitespace-pre-wrap font-sans">{brief.prompt}</pre>
@@ -230,7 +271,11 @@ export default function BriefDetailPage() {
           </article>
         ) : (
           <p className="text-sm text-mc-text-secondary/70 italic">
-            {isTerminal ? 'No result body.' : 'Brief is still running…'}
+            {isTerminal
+              ? 'No result body.'
+              : isQueued
+                ? 'Brief is queued — hit "Run" to dispatch it.'
+                : 'Brief is still running…'}
           </p>
         )}
       </section>
