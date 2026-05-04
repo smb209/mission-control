@@ -39,6 +39,13 @@ import {
   Users,
   Package,
   History,
+  Search,
+  ShieldAlert,
+  Calendar as CalendarIcon,
+  Megaphone,
+  Lightbulb,
+  Brain,
+  Workflow,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -88,6 +95,21 @@ function buildSections(taskBoardHref: string, workspaceSettingsHref: string): Na
       title: 'Autopilot',
       items: [
         { href: '/autopilot', label: 'Products', icon: Rocket, prefix: true },
+        { href: '/workflows', label: 'Workflows', icon: Workflow, prefix: true },
+      ],
+    },
+    {
+      // Knowledge: long-lived artifacts the project produces and reasons
+      // over. All entries currently render a spec markdown file from
+      // `specs/` — replace with real surfaces as each feature lands.
+      title: 'Knowledge',
+      items: [
+        { href: '/research', label: 'Research', icon: Search, prefix: true },
+        { href: '/risks', label: 'Risks', icon: ShieldAlert, prefix: true },
+        { href: '/calendar', label: 'Calendar', icon: CalendarIcon, prefix: true },
+        { href: '/stakeholders', label: 'Stakeholders', icon: Megaphone, prefix: true },
+        { href: '/decisions', label: 'Decisions', icon: Lightbulb, prefix: true },
+        { href: '/memory', label: 'Memory', icon: Brain, prefix: true },
       ],
     },
     {

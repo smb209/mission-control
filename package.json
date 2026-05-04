@@ -25,6 +25,7 @@
     "openclaw:sync": "node scripts/sync-openclaw-agents.mjs",
     "openclaw:sync:check": "node scripts/sync-openclaw-agents.mjs --dry-run",
     "workspace:export": "tsx scripts/export-workspace.ts",
+    "workspace:import": "tsx scripts/import-workspace.ts",
     "workspace:provision": "tsx scripts/provision-workspace-runner.ts",
     "runner-host:reseed": "tsx scripts/neutralize-runner-host.ts"
   },
