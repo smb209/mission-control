@@ -124,6 +124,10 @@ For multi-layer changes (DB migration + service + MCP tool + UI), follow audit â
 
 For genuinely independent slices, consider fanning out parallel subagents (one per slice) in worktrees rather than sequencing by hand.
 
+## Long Unattended Feature Development
+
+When the operator says "go build this in a structured way, I won't review in between," follow the contract in [specs/long-unattended-feature-dev.md](specs/long-unattended-feature-dev.md). It codifies the 4-doc pattern (build plan + `<feature>-validation/` directory with baseline / pre-check / test plan / criteria / results) used successfully for `scope-keyed-sessions` and `autonomous-flow-tightening`. Use it for any feature that is multi-slice, real-agent-exercisable, and ships behind stacked PRs without per-slice operator review.
+
 ## MCP Server
 
 The MCP server wrapping this app's API for openclaw workers is named `sc-mission-control`. Use that exact name when referencing it in configs, prompts, or docs.

@@ -4060,6 +4060,101 @@ const migrations: Migration[] = [
       console.log('[Migration 074] agents.{soul,user,agents}_header columns added.');
     },
   },
+  {
+    id: '075',
+    name: 'research_area_phase_1',
+    up: (db) => {
+      // Phase 1 of the Research Area (specs/research-area-build-plan.md).
+      //
+      // Three additive tables:
+      //   - agent_runs    — shared dispatch envelope for non-task agent
+      //                     work. Briefs are the first kind; later phases
+      //                     add sweeps / readiness_checks / comms_drafts /
+      //                     workflow_node_runs without re-deriving the
+      //                     lifecycle.
+      //   - topics        — long-lived research interests (workspace-scoped,
+      //                     soft-deleted via archived_at).
+      //   - briefs        — single research outputs, optionally attached to
+      //                     a topic; FK to agent_runs(id) for execution
+      //                     state. result_md + citations_json populated on
+      //                     completion; error_md on failure.
+      //
+      // We deliberately do NOT widen task_kind to cover briefs: tasks are
+      // an opinionated 5-stage pipeline (coordinator/builder/tester/
+      // reviewer/ship) producing deliverables, and briefs are single-
+      // stage structured-data agent runs with no PR/coordinator/
+      // deliverable concept. See spec §2.1–2.2.
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_runs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN (
+            'brief'
+          )),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+            'queued','running','complete','failed','cancelled'
+          )),
+          source_kind TEXT NOT NULL DEFAULT 'manual' CHECK (source_kind IN (
+            'manual','schedule','event'
+          )),
+          source_ref TEXT,
+          openclaw_session_id TEXT,
+          model_used TEXT,
+          cost_cents INTEGER,
+          cost_ceiling_cents INTEGER,
+          error_md TEXT,
+          started_at TEXT,
+          completed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_status ON agent_runs(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_kind_status ON agent_runs(kind, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_created ON agent_runs(created_at)`);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS topics (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          default_brief_template TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_topics_workspace ON topics(workspace_id, archived_at)`);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS briefs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          agent_run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+          topic_id TEXT REFERENCES topics(id) ON DELETE SET NULL,
+          template TEXT NOT NULL CHECK (template IN (
+            'general_brief'
+          )),
+          title TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          requested_by TEXT NOT NULL DEFAULT 'manual',
+          result_md TEXT,
+          citations_json TEXT,
+          error_md TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_briefs_workspace ON briefs(workspace_id, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_briefs_topic ON briefs(topic_id) WHERE topic_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_briefs_agent_run ON briefs(agent_run_id)`);
+
+      console.log('[Migration 075] agent_runs + topics + briefs tables created.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
