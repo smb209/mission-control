@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Archive, ArchiveRestore, FileText, RefreshCw, Zap } from 'lucide-react';
+import { Archive, ArchiveRestore, FileText, RefreshCw, Zap } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
-import { useMissionControl } from '@/lib/store';
 import { formatDistanceToNow } from 'date-fns';
 import { RunBriefDrawer } from '@/components/research/RunBriefDrawer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -28,13 +27,12 @@ interface BriefSummary {
   created_at: string;
 }
 
-const RELEVANT_EVENTS = ['brief_started', 'brief_completed', 'brief_failed'];
+const RELEVANT_EVENTS = new Set(['brief_started', 'brief_completed', 'brief_failed']);
 
 export default function TopicDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const workspaceId = useCurrentWorkspaceId();
-  const { events } = useMissionControl();
   const [topic, setTopic] = useState<Topic | null>(null);
   const [briefs, setBriefs] = useState<BriefSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +57,18 @@ export default function TopicDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const latestRelevantId = useMemo(
-    () => events.find(e => RELEVANT_EVENTS.includes(e.type as string))?.id,
-    [events],
-  );
-  useEffect(() => { if (latestRelevantId) load(); }, [latestRelevantId, load]);
+  // Direct SSE — global events store doesn't surface brief_* events.
+  useEffect(() => {
+    const es = new EventSource('/api/events/stream');
+    es.onmessage = (raw) => {
+      try {
+        if (raw.data.startsWith(':')) return;
+        const evt = JSON.parse(raw.data) as { type?: string };
+        if (evt.type && RELEVANT_EVENTS.has(evt.type)) load();
+      } catch { /* ignore */ }
+    };
+    return () => es.close();
+  }, [load]);
 
   const archive = async (archived: boolean) => {
     if (!topic) return;
@@ -87,13 +92,6 @@ export default function TopicDetailPage() {
 
   return (
     <div className="px-6 py-5 max-w-4xl">
-      <Link
-        href="/research"
-        className="inline-flex items-center gap-1 text-xs text-mc-text-secondary hover:text-mc-accent mb-4"
-      >
-        <ArrowLeft className="w-3 h-3" /> All research
-      </Link>
-
       <header className="flex items-start justify-between mb-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
