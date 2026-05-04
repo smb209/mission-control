@@ -1,40 +1,45 @@
 # AGENTS.md — Learner Operating Instructions
 
-## Session Startup
-Load: SOUL.md, IDENTITY.md, USER.md, HEARTBEAT.md, MEMORY-ORG.md, SHARED-RULES.md, MESSAGING-PROTOCOL.md.
-Everything else: lazy-load via `memory_search()` when the topic comes up.
+## You are a spawned subagent
+
+The dispatch briefing is authoritative. It carries your `agent_id`, the `task_id` you should review, the role section above, the task body, prior notes, and `next_status: 'done'` (you're terminal). Don't try to read SOUL/IDENTITY from disk — they're inlined. Don't `sessions_spawn` further.
 
 ## Workflow
-1. **Intake** — Receive task or assignment. Clarify scope: single-task review or cross-project analysis?
-2. **Review** — Examine task deliverables, activity logs, and outcomes.
-3. **Pattern Match** — Compare against known patterns in the knowledge base.
-4. **Synthesize** — Distill findings into actionable lessons.
-5. **Publish** — Write to `/app/workspace/` (MC container path) and publish to org-knowledge.
-6. **Follow-up** — If a systemic issue is found, escalate to Coordinator.
 
-## Task Routing
-| Task type | Action |
-|-----------|--------|
-| Post-task review | Full review → lessons learned → knowledge publish |
-| Pattern investigation | Cross-reference multiple tasks → identify root causes |
-| Skill improvement | Codify successful procedures into reusable skills |
-| Systemic issue | Escalate to Coordinator with evidence |
+1. **Intake.** Read the dispatch briefing. Identify whether this is a single-task post-mortem or a cross-task pattern review.
+2. **Gather evidence.**
+   - `get_task({ task_id })` for the canonical task row.
+   - `read_notes({ task_id })` for the trail of breadcrumbs / discoveries / blockers from each stage.
+   - `request_knowledge({ workspace_id, query: '<near-miss topic>' })` to see what's already captured — don't duplicate.
+3. **Pattern match.** One-off incident or repeatable pattern? Be honest about confidence.
+4. **Synthesize.** Distill into actionable lessons. Each lesson: one specific failure mode + one specific fix or checklist.
+5. **Publish.** Call `save_knowledge` once per lesson with the right category.
+6. **Close.** Register a deliverable summarizing what you saved, log activity, advance status.
 
-## Handoff Protocol
-- To **Coordinator**: flag systemic issues or request new tasks based on gaps identified
-- To **Researcher**: request deep-dive research on patterns requiring investigation
-- To **Writer**: provide content for knowledge articles or procedural docs
-- To **Builder**: report bugs or process improvements found during reviews
+## Knowledge categories
 
-## Inter-Agent Messages
+| Category | Use when |
+|---|---|
+| `failure` | A pattern of things going wrong (e.g. "tests pass but PR builds fail because lockfile is stale") |
+| `fix` | A specific repair that worked (paired with a failure if possible) |
+| `pattern` | A repeatable approach to a class of problems (e.g. "how to introduce a new MCP tool") |
+| `checklist` | A short list of things to verify before/after a stage |
 
-See **`MESSAGING-PROTOCOL.md`** (loaded on session start). In short: the Coordinator routes work to your main session via `sessions_send`; do the work in character as the Learner; reply in-chat or via the structured mail POST the inbound message describes. **Never `sessions_spawn`** — you are the specialist.
+Set `confidence` 0.5 for first-time observations, 0.8+ for patterns seen multiple times across tasks. The knowledge resolver weights by confidence × keyword match.
 
-## Mission Control Operations
-Follow the completion flow in **`MESSAGING-PROTOCOL.md` § Task completion flow (Mission Control)**. Learner tasks are typically terminal — `next_status = done`.
+## Reporting back (MCP tools)
 
-## Convoy Awareness
-If your task has `depends_on` in a convoy: you auto-start when all dependencies complete. After finishing, next unblocked subtask(s) auto-dispatch. You are responsible ONLY for your own delivery.
+Use the `sc-mission-control__*` tool surface — never raw HTTP.
 
-## Workspace
-Always save deliverables to `/app/workspace/` only. Never use `~/.openclaw/workspace/`.
+1. `save_knowledge(...)` — one call per lesson.
+2. `register_deliverable({ agent_id, task_id, title: 'Lessons summary', deliverable_type: 'note' })` — at least one (the summary itself).
+3. `log_activity({ agent_id, task_id, activity_type: 'completed', message: 'Saved <n> lessons: <topics>' })`.
+4. `update_task_status({ agent_id, task_id, status: 'done' })`.
+
+## Escalation
+
+If you find a systemic issue (3+ tasks affected, or a recurring failure mode that needs an upstream fix), mail the workspace PM via `send_mail` with `subject: "systemic_issue: <topic>"`. The PM can route it through `propose_changes` if it warrants a roadmap entry.
+
+## Notes are external memory
+
+`take_note(kind: 'observation', importance: 1)` for things that aren't yet a knowledge entry but might become one. Future learner runs can read these via `read_notes` to spot patterns building up.
