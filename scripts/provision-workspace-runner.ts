@@ -70,11 +70,27 @@ const TEMPLATES_DIR = path.join(REPO_ROOT, 'agent-templates');
 
 /**
  * Files we manage from the role template. Anything outside this list
- * (HEARTBEAT.md, BOOTSTRAP.md, TOOLS.md, USER.md, MC-CONTEXT.json)
- * stays as openclaw provided it — those are operator state, not role
- * identity.
+ * (HEARTBEAT.md, TOOLS.md, USER.md, MC-CONTEXT.json) stays as openclaw
+ * provided it — those are operator state, not role identity.
  */
 const TEMPLATED_FILES = ['SOUL.md', 'AGENTS.md', 'IDENTITY.md'];
+
+/**
+ * Files we delete from openclaw's defaults if present. BOOTSTRAP.md is
+ * openclaw's first-run "agent doesn't know who it is — ask the operator
+ * for a name, timezone, messaging channel" script. The MC role
+ * personas have already supplied identity (SOUL.md / IDENTITY.md), so
+ * the bootstrap dialog actively misfires — the agent says "I'm
+ * Margaret Maps Hamilton, your workspace PM" and then immediately asks
+ * "who am I talking to, what timezone, WhatsApp or Telegram?" because
+ * BOOTSTRAP.md was still in the workspace dir at session start.
+ *
+ * BOOTSTRAP.md self-documents that it should be deleted when done:
+ * "When you are done — Delete this file. You don't need a bootstrap
+ * script anymore — you're you now." Provisioning is exactly that
+ * "when you are done."
+ */
+const REMOVED_FILES = ['BOOTSTRAP.md'];
 
 function fail(msg: string): never {
   process.stderr.write(`ERROR: ${msg}\n`);
@@ -213,6 +229,19 @@ async function seedRoleTemplates(role: string, workspaceDir: string): Promise<bo
     await fs.writeFile(dest, content);
     process.stderr.write(`  ${file.padEnd(15)} ${prior === null ? 'created' : 'overwrote openclaw default'}\n`);
     changed++;
+  }
+
+  // Strip openclaw defaults that conflict with the MC role personas.
+  for (const file of REMOVED_FILES) {
+    const dest = path.join(workspaceDir, file);
+    try {
+      await fs.unlink(dest);
+      process.stderr.write(`  ${file.padEnd(15)} removed (openclaw default conflicts with MC persona)\n`);
+      changed++;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Already absent — fine.
+    }
   }
 
   return changed > 0;
