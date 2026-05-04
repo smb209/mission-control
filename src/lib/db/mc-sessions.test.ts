@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 import { v4 as uuidv4 } from 'uuid';
 import { run } from '@/lib/db';
 import {
+  closeSessionByRunId,
   getSession,
+  getSessionByRunId,
   setSessionStatus,
   touchSession,
   upsertSession,
@@ -136,4 +138,109 @@ test('upsertSession: workspace cascade deletes the session row', () => {
 
   run(`DELETE FROM workspaces WHERE id = ?`, [ws]);
   assert.equal(getSession(key), null);
+});
+
+// ─── Phase J1: run_id ───────────────────────────────────────────────
+
+test('upsertSession: persists run_id on insert', () => {
+  const ws = freshWorkspace();
+  const key = `agent:mc-pm-test-dev:subagent:${uuidv4()}`;
+  const runId = `run-${uuidv4().slice(0, 12)}`;
+  const result = upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'builder',
+    scope_type: 'task_role',
+    run_id: runId,
+  });
+  assert.equal(result.is_new, true);
+  assert.equal(result.session.run_id, runId);
+});
+
+test('upsertSession: re-touch updates run_id when provided, preserves it when not', () => {
+  const ws = freshWorkspace();
+  const key = `agent:mc-pm-test-dev:subagent:${uuidv4()}`;
+  upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'tester',
+    scope_type: 'task_role',
+    run_id: 'run-original',
+  });
+  // Re-upsert without run_id — should preserve the original.
+  const second = upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'tester',
+    scope_type: 'task_role',
+  });
+  assert.equal(second.session.run_id, 'run-original');
+
+  // Re-upsert with new run_id — should overwrite.
+  const third = upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'tester',
+    scope_type: 'task_role',
+    run_id: 'run-replaced',
+  });
+  assert.equal(third.session.run_id, 'run-replaced');
+});
+
+test('getSessionByRunId / closeSessionByRunId: round-trip', () => {
+  const ws = freshWorkspace();
+  const key = `agent:mc-pm-test-dev:subagent:${uuidv4()}`;
+  const runId = `run-${uuidv4().slice(0, 12)}`;
+  upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'builder',
+    scope_type: 'task_role',
+    run_id: runId,
+  });
+
+  const fetched = getSessionByRunId(runId);
+  assert.equal(fetched?.scope_key, key);
+
+  const closed = closeSessionByRunId(runId);
+  assert.equal(closed?.status, 'closed');
+  assert.ok(closed?.closed_at);
+});
+
+test('closeSessionByRunId: failed status sticks closed_at', () => {
+  const ws = freshWorkspace();
+  const key = `agent:mc-pm-test-dev:subagent:${uuidv4()}`;
+  const runId = `run-${uuidv4().slice(0, 12)}`;
+  upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'builder',
+    scope_type: 'task_role',
+    run_id: runId,
+  });
+  const failed = closeSessionByRunId(runId, 'failed');
+  assert.equal(failed?.status, 'failed');
+  assert.ok(failed?.closed_at);
+});
+
+test('closeSessionByRunId: idempotent on already-closed', () => {
+  const ws = freshWorkspace();
+  const key = `agent:mc-pm-test-dev:subagent:${uuidv4()}`;
+  const runId = `run-${uuidv4().slice(0, 12)}`;
+  upsertSession({
+    scope_key: key,
+    workspace_id: ws,
+    role: 'builder',
+    scope_type: 'task_role',
+    run_id: runId,
+  });
+  const first = closeSessionByRunId(runId);
+  const firstClosedAt = first?.closed_at;
+  const second = closeSessionByRunId(runId);
+  assert.equal(second?.status, 'closed');
+  assert.equal(second?.closed_at, firstClosedAt, 'closed_at should not advance on no-op close');
+});
+
+test('getSessionByRunId: missing runId returns null', () => {
+  assert.equal(getSessionByRunId('run-does-not-exist'), null);
 });

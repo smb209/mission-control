@@ -37,6 +37,13 @@ export interface McSession {
   last_used_at: string;
   created_at: string;
   closed_at: string | null;
+  /**
+   * Phase J: openclaw's `sessions_spawn` returns a runId distinct from
+   * the session_key. We persist it so MC can correlate `subagent_ended`
+   * events back to the originating dispatch row. NULL for sessions
+   * that didn't originate from a sessions_spawn call.
+   */
+  run_id: string | null;
 }
 
 export interface UpsertSessionInput {
@@ -48,6 +55,8 @@ export interface UpsertSessionInput {
   initiative_id?: string | null;
   recurring_job_id?: string | null;
   attempt?: number;
+  /** Phase J: openclaw runId for subagent dispatches. */
+  run_id?: string | null;
 }
 
 /**
@@ -66,14 +75,31 @@ export function upsertSession(input: UpsertSessionInput): { session: McSession; 
   );
 
   if (existing) {
-    run(
-      `UPDATE mc_sessions
-          SET status = 'active',
-              last_used_at = datetime('now'),
-              closed_at = NULL
-        WHERE scope_key = ?`,
-      [input.scope_key],
-    );
+    // If a run_id is provided on touch, persist it (subagent dispatches
+    // are registered after the session row already exists in some flows
+    // — e.g. Phase B's sibling-session worker dispatch that gets
+    // promoted to a subagent during transition). Otherwise leave the
+    // existing run_id alone.
+    if (input.run_id) {
+      run(
+        `UPDATE mc_sessions
+            SET status = 'active',
+                last_used_at = datetime('now'),
+                closed_at = NULL,
+                run_id = ?
+          WHERE scope_key = ?`,
+        [input.run_id, input.scope_key],
+      );
+    } else {
+      run(
+        `UPDATE mc_sessions
+            SET status = 'active',
+                last_used_at = datetime('now'),
+                closed_at = NULL
+          WHERE scope_key = ?`,
+        [input.scope_key],
+      );
+    }
     const refreshed = queryOne<McSession>(
       `SELECT * FROM mc_sessions WHERE scope_key = ?`,
       [input.scope_key],
@@ -85,9 +111,9 @@ export function upsertSession(input: UpsertSessionInput): { session: McSession; 
     `INSERT INTO mc_sessions (
        scope_key, workspace_id, role, scope_type,
        task_id, initiative_id, recurring_job_id,
-       attempt, status, last_used_at, created_at, closed_at
+       attempt, status, last_used_at, created_at, closed_at, run_id
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active',
-              datetime('now'), datetime('now'), NULL)`,
+              datetime('now'), datetime('now'), NULL, ?)`,
     [
       input.scope_key,
       input.workspace_id,
@@ -97,6 +123,7 @@ export function upsertSession(input: UpsertSessionInput): { session: McSession; 
       input.initiative_id ?? null,
       input.recurring_job_id ?? null,
       input.attempt ?? 1,
+      input.run_id ?? null,
     ],
   );
 
@@ -144,4 +171,32 @@ export function touchSession(scopeKey: string): void {
     `UPDATE mc_sessions SET last_used_at = datetime('now') WHERE scope_key = ?`,
     [scopeKey],
   );
+}
+
+/**
+ * Phase J: look up a session by openclaw runId. Used by
+ * `subagent_ended` event handling to mark the session closed without
+ * needing the session_key — runId is what openclaw's hooks emit.
+ */
+export function getSessionByRunId(runId: string): McSession | null {
+  return (
+    queryOne<McSession>(`SELECT * FROM mc_sessions WHERE run_id = ?`, [runId]) ?? null
+  );
+}
+
+/**
+ * Phase J: close a session keyed by runId (instead of scope_key).
+ * Idempotent — already-closed sessions stay closed.
+ */
+export function closeSessionByRunId(runId: string, status: 'closed' | 'failed' = 'closed'): McSession | null {
+  const existing = getSessionByRunId(runId);
+  if (!existing) return null;
+  run(
+    `UPDATE mc_sessions
+        SET status = ?,
+            closed_at = datetime('now')
+      WHERE run_id = ? AND status NOT IN ('closed', 'failed')`,
+    [status, runId],
+  );
+  return getSessionByRunId(runId);
 }
