@@ -59,7 +59,7 @@ function compileGlobList(env: string | undefined): ((id: string) => boolean) | n
  * auto-excluded from catalog sync so a dev DB never grows a prod
  * runner row (and vice versa).
  */
-function preferredRunnerGatewayId(env: NodeJS.ProcessEnv = process.env): 'mc-runner' | 'mc-runner-dev' {
+export function preferredRunnerGatewayId(env: NodeJS.ProcessEnv = process.env): 'mc-runner' | 'mc-runner-dev' {
   const explicit = env.MC_RUNNER_GATEWAY_ID;
   if (explicit === 'mc-runner' || explicit === 'mc-runner-dev') return explicit;
   const isDev = env.NODE_ENV === 'development' || env.MC_ENV === 'dev';

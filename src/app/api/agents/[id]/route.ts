@@ -112,6 +112,27 @@ export async function PATCH(
       updates.push('model = ?');
       values.push(body.model);
     }
+    // Persona-init section header overrides. Null/empty clears the
+    // override; the builder falls back to defaults (Who you are / Who
+    // the operator is / Your team) for empty values.
+    for (const field of ['soul_header', 'user_header', 'agents_header'] as const) {
+      const v = (body as Record<string, unknown>)[field];
+      if (v !== undefined) {
+        updates.push(`${field} = ?`);
+        const trimmed = typeof v === 'string' ? v.trim() : null;
+        values.push(!trimmed ? null : trimmed);
+      }
+    }
+    if (body.gateway_agent_id !== undefined) {
+      // Operator override — point this MC agent at a different gateway
+      // agent (or clear with null/empty to fall back to the runner via
+      // session-key resolver). We don't validate against the gateway
+      // catalog here; the resolver / dispatch path will surface a real
+      // error if the id doesn't exist on the gateway.
+      updates.push('gateway_agent_id = ?');
+      const trimmed = typeof body.gateway_agent_id === 'string' ? body.gateway_agent_id.trim() : null;
+      values.push(!trimmed ? null : trimmed);
+    }
     if (body.session_key_prefix !== undefined) {
       updates.push('session_key_prefix = ?');
       const trimmed = body.session_key_prefix?.trim();

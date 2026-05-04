@@ -1,4 +1,5 @@
 import type { Agent } from '@/lib/types';
+import { preferredRunnerGatewayId } from '@/lib/agent-catalog-sync';
 
 /**
  * Resolve the OpenClaw sessionKey prefix for a target agent.
@@ -8,8 +9,13 @@ import type { Agent } from '@/lib/types';
  *   2. `agent:<gateway_agent_id>:` — preferred for gateway-synced agents,
  *      because the gateway treats `agent:<agentId>:<...>` as the agent's
  *      own namespace (see OpenClaw session-routing docs).
- *   3. `agent:<slugified_name>:` — last-resort fallback for local/manual
- *      agents that have never been linked to a gateway agent.
+ *   3. `agent:<runner_id>:<slugified_name>:` — fallback for local/manual
+ *      agents that have never been linked to a gateway agent. The org
+ *      runner (`mc-runner` / `mc-runner-dev`) is the actual session
+ *      host; the slug carves out a per-persona namespace under it.
+ *      This matches the convention recurring jobs already use
+ *      (`agent:mc-runner-dev:main:recurring-{job_id}`) and keeps the
+ *      gateway from receiving prefixes for agents it's never seen.
  *
  * Previously the default was a hard-coded `agent:main:` which silently
  * routed every MC→agent chat.send to the gateway's "main" agent
@@ -29,7 +35,7 @@ export function resolveAgentSessionKeyPrefix(
     return `agent:${agent.gateway_agent_id}:`;
   }
   const slug = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return `agent:${slug || 'unknown'}:`;
+  return `agent:${preferredRunnerGatewayId()}:${slug || 'unknown'}:`;
 }
 
 // UUID pattern. Exported so other session-key helpers can reuse it.
