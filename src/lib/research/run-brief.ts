@@ -1,31 +1,36 @@
 /**
  * Brief execution orchestrator.
  *
- * Slice 3 of feat/research-phase-1
- * (specs/research-area-build-plan.md §2.3).
+ * Phase 2 (feat/research-phase-2-runner-dispatch): briefs are now
+ * dispatched through the workspace runner via `dispatchScope`, the
+ * scope-keyed-sessions primitive that composes the role's briefing
+ * (SOUL.md + AGENTS.md + IDENTITY.md from `agent-templates/researcher/`)
+ * into the session BEFORE the prompt is sent.
  *
- * Runs as a direct openclaw send-chat to the workspace's researcher
- * persona — NOT through the worker-task pipeline. Briefs don't need
- * a workspace clone, git ops, deliverable storage, or coordinator
- * gates; sendChatAndAwaitReply gives us streaming for free via the
- * onEvent tap.
+ * This corrects phase 1's design mistake — phase 1 used raw
+ * `send-chat` directly against an `agents` row whose `gateway_agent_id`
+ * had to point at a real openclaw agent. The agent system is built
+ * around exactly two real gateway agents per workspace (the runner +
+ * the PM); every other "agent" is a *role-only roster entry* that the
+ * runner takes on via persona-scoped sessions.
  *
- * Responsibilities:
- *   1. Resolve the workspace researcher agent.
- *   2. Build the assembled prompt from template + topic context +
- *      user prompt.
+ * The roster entry must still exist — `resolveResearcherRosterEntry`
+ * verifies the workspace has opted in to research by adding a
+ * researcher row (operator does this via the Add Agents picker). If
+ * not, we surface a clean message instead of silently inventing one.
+ *
+ * Flow:
+ *   1. Verify workspace has a researcher roster entry.
+ *   2. Verify a runner agent exists.
  *   3. markRunning + emit brief_started.
- *   4. Drive sendChatAndAwaitReply, tapping onEvent → emit
- *      brief_progress (throttled).
- *   5. On reply: parse citations from the rendered markdown,
- *      setBriefResult, markComplete, emit brief_completed.
- *   6. On send-failure / timeout / no-session / thrown error:
- *      setBriefError, markFailed, emit brief_failed.
+ *   4. dispatchScope({ role: 'researcher', agent: runner, ... }) —
+ *      buildBriefing applies the researcher persona.
+ *   5. Tap onEvent for throttled brief_progress broadcasts.
+ *   6. On reply: parse citations, setBriefResult, markComplete,
+ *      emit brief_completed.
+ *   7. On any failure: setBriefError, markFailed, emit brief_failed.
  *
- * The orchestrator is fire-and-forget at the API boundary
- * (POST /api/briefs/[id]/run returns immediately after kicking
- * runBrief; the brief progresses asynchronously and the UI
- * subscribes to SSE for updates).
+ * Fire-and-forget at the API boundary; the UI subscribes to SSE.
  */
 
 import { queryOne } from '@/lib/db';
@@ -45,50 +50,43 @@ import {
 } from '@/lib/db/briefs';
 import { getTopic } from '@/lib/db/topics';
 import { broadcast } from '@/lib/events';
-import {
-  sendChatAndAwaitReply,
-  type ChatEvent,
-  type SendChatAgent,
-} from '@/lib/openclaw/send-chat';
+import { dispatchScope } from '@/lib/agents/dispatch-scope';
+import { getRunnerAgent } from '@/lib/agents/runner';
+import type { ChatEvent } from '@/lib/openclaw/send-chat';
 
-/** Default budget for a brief: 5 minutes. Configurable per-call. */
 const DEFAULT_BRIEF_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Throttle progress broadcasts to one per 750ms — enough for the UI
- *  to feel live without flooding SSE consumers with token chunks. */
 const PROGRESS_BROADCAST_INTERVAL_MS = 750;
 
 export interface RunBriefOptions {
   timeoutMs?: number;
   /** Test-only: when true, runBrief awaits the dispatch promise rather
-   *  than returning immediately. Production callers leave it unset
-   *  (fire-and-forget). */
+   *  than returning immediately. */
   awaitCompletionForTesting?: boolean;
 }
 
 export interface RunBriefResult {
   brief_id: string;
   agent_run_id: string;
-  /** "started" — orchestrator kicked dispatch. Consumers tail SSE for
-   *  the actual outcome. */
   state: 'started' | 'rejected';
-  /** Set when state === 'rejected'. */
   reason?: string;
 }
 
-interface ResearcherRow {
+/**
+ * The researcher roster entry — any agent row in the workspace with
+ * role='researcher'. The row may be `source='local'` with no
+ * `gateway_agent_id` (role-only ephemeral marker, the canonical
+ * shape) or a real gateway-bound row (legacy / hand-provisioned).
+ * We don't care which; presence is what matters.
+ */
+interface ResearcherRosterEntry {
   id: string;
   name: string;
-  session_key_prefix: string | null;
-  gateway_agent_id: string | null;
-  model: string | null;
 }
 
-function resolveResearcher(workspaceId: string): ResearcherRow | null {
+function resolveResearcherRosterEntry(workspaceId: string): ResearcherRosterEntry | null {
   return (
-    queryOne<ResearcherRow>(
-      `SELECT id, name, session_key_prefix, gateway_agent_id, model
-         FROM agents
+    queryOne<ResearcherRosterEntry>(
+      `SELECT id, name FROM agents
         WHERE workspace_id = ? AND role = 'researcher' AND COALESCE(is_active, 1) = 1
         LIMIT 1`,
       [workspaceId],
@@ -134,9 +132,7 @@ export function buildBriefPrompt(input: BuildPromptInput): string {
 /**
  * Best-effort citation extraction from a markdown body. Looks for
  * inline markdown links `[label](url)` and produces one citation per
- * unique URL. Phase 1 is intentionally unsophisticated — promote to
- * structured-output prompting in phase 2 once we have a corpus to
- * test against.
+ * unique URL.
  */
 export function parseCitations(markdown: string): BriefCitation[] {
   if (!markdown) return [];
@@ -155,11 +151,8 @@ export function parseCitations(markdown: string): BriefCitation[] {
 
 /**
  * Extract a single concatenated text body from the gateway's
- * collected ChatEvents. The gateway emits events with `message`
- * either as a string or as an object with role/content; we walk
- * both shapes and concatenate the assistant-side text. The final
- * "done" event typically carries the full reply but we fall back
- * to the concatenated stream if it's missing.
+ * collected ChatEvents. The done event typically carries the full
+ * reply but we fall back to the concatenated stream if missing.
  */
 export function extractReplyText(reply: ChatEvent[], doneEvent?: ChatEvent): string {
   const fromDone = readMessageText(doneEvent?.message);
@@ -177,7 +170,6 @@ function readMessageText(message: unknown): string | null {
     const content = (message as { content: unknown }).content;
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
-      // Best-effort: concatenate any string entries.
       return content
         .map(c => (typeof c === 'string' ? c : typeof c === 'object' && c && 'text' in c && typeof (c as { text: unknown }).text === 'string' ? (c as { text: string }).text : ''))
         .filter(Boolean)
@@ -194,7 +186,6 @@ function emit(
   try {
     broadcast({ type, payload });
   } catch (err) {
-    // SSE failures must never sink the orchestrator. Log and continue.
     console.error(`[run-brief] failed to broadcast ${type}:`, err);
   }
 }
@@ -215,36 +206,51 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
     return;
   }
 
-  const researcher = resolveResearcher(brief.workspace_id);
+  // 1. Verify the workspace has opted in to research by adding a
+  //    researcher to its roster. The row is a roster marker only —
+  //    actual dispatch goes through the runner with the persona
+  //    applied at briefing time.
+  const researcher = resolveResearcherRosterEntry(brief.workspace_id);
   if (!researcher) {
-    const msg = `No active researcher agent found in workspace ${brief.workspace_id}`;
+    const msg =
+      `This workspace has no researcher in its roster. Add one via ` +
+      `Agents → "Add agents" → pick a team that includes a researcher ` +
+      `(e.g. "Research & write") or pick the Researcher role directly. ` +
+      `Then re-run this brief.`;
     setBriefError(briefId, msg);
     markFailed(brief.agent_run_id, { error_md: msg });
-    emit('brief_failed', briefShape(brief, { error: msg }));
+    emit('brief_failed', briefShape(brief, { error: msg, reason: 'no_researcher_in_roster' }));
+    return;
+  }
+
+  // 2. Resolve the workspace runner — the only gateway agent that
+  //    actually hosts the chat session.
+  const runner = getRunnerAgent();
+  if (!runner) {
+    const msg =
+      `No runner agent registered. The runner (mc-runner-dev) is the ` +
+      `gateway-bound host for all role-scoped sessions. Provision it ` +
+      `via the openclaw gateway, then re-run.`;
+    setBriefError(briefId, msg);
+    markFailed(brief.agent_run_id, { error_md: msg });
+    emit('brief_failed', briefShape(brief, { error: msg, reason: 'no_runner' }));
     return;
   }
 
   const topic = brief.topic_id ? getTopic(brief.topic_id) : null;
-  const assembledPrompt = buildBriefPrompt({
+  const triggerBody = buildBriefPrompt({
     template: brief.template,
     title: brief.title,
     prompt: brief.prompt,
     topicContext: topic ? { name: topic.name, description: topic.description } : null,
   });
 
-  // Move into running BEFORE we send so SSE consumers see the state
-  // transition as the source of truth for "this brief is alive."
+  // 3. Move into running BEFORE we send so SSE consumers see the
+  //    state transition as the source of truth for "this brief is alive."
   markRunning(brief.agent_run_id, {
-    model_used: researcher.model ?? null,
+    model_used: runner.model ?? null,
   });
   emit('brief_started', briefShape(brief, { workspace_id: brief.workspace_id }));
-
-  const agent: SendChatAgent = {
-    id: researcher.id,
-    name: researcher.name,
-    session_key_prefix: researcher.session_key_prefix ?? undefined,
-    gateway_agent_id: researcher.gateway_agent_id ?? undefined,
-  };
 
   let lastProgressBroadcastAt = 0;
   const onEvent = (event: ChatEvent) => {
@@ -257,19 +263,36 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
     }));
   };
 
-  let reply;
+  // 4. dispatchScope handles: scope_key derivation, mc_sessions
+  //    bookkeeping, briefing composition (researcher persona),
+  //    chat.send + reply collection.
+  let result;
   try {
-    reply = await sendChatAndAwaitReply({
-      agent,
-      message: assembledPrompt,
+    result = await dispatchScope({
+      workspace_id: brief.workspace_id,
+      role: 'researcher',
+      agent: runner,
+      session_suffix: `brief-${brief.id}`,
+      trigger_body: triggerBody,
       timeoutMs: options.timeoutMs ?? DEFAULT_BRIEF_TIMEOUT_MS,
       onEvent,
+      attempt_strategy: 'fresh',
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     setBriefError(briefId, msg);
     markFailed(brief.agent_run_id, { error_md: msg });
-    emit('brief_failed', briefShape(brief, { error: msg }));
+    emit('brief_failed', briefShape(brief, { error: msg, reason: 'dispatch_threw' }));
+    return;
+  }
+
+  const reply = result.reply;
+  if (!reply) {
+    // dry_run path — should not happen in production. Fail loudly.
+    const msg = 'dispatchScope returned no reply (dry-run?); cannot complete brief.';
+    setBriefError(briefId, msg);
+    markFailed(brief.agent_run_id, { error_md: msg });
+    emit('brief_failed', briefShape(brief, { error: msg, reason: 'no_reply' }));
     return;
   }
 
@@ -281,7 +304,7 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
         : `dispatch failed: ${reply.reason ?? 'unknown'}`;
     setBriefError(briefId, msg);
     markFailed(brief.agent_run_id, { error_md: msg });
-    emit('brief_failed', briefShape(brief, { error: msg, reason: reply.reason }));
+    emit('brief_failed', briefShape(brief, { error: msg, reason: reply.reason ?? 'dispatch_failed' }));
     return;
   }
 
@@ -305,7 +328,15 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
   const citations = parseCitations(body);
   setBriefResult(briefId, { result_md: body, citations });
   markComplete(brief.agent_run_id);
-  emit('brief_completed', briefShape(brief, { citation_count: citations.length }));
+  emit('brief_completed', briefShape(brief, {
+    citation_count: citations.length,
+    scope_key: result.scope_key,
+    briefing_bytes: result.briefing_bytes,
+  }));
+  // Touch researcher to mark "use" — silences unused-var lint while
+  // also providing a hook if we want to surface researcher attribution
+  // in completion events later.
+  void researcher;
 }
 
 function briefShape(brief: Brief, extras: Record<string, unknown> = {}): Record<string, unknown> {
@@ -319,12 +350,6 @@ function briefShape(brief: Brief, extras: Record<string, unknown> = {}): Record<
   };
 }
 
-/**
- * Public entry point. Kicks runBriefInternal asynchronously and
- * returns immediately so the API route doesn't block the request
- * cycle. Tests can pass `awaitCompletionForTesting: true` to await
- * the full dispatch.
- */
 export async function runBrief(
   briefId: string,
   options: RunBriefOptions = {},
@@ -347,9 +372,6 @@ export async function runBrief(
   }
 
   const promise = runBriefInternal(briefId, options).catch(err => {
-    // Belt-and-braces: any uncaught path inside the orchestrator
-    // should still mark the brief failed rather than leaving it
-    // running forever.
     console.error(`[run-brief] uncaught failure in orchestrator:`, err);
     const errMsg = err instanceof Error ? err.message : String(err);
     try {

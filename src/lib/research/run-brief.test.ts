@@ -1,12 +1,20 @@
 /**
- * Brief orchestrator tests.
+ * Brief orchestrator tests (phase 2 — runner-dispatched via dispatchScope).
  *
  * Stubs the openclaw send-chat client via __setSendChatClientForTests
  * so we can drive the dispatch path deterministically without a live
- * gateway. Covers:
+ * gateway. dispatchScope uses sendChatAndAwaitReply under the hood,
+ * so the same stub continues to work — but two new failure modes
+ * appear because resolution now spans both a researcher roster entry
+ * AND a runner agent:
+ *   - missing researcher → failed with "add a researcher" message
+ *   - missing runner     → failed with "no runner registered" message
+ *
+ * Covers:
  *   - happy path: queued → running (event) → complete (event) +
- *     result_md + parsed citations
- *   - missing researcher → failed cleanly
+ *     result_md + parsed citations + scope_key in completion event
+ *   - missing researcher → failed with no_researcher_in_roster reason
+ *   - missing runner → failed with no_runner reason
  *   - send-chat returns no_session → failed with gateway-clear message
  *   - send-chat returns send_failed → failed
  *   - timeout → failed with timeout reason
@@ -44,30 +52,48 @@ function freshWorkspace(): string {
   return id;
 }
 
-function ensureResearcher(workspaceId: string): string {
+/**
+ * Adds a role-only "researcher" roster entry (no gateway binding).
+ * The actual chat session will be hosted by the runner; this row
+ * just signals "this workspace has opted in to research."
+ */
+function ensureResearcherRosterEntry(workspaceId: string): string {
   const id = `agent-${uuidv4().slice(0, 8)}`;
   run(
-    `INSERT INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, created_at, updated_at)
-     VALUES (?, ?, 'researcher', '🔍', 'standby', 0, ?, 'gateway', 'gw-researcher', 'agent:gw-researcher', 'spark-lb/agent', datetime('now'), datetime('now'))`,
+    `INSERT INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, is_active, created_at, updated_at)
+     VALUES (?, ?, 'researcher', '🔍', 'standby', 0, ?, 'local', 1, datetime('now'), datetime('now'))`,
     [id, `mc-researcher-${workspaceId.slice(-4)}`, workspaceId],
   );
   return id;
 }
 
+/**
+ * Adds the runner agent. getRunnerAgent() resolves by gateway_agent_id
+ * in ('mc-runner-dev', 'mc-runner'); we use the dev variant since
+ * NODE_ENV=test selects dev candidates first. The session_key_prefix
+ * is the same shape dispatchScope expects.
+ */
+function ensureRunner(): string {
+  // Idempotent: only insert if no row already.
+  const existing = run(
+    `INSERT OR IGNORE INTO agents
+       (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, is_active, created_at, updated_at)
+       VALUES ('runner-test', 'MC Runner Dev', 'runner', '⚙️', 'standby', 0, 'default', 'gateway', 'mc-runner-dev', 'agent:mc-runner-dev:main', 'spark-lb/agent', 1, datetime('now'), datetime('now'))`,
+  );
+  void existing;
+  // Make sure the 'default' workspace exists for the runner FK.
+  run(
+    `INSERT OR IGNORE INTO workspaces (id, name, slug, created_at) VALUES ('default', 'default', 'default', datetime('now'))`,
+  );
+  return 'runner-test';
+}
+
 interface StubOpts {
-  /** Whether the gateway is "connected." Default true. */
   connected?: boolean;
-  /** What the underlying chat.send call resolves with. Default {}. */
   sendResult?: unknown;
-  /** Throw inside chat.send. Default null. */
   sendError?: Error | null;
-  /** Events to emit AFTER chat.send resolves, in order. The default
-   *  emits a single final-state event with the supplied body. */
   events?: ChatEvent[];
-  /** Body to wrap in the default final-state event. */
   body?: string;
-  /** Skip emitting any events (forces sendChatAndAwaitReply to time
-   *  out at its caller-supplied deadline). */
   silent?: boolean;
 }
 
@@ -90,11 +116,7 @@ function makeStubClient(opts: StubOpts = {}): SendChatClient {
       if (method !== 'chat.send') return undefined;
       if (opts.sendError) throw opts.sendError;
       if (!opts.silent) {
-        // Emit events AFTER the send call resolves, attached to the
-        // requested sessionKey so the listener accepts them.
         const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey;
-        // setImmediate so the await in the orchestrator picks them up
-        // after we've returned from the call.
         setImmediate(() => {
           for (const e of emitAfterSend) {
             const withKey = { ...e, sessionKey };
@@ -183,7 +205,8 @@ test('buildBriefPrompt: omits topic section when not supplied', () => {
 
 test('runBrief: happy path → running → complete with parsed citations', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'WebGPU support', prompt: 'Survey WebGPU support.',
@@ -211,9 +234,10 @@ test('runBrief: happy path → running → complete with parsed citations', asyn
 
 // ─── orchestrator: failure modes ────────────────────────────────────
 
-test('runBrief: missing researcher → failed cleanly', async () => {
+test('runBrief: missing researcher roster entry → failed with no_researcher_in_roster', async () => {
   const ws = freshWorkspace();
-  // No ensureResearcher() call — workspace has none.
+  ensureRunner();
+  // No ensureResearcherRosterEntry() call — workspace has no researcher.
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
@@ -223,15 +247,35 @@ test('runBrief: missing researcher → failed cleanly', async () => {
 
   const runRow = getAgentRun(agent_run.id);
   assert.equal(runRow?.status, 'failed');
-  assert.match(runRow?.error_md ?? '', /No active researcher/);
+  assert.match(runRow?.error_md ?? '', /no researcher in its roster/i);
+  assert.match(runRow?.error_md ?? '', /Add agents/);
 
   const reloaded = getBrief(brief.id);
-  assert.match(reloaded?.error_md ?? '', /No active researcher/);
+  assert.match(reloaded?.error_md ?? '', /no researcher in its roster/i);
+});
+
+test('runBrief: missing runner → failed with no_runner', async () => {
+  // Wipe any runner that earlier tests inserted.
+  run(`DELETE FROM agents WHERE gateway_agent_id IN ('mc-runner-dev', 'mc-runner')`);
+  const ws = freshWorkspace();
+  ensureResearcherRosterEntry(ws);
+  // No ensureRunner() — workspace has researcher but no runner.
+  const { brief, agent_run } = createBriefWithRun({
+    workspace_id: ws, template: 'general_brief',
+    title: 'x', prompt: 'p',
+  });
+
+  await runBrief(brief.id, { awaitCompletionForTesting: true });
+
+  const runRow = getAgentRun(agent_run.id);
+  assert.equal(runRow?.status, 'failed');
+  assert.match(runRow?.error_md ?? '', /No runner agent registered/);
 });
 
 test('runBrief: gateway not connected → failed with gateway message', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
@@ -248,7 +292,8 @@ test('runBrief: gateway not connected → failed with gateway message', async ()
 
 test('runBrief: chat.send throws → failed', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
@@ -267,7 +312,8 @@ test('runBrief: chat.send throws → failed', async () => {
 
 test('runBrief: gateway returns no events → fails with timeout message', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
@@ -287,7 +333,8 @@ test('runBrief: gateway returns no events → fails with timeout message', async
 
 test('runBrief: empty body → fails with explicit message', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
@@ -304,12 +351,12 @@ test('runBrief: empty body → fails with explicit message', async () => {
 
 test('runBrief: refuses to redispatch a brief that is already running', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const { brief, agent_run } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
     title: 'x', prompt: 'p',
   });
-  // Force the run into "running" state so a second dispatch must be rejected.
   markRunning(agent_run.id);
 
   const result = await runBrief(brief.id);
@@ -325,7 +372,8 @@ test('runBrief: returns rejected for unknown brief id', async () => {
 
 test('runBrief: topic context flows into the assembled prompt', async () => {
   const ws = freshWorkspace();
-  ensureResearcher(ws);
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
   const topic = createTopic({
     workspace_id: ws,
     name: 'Acme competitor',
@@ -351,8 +399,9 @@ test('runBrief: topic context flows into the assembled prompt', async () => {
     },
   });
 
-  // We don't care about the orchestrator's failure-on-empty path here;
-  // we just want the message that hit chat.send.
+  // dispatchScope packages the trigger_body into the briefing along
+  // with the role persona; the chat.send message is the full briefing
+  // (which includes our trigger_body — the assembled brief prompt).
   await runBrief(brief.id, { timeoutMs: 30, awaitCompletionForTesting: true });
 
   assert.match(capturedMessage, /Acme competitor/);

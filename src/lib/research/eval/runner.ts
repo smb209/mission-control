@@ -62,19 +62,23 @@ function ensureWorkspace(workspaceId?: string): string {
   return id;
 }
 
-function ensureResearcher(workspaceId: string): void {
-  const existing = run(
-    `SELECT 1 FROM agents WHERE workspace_id = ? AND role = 'researcher' LIMIT 1`,
-    [workspaceId],
-  );
-  // run() returns RunResult, not rows. Use a probe insert with OR IGNORE
-  // pattern instead — safer than depending on a select.
+function ensureResearcherAndRunner(workspaceId: string): void {
+  // Phase 2: researcher is a role-only roster marker (no gateway binding).
   run(
-    `INSERT OR IGNORE INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, created_at, updated_at)
-     VALUES (?, 'mc-researcher-eval', 'researcher', '🔍', 'standby', 0, ?, 'gateway', 'gw-eval', 'agent:gw-eval', 'spark-lb/agent', datetime('now'), datetime('now'))`,
+    `INSERT OR IGNORE INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, is_active, created_at, updated_at)
+     VALUES (?, 'mc-researcher-eval', 'researcher', '🔍', 'standby', 0, ?, 'local', 1, datetime('now'), datetime('now'))`,
     [`agent-eval-${workspaceId.slice(-8)}`, workspaceId],
   );
-  void existing;
+  // The runner hosts the actual session via dispatchScope. One row in
+  // 'default' is enough — getRunnerAgent() resolves it for any workspace.
+  run(
+    `INSERT OR IGNORE INTO workspaces (id, name, slug, created_at) VALUES ('default', 'default', 'default', datetime('now'))`,
+  );
+  run(
+    `INSERT OR IGNORE INTO agents
+       (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, is_active, created_at, updated_at)
+       VALUES ('runner-eval', 'MC Runner Dev', 'runner', '⚙️', 'standby', 0, 'default', 'gateway', 'mc-runner-dev', 'agent:mc-runner-dev:main', 'spark-lb/agent', 1, datetime('now'), datetime('now'))`,
+  );
 }
 
 /** Build a stub openclaw client that emits a canned reply once and
@@ -157,7 +161,7 @@ export async function runEval(opts: EvalRunOptions = {}): Promise<EvalRunReport>
   const runId = `${startedAt.replace(/[:.]/g, '-')}_${uuidv4().slice(0, 6)}`;
   const outputDir = opts.outputDir ?? path.join(process.cwd(), 'tmp', 'research-eval');
   const workspaceId = ensureWorkspace(opts.workspaceId);
-  ensureResearcher(workspaceId);
+  ensureResearcherAndRunner(workspaceId);
 
   const fixtures = opts.only
     ? FIXTURES.filter(f => opts.only!.includes(f.id))
