@@ -4155,6 +4155,54 @@ const migrations: Migration[] = [
       console.log('[Migration 075] agent_runs + topics + briefs tables created.');
     },
   },
+  {
+    id: '076',
+    name: 'research_suggestions',
+    up: (db) => {
+      // PM-driven topic / brief suggestions. Operator clicks Suggest
+      // on the Research hub → PM dispatch surveys workspace state →
+      // returns a small set of candidate topics or briefs → operator
+      // multi-selects → accepted ones become real topics/briefs
+      // (briefs land queued, no auto-dispatch).
+      //
+      // payload_json shape varies per kind:
+      //   topic:
+      //     { name, description, tags, default_brief_template? }
+      //   brief:
+      //     { title, prompt, topic_id?, template }
+      //   recurring_brief (RESERVED — not generated until phase-2
+      //     schedules ship; left in the CHECK so we don't have to
+      //     migrate when it lands):
+      //     { title, prompt, topic_id?, template, cadence }
+      //
+      // rationale: short why-this-matters string from the PM, shown
+      // alongside the candidate in the picker so the operator knows
+      // why it was suggested.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS research_suggestions (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN (
+            'topic', 'brief', 'recurring_brief'
+          )),
+          payload_json TEXT NOT NULL,
+          rationale TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+            'pending', 'accepted', 'rejected', 'dismissed'
+          )),
+          source_run_id TEXT,
+          accepted_as_id TEXT,
+          decided_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_suggestions_workspace_status ON research_suggestions(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_suggestions_kind_status ON research_suggestions(kind, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_research_suggestions_source_run ON research_suggestions(source_run_id) WHERE source_run_id IS NOT NULL`);
+      console.log('[Migration 076] research_suggestions table created.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
