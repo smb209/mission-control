@@ -11,12 +11,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, RefreshCw, Search, FileText, Zap, Archive, AlertTriangle } from 'lucide-react';
+import { Plus, RefreshCw, Search, FileText, Zap, Archive, AlertTriangle, Sparkles } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { useMissionControl } from '@/lib/store';
 import { formatDistanceToNow } from 'date-fns';
 import { CreateTopicDrawer } from '@/components/research/CreateTopicDrawer';
 import { RunBriefDrawer } from '@/components/research/RunBriefDrawer';
+import { SuggestPickerDrawer } from '@/components/research/SuggestPickerDrawer';
 import { useResearchPreflight } from '@/components/research/useResearchPreflight';
 
 interface TopicSummary {
@@ -70,6 +71,7 @@ export default function ResearchHubPage() {
   const [createTopicOpen, setCreateTopicOpen] = useState(false);
   const [runBriefOpen, setRunBriefOpen] = useState(false);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
+  const [suggestKind, setSuggestKind] = useState<'topic' | 'brief' | null>(null);
 
   const preflight = useResearchPreflight(workspaceId);
 
@@ -134,14 +136,26 @@ export default function ResearchHubPage() {
       <aside className="w-64 border-r border-mc-border bg-mc-bg-secondary flex flex-col shrink-0">
         <div className="px-3 py-2 border-b border-mc-border flex items-center justify-between">
           <span className="text-[10px] uppercase tracking-wider text-mc-text-secondary">Topics</span>
-          <button
-            type="button"
-            onClick={() => setCreateTopicOpen(true)}
-            className="p-1 rounded-sm text-mc-accent hover:bg-mc-bg-tertiary"
-            aria-label="Create topic"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              onClick={() => setSuggestKind('topic')}
+              className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-accent hover:bg-mc-bg-tertiary"
+              aria-label="Suggest topics"
+              title="Suggest topics from project state"
+            >
+              <Sparkles className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateTopicOpen(true)}
+              className="p-1 rounded-sm text-mc-accent hover:bg-mc-bg-tertiary"
+              aria-label="Create topic"
+              title="Create topic from scratch"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         <ul className="flex-1 overflow-y-auto py-1">
           <li>
@@ -193,6 +207,15 @@ export default function ResearchHubPage() {
             </button>
             <button
               type="button"
+              onClick={() => setSuggestKind('brief')}
+              title="Suggest briefs from project state"
+              className="px-3 py-1.5 text-sm rounded-sm border border-mc-border text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Suggest
+            </button>
+            <button
+              type="button"
               onClick={() => setRunBriefOpen(true)}
               disabled={!preflight.ok && !preflight.loading}
               title={preflight.ok ? undefined : 'A researcher must be in this workspace before you can dispatch a brief'}
@@ -239,6 +262,15 @@ export default function ResearchHubPage() {
         workspaceId={workspaceId}
         onCreated={() => { setCreateTopicOpen(false); load(); }}
       />
+      {suggestKind && (
+        <SuggestPickerDrawer
+          open={!!suggestKind}
+          onClose={() => setSuggestKind(null)}
+          workspaceId={workspaceId}
+          kind={suggestKind}
+          onAccepted={() => { setSuggestKind(null); load(); }}
+        />
+      )}
       <RunBriefDrawer
         open={runBriefOpen}
         onClose={() => setRunBriefOpen(false)}
