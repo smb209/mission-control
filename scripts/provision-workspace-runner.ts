@@ -70,11 +70,65 @@ const TEMPLATES_DIR = path.join(REPO_ROOT, 'agent-templates');
 
 /**
  * Files we manage from the role template. Anything outside this list
- * (HEARTBEAT.md, BOOTSTRAP.md, TOOLS.md, USER.md, MC-CONTEXT.json)
- * stays as openclaw provided it — those are operator state, not role
- * identity.
+ * (HEARTBEAT.md, TOOLS.md, USER.md, MC-CONTEXT.json) stays as openclaw
+ * provided it — those are operator state, not role identity.
  */
 const TEMPLATED_FILES = ['SOUL.md', 'AGENTS.md', 'IDENTITY.md'];
+
+/**
+ * Files we delete from openclaw's defaults if present. BOOTSTRAP.md is
+ * openclaw's first-run "agent doesn't know who it is — ask the operator
+ * for a name, timezone, messaging channel" script. The MC role
+ * personas have already supplied identity (SOUL.md / IDENTITY.md), so
+ * the bootstrap dialog actively misfires — the agent says "I'm
+ * Margaret Maps Hamilton, your workspace PM" and then immediately asks
+ * "who am I talking to, what timezone, WhatsApp or Telegram?" because
+ * BOOTSTRAP.md was still in the workspace dir at session start.
+ *
+ * BOOTSTRAP.md self-documents that it should be deleted when done:
+ * "When you are done — Delete this file. You don't need a bootstrap
+ * script anymore — you're you now." Provisioning is exactly that
+ * "when you are done."
+ */
+const REMOVED_FILES = ['BOOTSTRAP.md'];
+
+/**
+ * Files openclaw seeds with generic templates that don't apply to MC
+ * role agents but that openclaw itself reads at session start. We
+ * leave the file in place so openclaw finds it, but replace its
+ * content with a thin MC-aware stub so the agent doesn't read
+ * misleading defaults.
+ *
+ * - USER.md: openclaw default is an empty fill-in form (Name /
+ *   Pronouns / Timezone / Notes) that invites the agent to
+ *   interrogate the operator. MC injects operator context via the
+ *   briefing pipeline (AGENTS.md sections), so this file should be
+ *   reserved for free-form operator notes only.
+ * - TOOLS.md: openclaw default lists example cameras / SSH hosts /
+ *   TTS voices — irrelevant to an MC PM or researcher. Replaced
+ *   with a pointer to the MCP tool profile (configured per-agent
+ *   in ~/.openclaw/openclaw.json) so the agent doesn't try to act
+ *   on the example-camera entries.
+ *
+ * HEARTBEAT.md is left alone — the openclaw default is already a
+ * single comment line ("Keep this file empty to skip heartbeat API
+ * calls") which is correct for MC agents.
+ */
+const RESET_FILES: Record<string, string> = {
+  'USER.md':
+    `# USER.md\n\n` +
+    `_This workspace is managed by Mission Control. Operator context is_\n` +
+    `_injected on dispatch via the role briefing (see AGENTS.md), not_\n` +
+    `_read from this file. Use this file only for free-form operator notes_\n` +
+    `_you want the agent to see in direct chat sessions._\n`,
+  'TOOLS.md':
+    `# TOOLS.md\n\n` +
+    `_This workspace is managed by Mission Control. The agent's MCP tool_\n` +
+    `_profile (which servers are exposed, allow/deny rules) is configured_\n` +
+    `_per-agent in \`~/.openclaw/openclaw.json\` and surfaced at session_\n` +
+    `_start by openclaw — not from this file. Use this file only for_\n` +
+    `_ad-hoc local notes the agent should consult in direct chat sessions._\n`,
+};
 
 function fail(msg: string): never {
   process.stderr.write(`ERROR: ${msg}\n`);
@@ -212,6 +266,48 @@ async function seedRoleTemplates(role: string, workspaceDir: string): Promise<bo
     }
     await fs.writeFile(dest, content);
     process.stderr.write(`  ${file.padEnd(15)} ${prior === null ? 'created' : 'overwrote openclaw default'}\n`);
+    changed++;
+  }
+
+  // Strip openclaw defaults that conflict with the MC role personas.
+  for (const file of REMOVED_FILES) {
+    const dest = path.join(workspaceDir, file);
+    try {
+      await fs.unlink(dest);
+      process.stderr.write(`  ${file.padEnd(15)} removed (openclaw default conflicts with MC persona)\n`);
+      changed++;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Already absent — fine.
+    }
+  }
+
+  // Replace openclaw default templates with MC-aware stubs. We
+  // overwrite unconditionally — if the operator added free-form notes
+  // to USER.md or TOOLS.md, those are preserved across reseeds only
+  // if they kept the MC-stub header on top (we look for it as a
+  // sentinel below).
+  for (const [file, stubContent] of Object.entries(RESET_FILES)) {
+    const dest = path.join(workspaceDir, file);
+    let prior: string | null = null;
+    try {
+      prior = await fs.readFile(dest, 'utf8');
+    } catch {
+      // Missing — we'll create.
+    }
+    if (prior === stubContent) {
+      process.stderr.write(`  ${file.padEnd(15)} unchanged\n`);
+      continue;
+    }
+    // Sentinel check: if the existing file already starts with our
+    // MC-managed header, the operator may have appended their own
+    // notes below. Don't clobber those — leave the file alone.
+    if (prior !== null && prior.startsWith(stubContent.split('\n').slice(0, 3).join('\n'))) {
+      process.stderr.write(`  ${file.padEnd(15)} kept (operator notes appended below MC stub)\n`);
+      continue;
+    }
+    await fs.writeFile(dest, stubContent);
+    process.stderr.write(`  ${file.padEnd(15)} ${prior === null ? 'created (MC stub)' : 'reset (replaced openclaw default with MC stub)'}\n`);
     changed++;
   }
 
