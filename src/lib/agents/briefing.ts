@@ -25,7 +25,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
-import { queryOne } from '@/lib/db';
+import { queryAll, queryOne } from '@/lib/db';
 
 export type BriefingRole =
   | 'pm'
@@ -141,6 +141,62 @@ function buildNotetakerAddendum(input: BuildBriefingInput): string {
   );
 }
 
+/**
+ * Phase J2: when the briefing is going to a workspace PM's per-task
+ * coord session, surface the active-subagent manifest from
+ * `mc_sessions` so the PM (post-compaction or cold-start) can recover
+ * orchestration state without remembering it.
+ *
+ * Returns empty string when:
+ *  - no `task_id` in the briefing input (not a per-task coord briefing)
+ *  - no active subagents for the task (nothing to surface)
+ *
+ * The manifest is informational — the PM uses it to decide whether to
+ * spawn more subagents, accept results, or escalate. Authoritative
+ * state lives in mc_sessions; the PM looks it up rather than
+ * remembering.
+ */
+function buildActiveSubagentManifest(input: BuildBriefingInput): string {
+  if (!input.task_id) return '';
+  interface Row {
+    scope_key: string;
+    role: string;
+    attempt: number;
+    status: string;
+    last_used_at: string;
+    created_at: string;
+    run_id: string | null;
+  }
+  const rows = queryAll<Row>(
+    `SELECT scope_key, role, attempt, status, last_used_at, created_at, run_id
+       FROM mc_sessions
+      WHERE task_id = ?
+        AND scope_type = 'task_role'
+        AND status IN ('active', 'idle')
+      ORDER BY created_at ASC`,
+    [input.task_id],
+  );
+  if (rows.length === 0) return '';
+  const lines = rows.map((r) => {
+    const runFragment = r.run_id ? ` (run ${r.run_id.slice(0, 12)})` : '';
+    const startedFragment = r.created_at ? `, started ${r.created_at}` : '';
+    const lastFragment = r.last_used_at ? `, last activity ${r.last_used_at}` : '';
+    return (
+      `- **${r.role}** attempt ${r.attempt}${runFragment} — status=${r.status}` +
+      `${startedFragment}${lastFragment}\n  scope_key: \`${r.scope_key}\``
+    );
+  });
+  return [
+    '**Active subagents for this task:**',
+    '',
+    ...lines,
+    '',
+    "Look up current notes via `read_notes(task_id=…)`. Don't try to",
+    'remember any of this — re-read the manifest each time the briefing',
+    'rolls in.',
+  ].join('\n');
+}
+
 function buildResumeHint(input: BuildBriefingInput): string {
   if (!input.is_resume) return '';
   return (
@@ -166,6 +222,14 @@ export function buildBriefing(input: BuildBriefingInput): string {
   const notetaker = buildNotetakerAddendum(input);
   if (notetaker) {
     parts.push(`---\n\n${notetaker}`);
+  }
+
+  // Phase J2: active-subagent manifest precedes the trigger body so
+  // the PM sees the orchestration state before it reads what MC is
+  // asking it to do next.
+  const manifest = buildActiveSubagentManifest(input);
+  if (manifest) {
+    parts.push(`---\n\n${manifest}`);
   }
 
   if (input.trigger_body && input.trigger_body.trim()) {

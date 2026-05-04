@@ -25,12 +25,15 @@ import {
 } from '@/lib/gates/config';
 import { formatRoleSoulSection } from '@/lib/agents/role-souls';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
+import { dispatchSubagent } from '@/lib/agents/dispatch-subagent';
 import {
   computeWorkerScopeSuffix,
   getRunnerAgent,
   isScopeKeyedDispatchEnabled,
+  isSubagentSpawnEnabled,
   nextWorkerAttempt,
 } from '@/lib/agents/runner';
+import { getPmAgent } from '@/lib/agents/pm-resolver';
 import type { BriefingRole } from '@/lib/agents/briefing';
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
@@ -945,13 +948,47 @@ If you need help or clarification, ask the orchestrator.`;
       // agent stays as the task's `assigned_agent_id` for the
       // operator UI (and remains the fallback when the runner is
       // missing).
+      const useSubagentSpawn = isSubagentSpawnEnabled();
       const useScopeKeyed = isScopeKeyedDispatchEnabled();
-      const runner = useScopeKeyed ? getRunnerAgent() : null;
-      const briefingRole = runner ? resolveBriefingRole(agent) : null;
+      const runner = useScopeKeyed && !useSubagentSpawn ? getRunnerAgent() : null;
+      const briefingRole = useSubagentSpawn || runner ? resolveBriefingRole(agent) : null;
+
+      // Phase J2: when MC_USE_SUBAGENT_SPAWN=1, the workspace PM
+      // becomes the parent of all worker subagents. MC dispatches a
+      // META envelope to the PM's per-task coord session (`coord-task-
+      // <id>`) telling it to call openclaw `sessions_spawn` + register
+      // the resulting runId via `register_subagent_dispatch`. The PM
+      // owns the spawn; MC owns the bookkeeping. See
+      // specs/scope-keyed-sessions-phase-j.md.
+      const workspacePm =
+        useSubagentSpawn && task.workspace_id
+          ? getPmAgent(task.workspace_id)
+          : null;
 
       let sendResult: Awaited<ReturnType<typeof sendChatToAgent>>;
 
-      if (useScopeKeyed && runner && briefingRole) {
+      if (useSubagentSpawn && workspacePm && briefingRole && briefingRole !== 'pm') {
+        // Subagent-spawn branch.
+        const attempt = nextWorkerAttempt(task.id, briefingRole);
+        const dispatchResult = dispatchSubagent({
+          workspace_id: task.workspace_id ?? '',
+          role: briefingRole,
+          pm: workspacePm,
+          task_id: task.id,
+          attempt,
+          trigger_body: finalMessage,
+        });
+        // The PM receives the META envelope at its per-task coord
+        // session; sendChatToAgent computes the same scope key via
+        // session_key_prefix + sessionSuffix.
+        const coordSessionSuffix = `coord-task-${task.id}`;
+        sendResult = await sendChatToAgent({
+          agent: workspacePm,
+          message: dispatchResult.meta_message,
+          idempotencyKey,
+          sessionSuffix: coordSessionSuffix,
+        });
+      } else if (useScopeKeyed && runner && briefingRole) {
         // Scope-keyed branch: the runner receives the briefing; the
         // briefing carries the role-soul + identity preamble carrying
         // the runner's UUID + a notetaker addendum + the legacy

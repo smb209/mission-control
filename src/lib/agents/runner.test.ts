@@ -15,6 +15,7 @@ import {
   computeWorkerScopeSuffix,
   getRunnerAgent,
   isScopeKeyedDispatchEnabled,
+  isSubagentSpawnEnabled,
   nextWorkerAttempt,
 } from './runner';
 
@@ -139,4 +140,18 @@ test('isScopeKeyedDispatchEnabled: defaults on, opt-out via env=0', () => {
   assert.equal(isScopeKeyedDispatchEnabled(), false);
   if (prev === undefined) delete process.env.MC_USE_SCOPE_KEYED_DISPATCH;
   else process.env.MC_USE_SCOPE_KEYED_DISPATCH = prev;
+});
+
+test('isSubagentSpawnEnabled: defaults off (Phase J2), opt-in via env=1', () => {
+  const prev = process.env.MC_USE_SUBAGENT_SPAWN;
+  delete process.env.MC_USE_SUBAGENT_SPAWN;
+  assert.equal(isSubagentSpawnEnabled(), false);
+  process.env.MC_USE_SUBAGENT_SPAWN = '1';
+  assert.equal(isSubagentSpawnEnabled(), true);
+  process.env.MC_USE_SUBAGENT_SPAWN = 'true';
+  assert.equal(isSubagentSpawnEnabled(), true);
+  process.env.MC_USE_SUBAGENT_SPAWN = '0';
+  assert.equal(isSubagentSpawnEnabled(), false);
+  if (prev === undefined) delete process.env.MC_USE_SUBAGENT_SPAWN;
+  else process.env.MC_USE_SUBAGENT_SPAWN = prev;
 });
