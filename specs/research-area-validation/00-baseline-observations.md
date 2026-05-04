@@ -16,12 +16,19 @@
 - **Latest migration:** _(paste from `sqlite3 $DATABASE_PATH "SELECT MAX(id) FROM _migrations"`)_
 - **Confirm absent (will be added by slice 1):** `agent_runs`, `topics`, `briefs`
 
-## 2. Researcher persona state
+## 2. Researcher roster + runner state
 
-> Capture with: `sqlite3 $DATABASE_PATH "SELECT id, name, role, runtime_kind FROM agents WHERE role='researcher' OR name LIKE '%researcher%';"`
+**Updated for phase 2:** the researcher is a **role-only roster entry** (no gateway binding). The actual chat session is hosted by the workspace runner via `dispatchScope`, which composes the researcher persona from `agent-templates/researcher/{SOUL,AGENTS,IDENTITY}.md` at briefing time.
 
-- **Researcher rows present:** _(paste)_
-- **Per-workspace presence:** confirm `mc-researcher-dev` exists in the workspaces we'll use for validation (default + at least one secondary).
+> Capture with:
+> ```
+> sqlite3 $DATABASE_PATH \
+>   "SELECT name, role, source, gateway_agent_id FROM agents
+>      WHERE workspace_id = '<ws_id>' AND role IN ('researcher','runner','pm');"
+> ```
+
+- **Researcher roster entries:** _(paste — should be `source='local'`, `gateway_agent_id=NULL`; provisioned via the Add Agents picker)_
+- **Runner present:** _(paste — single `mc-runner-dev` row in `default` workspace)_
 - **Persona files on disk:**
   - `agent-templates/researcher/SOUL.md` ✅
   - `agent-templates/researcher/AGENTS.md` ✅
@@ -29,15 +36,15 @@
 
 ## 3. Web-tool exposure (the main risk)
 
-The phase-1 dispatch path uses `openclaw/send-chat.ts` directly, not the worker-task pipeline. The researcher persona's `send-chat` session must surface web-fetch / web-search tools or briefs cannot cite real sources.
+The phase-2 dispatch path uses `dispatchScope` against the runner. The runner's `send-chat` session must surface web-fetch / web-search tools or briefs cannot cite real sources.
 
-> Capture by: dispatching a simple "what is the current price of GOOG?" probe to the researcher via existing PM chat or a manual `send-chat` invocation, and checking the response for evidence of web access. Document one of:
+> Capture by: dispatching a simple "what is the current price of GOOG?" probe to the runner via existing PM chat or a manual `send-chat` invocation, and checking the response for evidence of web access. Document one of:
 >
-> - **GREEN** — researcher returns a current-day-priced answer with citations, indicating live web access
-> - **YELLOW** — researcher returns a non-current answer but acknowledges the missing tool; we'll need to wire web tools into `send-chat` profile in slice 3
+> - **GREEN** — runner returns a current-day-priced answer with citations, indicating live web access
+> - **YELLOW** — runner returns a non-current answer but acknowledges the missing tool; web-tool wiring on the runner needs follow-up
 > - **BLOCKED** — `send-chat` itself fails or returns nothing usable; deeper fix needed before phase 1 can ship
 
-Result: _(fill in)_
+Result: _(fill in — Run 2 confirmed GREEN against `main` agent with web access)_
 
 ## 4. Recurring scheduler state
 

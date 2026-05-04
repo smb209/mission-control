@@ -30,10 +30,22 @@ function freshWorkspace(): string {
 }
 
 function ensureResearcher(workspaceId: string): void {
+  // Phase 2: researcher is a role-only roster marker (no gateway binding).
   run(
-    `INSERT INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, created_at, updated_at)
-     VALUES (?, 'mc-researcher-test', 'researcher', '🔍', 'standby', 0, ?, 'gateway', 'gw-r', 'agent:gw-r', 'spark-lb/agent', datetime('now'), datetime('now'))`,
+    `INSERT INTO agents (id, name, role, avatar_emoji, status, is_master, workspace_id, source, is_active, created_at, updated_at)
+     VALUES (?, 'mc-researcher-test', 'researcher', '🔍', 'standby', 0, ?, 'local', 1, datetime('now'), datetime('now'))`,
     [`ag-${uuidv4().slice(0, 8)}`, workspaceId],
+  );
+}
+
+function ensureRunner(): void {
+  run(
+    `INSERT OR IGNORE INTO workspaces (id, name, slug, created_at) VALUES ('default', 'default', 'default', datetime('now'))`,
+  );
+  run(
+    `INSERT OR IGNORE INTO agents
+       (id, name, role, avatar_emoji, status, is_master, workspace_id, source, gateway_agent_id, session_key_prefix, model, is_active, created_at, updated_at)
+       VALUES ('runner-route-test', 'MC Runner Dev', 'runner', '⚙️', 'standby', 0, 'default', 'gateway', 'mc-runner-dev', 'agent:mc-runner-dev:main', 'spark-lb/agent', 1, datetime('now'), datetime('now'))`,
   );
 }
 
@@ -70,6 +82,7 @@ test('POST /api/briefs/[id]/run: 404 for unknown', async () => {
 test('POST /api/briefs/[id]/run: 202 on accepted dispatch', async () => {
   const ws = freshWorkspace();
   ensureResearcher(ws);
+  ensureRunner();
   __setSendChatClientForTests(inertStub());
   const { brief } = createBriefWithRun({
     workspace_id: ws, template: 'general_brief',
