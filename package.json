@@ -13,6 +13,7 @@
     "mcp:integration": "tsx scripts/mcp-integration-test.mjs",
     "mcp:e2e:next": "node scripts/mcp-next-e2e.mjs",
     "db:seed": "tsx src/lib/db/seed.ts",
+    "research:eval": "tsx scripts/run-research-eval.ts",
     "db:backup": "tsx scripts/db-backup.ts",
     "db:backup:list": "tsx scripts/db-backup.ts --list",
     "db:restore": "cp mission-control.db.backup mission-control.db && echo 'Restored from backup'",
