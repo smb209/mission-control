@@ -130,6 +130,25 @@ export interface BuildPromptInput {
 export function buildBriefPrompt(input: BuildPromptInput): string {
   const sections: string[] = [];
   sections.push(`# Research Brief request: ${input.title}`);
+  // Override the persona's task-completion sequence. The researcher
+  // AGENTS.md instructs the agent to call `register_deliverable` /
+  // `update_task_status` keyed on `task_id` — but briefs aren't
+  // tasks, so those calls fail. The orchestrator captures the agent's
+  // reply text directly via sendChatAndAwaitReply. Tell the agent
+  // explicitly so it doesn't waste tokens (and produce a confused
+  // "couldn't find that task" trail) on the deliverable flow.
+  sections.push(
+    `## How to deliver this brief\n\n` +
+    `**This is a Research Brief, NOT a Mission Control task.** Do NOT call ` +
+    `\`register_deliverable\`, \`update_task_status\`, or \`log_activity\`. ` +
+    `The \`task_id\` you see in your briefing is a synthetic scope key — ` +
+    `there is no underlying task row, and these tool calls will fail.\n\n` +
+    `**Deliver by replying with the brief body as your final assistant ` +
+    `message.** The orchestrator captures whatever text you reply with as ` +
+    `the brief's \`result_md\` and parses citations from inline markdown ` +
+    `links. No \`take_note\` / breadcrumb chain is needed — there is no ` +
+    `next stage; the operator reads your reply directly.`,
+  );
   if (input.topicContext) {
     sections.push(
       `## Topic context\n` +

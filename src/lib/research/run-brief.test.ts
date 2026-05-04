@@ -201,6 +201,25 @@ test('buildBriefPrompt: omits topic section when not supplied', () => {
   assert.doesNotMatch(prompt, /Topic context/);
 });
 
+test('buildBriefPrompt: includes the brief-mode override (no register_deliverable / update_task_status)', () => {
+  // Pinning the contract: the researcher persona's AGENTS.md tells the
+  // agent to call register_deliverable + update_task_status as its
+  // closing sequence. Briefs aren't tasks, so those calls fail. The
+  // assembled prompt MUST include an explicit override telling the
+  // agent to deliver via reply text instead. Drift in this string
+  // re-introduces the old "couldn't find that task" failure mode.
+  const prompt = buildBriefPrompt({
+    template: 'general_brief',
+    title: 't',
+    prompt: 'p',
+    topicContext: null,
+  });
+  assert.match(prompt, /NOT a Mission Control task/i);
+  assert.match(prompt, /register_deliverable/);
+  assert.match(prompt, /update_task_status/);
+  assert.match(prompt, /replying with the brief body/i);
+});
+
 // ─── orchestrator: happy path ───────────────────────────────────────
 
 test('runBrief: happy path → running → complete with parsed citations', async () => {

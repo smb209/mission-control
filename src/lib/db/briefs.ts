@@ -226,6 +226,30 @@ export function setBriefResult(id: string, input: SetBriefResultInput): Brief | 
   return getBrief(id);
 }
 
+/**
+ * Hard-delete a brief and its 1:1 agent_run.
+ *
+ * Schema is `briefs.agent_run_id REFERENCES agent_runs(id) ON DELETE
+ * CASCADE` — so deleting the agent_run cascades into the brief. We
+ * delete the agent_run as the entry point (the brief goes with it
+ * via cascade) so we don't leave orphan run rows behind.
+ *
+ * No status guard — operators can delete a brief in any state,
+ * including mid-flight. The orchestrator's writes after deletion
+ * (setBriefResult / markComplete / setBriefError) all do
+ * `getBrief(id)` first and silently no-op when the row is gone.
+ *
+ * Returns `true` when the brief existed (and was removed), `false`
+ * when the id was unknown.
+ */
+export function deleteBrief(id: string): boolean {
+  const brief = getBrief(id);
+  if (!brief) return false;
+  // Cascade: deleting the agent_run row removes the brief too.
+  run(`DELETE FROM agent_runs WHERE id = ?`, [brief.agent_run_id]);
+  return true;
+}
+
 export function setBriefError(id: string, errorMd: string): Brief | null {
   const current = getBrief(id);
   if (!current) return null;

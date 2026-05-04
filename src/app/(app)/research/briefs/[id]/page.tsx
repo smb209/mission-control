@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, ExternalLink, RefreshCw, RotateCw } from 'lucide-react';
+import { ArrowLeft, ExternalLink, RefreshCw, RotateCw, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useMissionControl } from '@/lib/store';
 import { formatDistanceToNow } from 'date-fns';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface Brief {
   id: string;
@@ -57,6 +58,9 @@ export default function BriefDetailPage() {
   const [showCitations, setShowCitations] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!params.id) return;
@@ -106,6 +110,24 @@ export default function BriefDetailPage() {
       setRerunning(false);
     }
   }, [brief, rerunning, router]);
+
+  const doDelete = useCallback(async () => {
+    if (!brief || deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/briefs/${brief.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Delete failed (${res.status})`);
+      }
+      router.push(brief.topic_id ? `/research/topics/${brief.topic_id}` : '/research');
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed');
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }, [brief, deleting, router]);
 
   if (error) return <div className="p-6 text-red-300">{error}</div>;
   if (!brief || !run) return <div className="p-6 text-mc-text-secondary">{loading ? 'Loading…' : 'Brief not found.'}</div>;
@@ -164,6 +186,16 @@ export default function BriefDetailPage() {
             <RotateCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
             {rerunning ? 'Re-running…' : 'Re-run'}
           </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            disabled={deleting}
+            title="Delete this brief"
+            aria-label="Delete brief"
+            className="p-2 rounded-sm border border-mc-border text-red-300/80 hover:bg-red-900/20 hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
         </div>
       </header>
 
@@ -177,6 +209,12 @@ export default function BriefDetailPage() {
       {rerunError && (
         <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
           {rerunError}
+        </div>
+      )}
+
+      {deleteError && (
+        <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
+          {deleteError}
         </div>
       )}
 
@@ -226,6 +264,16 @@ export default function BriefDetailPage() {
           )}
         </section>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete this brief?"
+        body={`The brief "${brief.title}" and its agent run will be permanently removed. This cannot be undone.`}
+        confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+        destructive
+        onConfirm={doDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
