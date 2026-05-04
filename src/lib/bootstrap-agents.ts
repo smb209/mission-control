@@ -79,11 +79,23 @@ export class WorkspacePmRequiredError extends Error {
 export function ensurePmAgent(workspaceId: string): { id: string; created: boolean } {
   const db = getDb();
 
-  // Phase H: if the org-wide runner is registered with is_pm=1 +
-  // is_master=1, that's the workspace's PM. Don't seed a per-workspace
-  // placeholder — it'd duplicate the role and confuse hasWorkspacePm.
-  // Returns the runner's id so callers that record "the PM" get a
-  // valid FK target.
+  // Phase I: prefer a workspace-scoped PM (mc-pm-<slug>-*). If catalog
+  // sync has already inserted it, that's the PM — no placeholder
+  // needed. Note: a fresh workspace creates BEFORE its openclaw agent
+  // is provisioned; in that window the placeholder below is what the
+  // /pm UI renders, and the catalog sync will replace it on the next
+  // tick once the operator runs `yarn workspace:provision <slug>`.
+  const wsPm = db.prepare(
+    `SELECT id FROM agents
+       WHERE workspace_id = ?
+         AND is_pm = 1 AND is_master = 1 AND COALESCE(is_active, 1) = 1
+       LIMIT 1`,
+  ).get(workspaceId) as { id: string } | undefined;
+  if (wsPm) return { id: wsPm.id, created: false };
+
+  // Phase H back-compat: if the org-wide runner is registered as PM,
+  // any workspace can use it (singleton model). Phase I migration 071
+  // demotes those rows; this branch covers DBs mid-migration.
   const runner = db.prepare(
     `SELECT id FROM agents
        WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
@@ -264,31 +276,15 @@ export function cloneWorkflowTemplates(db: Database.Database, targetWorkspaceId:
 
 /**
  * Cheap presence check used by request handlers and pre-dispatch
- * guards. Returns true iff EITHER:
- *   - The org-wide runner agent (mc-runner / mc-runner-dev) exists with
- *     is_pm=1 AND is_master=1 AND is_active=1 — Phase H state. The
- *     runner serves every workspace as PM; one row covers them all.
- *   - A pre-Phase-H per-workspace PM placeholder exists in this
- *     workspace with the same flags. Backwards compatibility for DBs
- *     that haven't run migration 070 yet.
- *
- * The argument is named `workspaceId` for source-stability — Phase H
- * makes it advisory only.
+ * guards. Returns true iff this workspace has an active PM with the
+ * required flags. Phase I: the canonical PM is a per-workspace
+ * `mc-pm-<slug>-(dev)?` agent inserted by catalog sync; resolver
+ * walks the same fallback chain as `getPmAgent`.
  */
 export function hasWorkspacePm(workspaceId: string): boolean {
   const db = getDb();
-  // Phase H: org-wide runner row. Any workspace can dispatch through it.
-  const runner = db.prepare(
-    `SELECT 1 FROM agents
-       WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
-         AND is_pm = 1
-         AND is_master = 1
-         AND COALESCE(is_active, 1) = 1
-       LIMIT 1`,
-  ).get();
-  if (runner) return true;
 
-  // Backwards-compat: pre-Phase-H per-workspace PM placeholder.
+  // Phase I: workspace-scoped PM (the per-workspace mc-pm-<slug>-* agent).
   const ws = db.prepare(
     `SELECT 1 FROM agents
        WHERE workspace_id = ?
@@ -297,7 +293,20 @@ export function hasWorkspacePm(workspaceId: string): boolean {
          AND COALESCE(is_active, 1) = 1
        LIMIT 1`,
   ).get(workspaceId);
-  return Boolean(ws);
+  if (ws) return true;
+
+  // Backwards-compat: Phase H org-wide runner row. Recognized so a
+  // db migrated from H to I via the singleton path doesn't fail
+  // gates while the operator provisions per-workspace PMs.
+  const runner = db.prepare(
+    `SELECT 1 FROM agents
+       WHERE gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
+         AND is_pm = 1
+         AND is_master = 1
+         AND COALESCE(is_active, 1) = 1
+       LIMIT 1`,
+  ).get();
+  return Boolean(runner);
 }
 
 /**
