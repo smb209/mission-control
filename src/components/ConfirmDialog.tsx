@@ -52,16 +52,24 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
 
+  // Stash onCancel in a ref so the open/setup effect can depend on
+  // `open` ALONE. Including onCancel in the dep array re-ran the
+  // effect on every parent render (most callers pass a fresh closure
+  // for onCancel), which re-stole focus to the confirm button.
+  // Same fix as Drawer.tsx.
+  const onCancelRef = useRef(onCancel);
+  useEffect(() => { onCancelRef.current = onCancel; }, [onCancel]);
+
   // Focus the primary button on open + close on Escape.
   useEffect(() => {
     if (!open) return;
     confirmRef.current?.focus();
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') onCancel();
+      if (ev.key === 'Escape') onCancelRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+  }, [open]);
 
   if (!open) return null;
 

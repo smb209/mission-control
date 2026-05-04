@@ -16,7 +16,7 @@
  *   - POST /api/pm/proposals/[id]/accept    (apply transactionally)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 
 interface InitiativeLite {
@@ -165,16 +165,20 @@ export default function DecomposeStoryToTasksModal({
     };
   }, [proposalId, dispatchState, initiative.id, initiative.workspace_id]);
 
+  // Stash onClose in a ref so the keydown subscription doesn't churn
+  // on every parent render — same fix as Drawer.tsx.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
 
   const refine = async () => {
     if (!proposalId || !refineText.trim()) return;
