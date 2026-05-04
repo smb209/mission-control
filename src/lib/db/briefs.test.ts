@@ -231,3 +231,17 @@ test('FK SET NULL: archiving topic does not affect existing briefs; deleting top
   run(`DELETE FROM topics WHERE id = ?`, [topic.id]);
   assert.equal(getBrief(brief.id)?.topic_id, null);
 });
+
+test('deleteBrief: removes the brief and its agent_run via FK cascade', async () => {
+  const { deleteBrief } = await import('./briefs');
+  const ws = freshWorkspace();
+  const { brief, agent_run } = createBriefWithRun(baseInput(ws));
+  assert.equal(deleteBrief(brief.id), true);
+  assert.equal(getBrief(brief.id), null);
+  assert.equal(getAgentRun(agent_run.id), null);
+});
+
+test('deleteBrief: returns false for unknown id', async () => {
+  const { deleteBrief } = await import('./briefs');
+  assert.equal(deleteBrief('does-not-exist'), false);
+});
