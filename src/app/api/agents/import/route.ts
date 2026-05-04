@@ -37,6 +37,36 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Defensive workspace validation: every workspace_id referenced in
+    // the import must point at an existing row in workspaces. Without
+    // this, a stale localStorage workspace id (e.g. one cached from a
+    // since-deleted workspace) hits the agents.workspace_id FK and
+    // turns into an opaque 500 with `SQLITE_CONSTRAINT_FOREIGNKEY`.
+    // Cleaner to surface a 400 with the specific id so the operator
+    // (or the modal client) can recover.
+    const referencedIds = new Set(
+      body.agents.map((a) => a.workspace_id || 'default'),
+    );
+    const placeholders = [...referencedIds].map(() => '?').join(',');
+    const found = queryAll<{ id: string }>(
+      `SELECT id FROM workspaces WHERE id IN (${placeholders})`,
+      [...referencedIds],
+    );
+    const foundSet = new Set(found.map((w) => w.id));
+    const missingWorkspaces = [...referencedIds].filter((id) => !foundSet.has(id));
+    if (missingWorkspaces.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'workspace_not_found',
+          message: `referenced workspace_id(s) do not exist: ${missingWorkspaces.join(', ')}. ` +
+            `If your client cached a workspace id from a deleted workspace, clear ` +
+            `localStorage["mc.currentWorkspaceId"] or pick another workspace.`,
+          missing_workspace_ids: missingWorkspaces,
+        },
+        { status: 400 }
+      );
+    }
+
     // Conflict check is per-workspace: a gateway agent already cloned into
     // workspace A should still be importable into workspace B. Globally
     // scoped, a single import would block every other workspace from ever
