@@ -1,31 +1,57 @@
 /**
- * Phase I: emits the openclaw config block for a per-workspace PM
- * agent. The operator runs this script with a workspace slug, copies
- * the printed JSON into `~/.openclaw/openclaw.json` under
- * `agents.list[]`, and adds the matching tool profile.
+ * Phase I: provision a per-workspace PM agent in openclaw.
+ *
+ * Uses openclaw's native CLI bindings (not raw config-file editing) so
+ * the script rides along with openclaw upgrades and config schema
+ * changes:
+ *
+ *   1. `openclaw agents add <id> --workspace <dir> --model <m> --non-interactive --json`
+ *      Creates the agent record + workspace dir + writes the basic
+ *      entry into ~/.openclaw/openclaw.json.
+ *   2. `openclaw config get agents.list` to find the new entry's index.
+ *   3. `openclaw config set --batch-json [...]` to enrich with tools
+ *      profile / skills / heartbeat / display name.
+ *
+ * Idempotent — if the agent already exists (id collision), bails with
+ * a clear message instead of creating a duplicate. Use
+ * `openclaw agents delete <id> --force` first to recreate.
  *
  * Usage:
- *   yarn tsx scripts/provision-workspace-runner.ts <slug> [--prod]
+ *   yarn workspace:provision <slug> [--prod]
  *
  * Examples:
- *   yarn tsx scripts/provision-workspace-runner.ts foia
- *     → emits dev block for `mc-pm-foia-dev`
- *   yarn tsx scripts/provision-workspace-runner.ts foia --prod
- *     → emits prod block for `mc-pm-foia`
+ *   yarn workspace:provision foia
+ *     → creates `mc-pm-foia-dev` with sc-mission-control-dev MCP scope
+ *   yarn workspace:provision foia --prod
+ *     → creates `mc-pm-foia` with sc-mission-control MCP scope
  *
- * The script is read-only: it does NOT write to openclaw.json
- * (modifying that file under the operator's nose feels wrong, and
- * openclaw's CLI is the source-of-truth tool for that). It just
- * prints what to add.
- *
- * Constraints checked:
- *   - slug matches the openclaw segment grammar `[a-z0-9][a-z0-9_-]{0,63}`
- *   - slug doesn't collide with reserved prefixes (`agent:`, `cron:`, etc.)
- *   - resulting gateway_agent_id fits the 64-char openclaw segment limit
+ * MCP scope is derived from --prod flag and openclaw.json must already
+ * have both `sc-mission-control` and `sc-mission-control-dev` MCP
+ * server entries (run `openclaw mcp show <name>` to verify).
  */
+
+import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 const SEGMENT_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const RESERVED_PREFIXES = ['agent', 'cron', 'run', 'thread', 'subagent', 'main'];
+const DEFAULT_SKILLS = [
+  'acp-router',
+  'discord',
+  'github',
+  'gog',
+  'healthcheck',
+  'node-connect',
+  'openai-whisper',
+  'peekaboo',
+  'session-logs',
+  'skill-creator',
+  'tmux',
+  'video-frames',
+  'taskflow',
+];
+const DEFAULT_MODEL = 'spark-lb/agent';
 
 function fail(msg: string): never {
   process.stderr.write(`ERROR: ${msg}\n`);
@@ -35,7 +61,7 @@ function fail(msg: string): never {
 function parseArgs(): { slug: string; isProd: boolean } {
   const args = process.argv.slice(2).filter((a) => !!a);
   if (args.length === 0) {
-    fail('usage: yarn tsx scripts/provision-workspace-runner.ts <slug> [--prod]');
+    fail('usage: yarn workspace:provision <slug> [--prod]');
   }
   let isProd = false;
   let slug: string | null = null;
@@ -60,7 +86,53 @@ function validateSlug(slug: string): void {
   }
 }
 
-function emit(slug: string, isProd: boolean): void {
+interface RunResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function runOpenclaw(args: string[]): RunResult {
+  const result = spawnSync('openclaw', args, { encoding: 'utf8' });
+  if (result.error) {
+    fail(
+      `failed to invoke openclaw CLI: ${result.error.message}\n` +
+        `is the openclaw binary on PATH? (try: which openclaw)`,
+    );
+  }
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
+interface AgentListEntry {
+  id?: string;
+  name?: string;
+}
+
+function getAgentsList(): AgentListEntry[] {
+  const r = runOpenclaw(['config', 'get', 'agents.list']);
+  if (r.status !== 0) {
+    fail(`'openclaw config get agents.list' failed:\n${r.stderr || r.stdout}`);
+  }
+  try {
+    const parsed = JSON.parse(r.stdout) as AgentListEntry[];
+    if (!Array.isArray(parsed)) {
+      fail(`agents.list is not an array: ${typeof parsed}`);
+    }
+    return parsed;
+  } catch (err) {
+    fail(`failed to parse agents.list JSON: ${(err as Error).message}\n${r.stdout.slice(0, 200)}`);
+  }
+}
+
+function findAgentIndex(list: AgentListEntry[], id: string): number {
+  return list.findIndex((a) => a.id === id);
+}
+
+function provision(slug: string, isProd: boolean): void {
   const env = isProd ? '' : '-dev';
   const gatewayId = `mc-pm-${slug}${env}`;
   if (gatewayId.length > 64) {
@@ -70,64 +142,86 @@ function emit(slug: string, isProd: boolean): void {
   }
   const mcpServer = isProd ? 'sc-mission-control' : 'sc-mission-control-dev';
   const otherMcp = isProd ? 'sc-mission-control-dev' : 'sc-mission-control';
+  const workspaceDir = path.join(os.homedir(), '.openclaw', 'workspaces', gatewayId);
 
-  const block = {
-    id: gatewayId,
-    name: `MC PM (${slug}${isProd ? '' : ' / dev'})`,
-    workspace: `~/.openclaw/workspaces/${gatewayId}`,
-    model: 'spark-lb/agent',
-    skills: [
-      'acp-router',
-      'discord',
-      'github',
-      'gog',
-      'healthcheck',
-      'node-connect',
-      'openai-whisper',
-      'peekaboo',
-      'session-logs',
-      'skill-creator',
-      'tmux',
-      'video-frames',
-      'taskflow',
-    ],
-    heartbeat: {
-      every: '4h',
-      model: 'spark-lb/agent',
+  // 1. Idempotency check.
+  const before = getAgentsList();
+  if (findAgentIndex(before, gatewayId) >= 0) {
+    process.stderr.write(
+      `agent "${gatewayId}" already exists in openclaw.json — nothing to do.\n` +
+        `(to recreate: openclaw agents delete ${gatewayId} --force)\n`,
+    );
+    return;
+  }
+
+  // 2. Native add.
+  process.stderr.write(`→ openclaw agents add ${gatewayId} --workspace ${workspaceDir}\n`);
+  const addResult = runOpenclaw([
+    'agents',
+    'add',
+    gatewayId,
+    '--workspace',
+    workspaceDir,
+    '--model',
+    DEFAULT_MODEL,
+    '--non-interactive',
+    '--json',
+  ]);
+  if (addResult.status !== 0) {
+    fail(`'openclaw agents add' failed:\n${addResult.stderr || addResult.stdout}`);
+  }
+
+  // 3. Find the new index.
+  const after = getAgentsList();
+  const idx = findAgentIndex(after, gatewayId);
+  if (idx < 0) {
+    fail(`'openclaw agents add' reported success but agent "${gatewayId}" is missing from agents.list`);
+  }
+
+  // 4. Enrichment via batch config set.
+  const displayName = `MC PM (${slug}${isProd ? '' : ' / dev'})`;
+  const batch = [
+    { path: `agents.list[${idx}].name`, value: displayName },
+    { path: `agents.list[${idx}].skills`, value: DEFAULT_SKILLS },
+    { path: `agents.list[${idx}].heartbeat.every`, value: '4h' },
+    { path: `agents.list[${idx}].heartbeat.model`, value: DEFAULT_MODEL },
+    { path: `agents.list[${idx}].tools.profile`, value: 'coding' },
+    { path: `agents.list[${idx}].tools.alsoAllow`, value: ['browser', `${mcpServer}__*`] },
+    {
+      path: `agents.list[${idx}].tools.deny`,
+      value: ['image_generate', 'music_generate', 'video_generate', `${otherMcp}__*`],
     },
-    tools: {
-      profile: 'coding',
-      alsoAllow: ['browser', `${mcpServer}__*`],
-      deny: [
-        'image_generate',
-        'music_generate',
-        'video_generate',
-        `${otherMcp}__*`,
-      ],
-    },
-  };
+  ];
+  process.stderr.write(`→ openclaw config set --batch-json (${batch.length} ops)\n`);
+  const enrichResult = runOpenclaw(['config', 'set', '--batch-json', JSON.stringify(batch)]);
+  if (enrichResult.status !== 0) {
+    fail(
+      `'openclaw config set' batch failed:\n${enrichResult.stderr || enrichResult.stdout}\n` +
+        `agent was created but tools/skills/heartbeat are not set. ` +
+        `delete + retry: openclaw agents delete ${gatewayId} --force`,
+    );
+  }
 
-  process.stdout.write('# Phase I per-workspace PM agent\n');
-  process.stdout.write(
-    `# Add the following entry under agents.list[] in ~/.openclaw/openclaw.json:\n\n`,
-  );
-  process.stdout.write(JSON.stringify(block, null, 2));
-  process.stdout.write('\n\n');
+  // 5. Verify final shape.
+  const verifyResult = runOpenclaw(['config', 'get', `agents.list[${idx}]`]);
+  if (verifyResult.status !== 0) {
+    fail(`verification read failed:\n${verifyResult.stderr || verifyResult.stdout}`);
+  }
 
-  process.stderr.write(`gateway_agent_id: ${gatewayId}\n`);
-  process.stderr.write(`workspace dir:    ~/.openclaw/workspaces/${gatewayId}/\n`);
-  process.stderr.write(`mcp scope:        ${mcpServer}__* (allowed) + ${otherMcp}__* (denied)\n`);
+  process.stderr.write('\n✓ provisioned\n\n');
+  process.stdout.write(verifyResult.stdout);
+  process.stdout.write('\n');
   process.stderr.write(`\nNext steps:\n`);
-  process.stderr.write(`  1. Paste the JSON block above into agents.list[] in ~/.openclaw/openclaw.json\n`);
-  process.stderr.write(`  2. Run: openclaw mcp show ${mcpServer}   (verify config)\n`);
-  process.stderr.write(`  3. Restart the dev server (catalog sync picks up the new agent within 60s)\n`);
-  process.stderr.write(`  4. Verify: sqlite3 mission-control.db "SELECT name, gateway_agent_id, workspace_id, is_pm, is_master FROM agents WHERE gateway_agent_id='${gatewayId}'"\n`);
+  process.stderr.write(`  1. (optional) openclaw config validate          # confirm schema clean\n`);
+  process.stderr.write(`  2. /dev-restart                                  # MC catalog sync picks up within 60s\n`);
+  process.stderr.write(`  3. sqlite3 mission-control.db "SELECT name, gateway_agent_id, workspace_id, is_pm, is_master FROM agents WHERE gateway_agent_id='${gatewayId}'"\n`);
+  process.stderr.write(`     # expect: 1 row, pm=1, master=1, workspace_id=<workspace whose slug='${slug}'>\n`);
 }
 
 function main(): void {
   const { slug, isProd } = parseArgs();
   validateSlug(slug);
-  emit(slug, isProd);
+  provision(slug, isProd);
 }
 
 main();
