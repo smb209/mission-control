@@ -283,11 +283,58 @@ test('runBrief: gateway not connected → failed with gateway message', async ()
 
   __setSendChatClientForTests(makeStubClient({ connected: false }));
 
-  await runBrief(brief.id, { awaitCompletionForTesting: true });
+  // Use small retry delay so the test doesn't wait the production
+  // 5 × 1500ms backoff window.
+  await runBrief(brief.id, {
+    awaitCompletionForTesting: true,
+    noSessionRetryDelayMs: 1,
+    noSessionMaxRetries: 2,
+  });
 
   const runRow = getAgentRun(agent_run.id);
   assert.equal(runRow?.status, 'failed');
   assert.match(runRow?.error_md ?? '', /gateway is not connected/i);
+});
+
+test('runBrief: retries on no_session and succeeds when gateway recovers', async () => {
+  const ws = freshWorkspace();
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
+  const { brief, agent_run } = createBriefWithRun({
+    workspace_id: ws, template: 'general_brief',
+    title: 'recovers', prompt: 'p',
+  });
+
+  // Stub that returns isConnected=false for the first 2 attempts then
+  // flips to true for the 3rd. The orchestrator should retry, then
+  // succeed.
+  let connectChecks = 0;
+  const listeners = new Set<(p: ChatEvent) => void>();
+  __setSendChatClientForTests({
+    isConnected: () => {
+      connectChecks++;
+      return connectChecks > 2;
+    },
+    on: (event, listener) => { if (event === 'chat_event') listeners.add(listener); return undefined; },
+    off: (event, listener) => { if (event === 'chat_event') listeners.delete(listener); return undefined; },
+    call: async (method, params) => {
+      if (method !== 'chat.send') return undefined;
+      const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey;
+      setImmediate(() => {
+        for (const listener of listeners) listener({ sessionKey, state: 'final', message: 'reply after retry' });
+      });
+      return {};
+    },
+  });
+
+  await runBrief(brief.id, {
+    awaitCompletionForTesting: true,
+    noSessionRetryDelayMs: 1,
+    noSessionMaxRetries: 5,
+  });
+
+  const runRow = getAgentRun(agent_run.id);
+  assert.equal(runRow?.status, 'complete', `expected complete, got ${runRow?.status} (error: ${runRow?.error_md})`);
 });
 
 test('runBrief: chat.send throws → failed', async () => {
