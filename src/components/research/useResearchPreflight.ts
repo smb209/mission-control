@@ -1,20 +1,22 @@
 'use client';
 
 /**
- * Tiny hook that asks the existing /api/agents endpoint two questions
- * the Research surface needs to answer before letting the operator
- * dispatch a brief:
+ * Tiny hook that asks three questions the Research surface needs to
+ * answer before letting the operator dispatch a brief:
  *
  *   1. Does this workspace have a researcher in its roster?
  *   2. Is there a runner agent registered (any workspace) so
  *      dispatchScope can host the session?
+ *   3. Is the openclaw gateway client currently connected?
  *
- * Both are needed for a brief to succeed; if either is missing we
- * surface a banner on /research and a warning dot on the nav.
+ * All three are needed; if any is missing we surface a banner on
+ * /research and a warning dot on the nav.
  *
- * Uses the same `useMissionControl().events` SSE stream the rest of
- * the research surface uses, so the warning clears live when the
- * operator adds a researcher via the picker.
+ * Uses SSE for the agent-roster checks and a 5-second poll for the
+ * gateway-connection check (the openclaw client doesn't currently
+ * emit connection-state events to the SSE bus, so polling is the
+ * pragmatic floor — fast enough to clear within seconds of an HMR
+ * reconnect, cheap enough to leave running).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -38,16 +40,23 @@ export interface ResearchPreflight {
   loading: boolean;
   hasResearcher: boolean;
   hasRunner: boolean;
-  /** True iff both prerequisites are met. */
+  gatewayConnected: boolean;
+  /** True iff all three prerequisites are met. */
   ok: boolean;
   refresh: () => void;
 }
+
+const GATEWAY_POLL_INTERVAL_MS = 5_000;
 
 export function useResearchPreflight(workspaceId: string | null | undefined): ResearchPreflight {
   const { events } = useMissionControl();
   const [loading, setLoading] = useState(false);
   const [hasResearcher, setHasResearcher] = useState(false);
   const [hasRunner, setHasRunner] = useState(false);
+  // Optimistic default — assume the gateway is connected and let the
+  // first poll correct us. Otherwise the banner flashes "reconnecting"
+  // for a fraction of a second on every page load.
+  const [gatewayConnected, setGatewayConnected] = useState(true);
 
   const refresh = useCallback(async () => {
     if (!workspaceId) {
@@ -89,11 +98,31 @@ export function useResearchPreflight(workspaceId: string | null | undefined): Re
   );
   useEffect(() => { if (latestEventId) refresh(); }, [latestEventId, refresh]);
 
+  // Gateway connection poll. Light — a single GET that just reads
+  // client.isConnected(); no side effects.
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const r = await fetch('/api/openclaw/connection');
+        if (!r.ok) return;
+        const { connected } = (await r.json()) as { connected: boolean };
+        if (!cancelled) setGatewayConnected(!!connected);
+      } catch {
+        if (!cancelled) setGatewayConnected(false);
+      }
+    };
+    probe();
+    const id = setInterval(probe, GATEWAY_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   return {
     loading,
     hasResearcher,
     hasRunner,
-    ok: hasResearcher && hasRunner,
+    gatewayConnected,
+    ok: hasResearcher && hasRunner && gatewayConnected,
     refresh,
   };
 }

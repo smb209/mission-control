@@ -254,7 +254,7 @@ export default function ResearchHubPage() {
 function PreflightBanner({
   preflight,
 }: {
-  preflight: { hasResearcher: boolean; hasRunner: boolean };
+  preflight: { hasResearcher: boolean; hasRunner: boolean; gatewayConnected: boolean };
 }) {
   const messages: { title: string; body: React.ReactNode }[] = [];
 
@@ -278,6 +278,16 @@ function PreflightBanner({
       body: (
         <>
           A workspace runner (<code>mc-runner-dev</code>) hosts the actual chat sessions for role-scoped dispatches. Provision it via the openclaw gateway, then return here.
+        </>
+      ),
+    });
+  }
+  if (!preflight.gatewayConnected && preflight.hasResearcher && preflight.hasRunner) {
+    messages.push({
+      title: 'Openclaw gateway is reconnecting',
+      body: (
+        <>
+          The MC↔gateway WebSocket is currently disconnected (typically after an HMR or dev-server restart). Briefs dispatched right now will retry automatically for a few seconds; if this banner stays up, check that the gateway process is running.
         </>
       ),
     });

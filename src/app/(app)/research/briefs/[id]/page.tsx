@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, ExternalLink, RefreshCw, RotateCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -47,6 +47,7 @@ const STATUS_COLOR: Record<AgentRun['status'], string> = {
 
 export default function BriefDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const { events } = useMissionControl();
   const [brief, setBrief] = useState<Brief | null>(null);
   const [run, setRun] = useState<AgentRun | null>(null);
@@ -54,6 +55,8 @@ export default function BriefDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showCitations, setShowCitations] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunError, setRerunError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!params.id) return;
@@ -84,6 +87,25 @@ export default function BriefDetailPage() {
     [events],
   );
   useEffect(() => { if (latestRelevantId) load(); }, [latestRelevantId, load]);
+
+  const rerun = useCallback(async () => {
+    if (!brief || rerunning) return;
+    setRerunning(true);
+    setRerunError(null);
+    try {
+      const res = await fetch(`/api/briefs/${brief.id}/rerun`, { method: 'POST' });
+      if (!res.ok && res.status !== 202) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `Re-run failed (${res.status})`);
+      }
+      const { brief: cloned } = await res.json();
+      router.push(`/research/briefs/${cloned.id}`);
+    } catch (e) {
+      setRerunError(e instanceof Error ? e.message : 'Re-run failed');
+    } finally {
+      setRerunning(false);
+    }
+  }, [brief, rerunning, router]);
 
   if (error) return <div className="p-6 text-red-300">{error}</div>;
   if (!brief || !run) return <div className="p-6 text-mc-text-secondary">{loading ? 'Loading…' : 'Brief not found.'}</div>;
@@ -130,11 +152,17 @@ export default function BriefDetailPage() {
           </button>
           <button
             type="button"
-            disabled
-            title="Re-run lands in phase 2"
-            className="px-3 py-1.5 text-sm rounded-sm border border-mc-border text-mc-text-secondary/60 cursor-not-allowed flex items-center gap-1.5"
+            onClick={rerun}
+            disabled={!isTerminal || rerunning}
+            title={
+              !isTerminal
+                ? 'Brief is still running — wait for it to finish before re-running'
+                : 'Clones this brief (same prompt + topic) and dispatches the clone'
+            }
+            className="px-3 py-1.5 text-sm rounded-sm border border-mc-border text-mc-text hover:bg-mc-bg-tertiary disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
           >
-            <RotateCw className="w-3.5 h-3.5" /> Re-run
+            <RotateCw className={`w-3.5 h-3.5 ${rerunning ? 'animate-spin' : ''}`} />
+            {rerunning ? 'Re-running…' : 'Re-run'}
           </button>
         </div>
       </header>
@@ -143,6 +171,12 @@ export default function BriefDetailPage() {
         <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
           <div className="font-medium mb-1">Brief failed</div>
           <pre className="whitespace-pre-wrap text-xs font-mono">{brief.error_md}</pre>
+        </div>
+      )}
+
+      {rerunError && (
+        <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
+          {rerunError}
         </div>
       )}
 

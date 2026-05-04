@@ -57,11 +57,24 @@ import type { ChatEvent } from '@/lib/openclaw/send-chat';
 const DEFAULT_BRIEF_TIMEOUT_MS = 5 * 60 * 1000;
 const PROGRESS_BROADCAST_INTERVAL_MS = 750;
 
+/** When dispatchScope returns `no_session`, retry with a small
+ *  backoff for up to this many attempts before giving up. Catches
+ *  transient gateway-reconnect windows (HMR restarts, dev server
+ *  bounces) where the brief otherwise fails instantly for what is
+ *  really a sub-second outage. */
+const NO_SESSION_MAX_RETRIES = 5;
+const NO_SESSION_RETRY_DELAY_MS = 1500;
+
 export interface RunBriefOptions {
   timeoutMs?: number;
   /** Test-only: when true, runBrief awaits the dispatch promise rather
    *  than returning immediately. */
   awaitCompletionForTesting?: boolean;
+  /** Override the no_session retry backoff (ms). Tests pass small
+   *  values to keep the test wall-clock low. */
+  noSessionRetryDelayMs?: number;
+  /** Override the no_session max retries. Default 5. */
+  noSessionMaxRetries?: number;
 }
 
 export interface RunBriefResult {
@@ -266,25 +279,65 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
   // 4. dispatchScope handles: scope_key derivation, mc_sessions
   //    bookkeeping, briefing composition (researcher persona),
   //    chat.send + reply collection.
+  //
+  // Retry loop: when the gateway client is mid-reconnect (HMR,
+  // dev-server restart, transient WebSocket drop), dispatchScope
+  // returns reply.reason='no_session' immediately. Failing the
+  // brief on a sub-second connection blip is bad UX — wait briefly
+  // and retry. Other failure modes (timeout, send_failed) are real
+  // and we don't retry them.
+  const maxRetries = options.noSessionMaxRetries ?? NO_SESSION_MAX_RETRIES;
+  const retryDelayMs = options.noSessionRetryDelayMs ?? NO_SESSION_RETRY_DELAY_MS;
   let result;
-  try {
-    result = await dispatchScope({
-      workspace_id: brief.workspace_id,
-      role: 'researcher',
-      agent: runner,
-      session_suffix: `brief-${brief.id}`,
-      trigger_body: triggerBody,
-      timeoutMs: options.timeoutMs ?? DEFAULT_BRIEF_TIMEOUT_MS,
-      onEvent,
-      attempt_strategy: 'fresh',
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  let lastNoSessionAt: number | null = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      result = await dispatchScope({
+        workspace_id: brief.workspace_id,
+        role: 'researcher',
+        agent: runner,
+        session_suffix: `brief-${brief.id}`,
+        trigger_body: triggerBody,
+        timeoutMs: options.timeoutMs ?? DEFAULT_BRIEF_TIMEOUT_MS,
+        onEvent,
+        attempt_strategy: 'fresh',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setBriefError(briefId, msg);
+      markFailed(brief.agent_run_id, { error_md: msg });
+      emit('brief_failed', briefShape(brief, { error: msg, reason: 'dispatch_threw' }));
+      return;
+    }
+
+    if (result.reply?.sent) break;
+    if (result.reply?.reason !== 'no_session') break;
+
+    // Transient: gateway not connected at this exact instant. Surface
+    // it as a progress event so the UI can show "reconnecting…", then
+    // back off and try again.
+    lastNoSessionAt = Date.now();
+    emit('brief_progress', briefShape(brief, {
+      state: 'awaiting_gateway',
+      attempt,
+      max_attempts: maxRetries,
+    }));
+    if (attempt < maxRetries) {
+      await new Promise(r => setTimeout(r, retryDelayMs));
+    }
+  }
+
+  // result is guaranteed assigned above (the loop sets it on every
+  // iteration before the break checks).
+  if (!result) {
+    // Defensive — should not happen.
+    const msg = 'Internal: dispatch loop exited without a result.';
     setBriefError(briefId, msg);
     markFailed(brief.agent_run_id, { error_md: msg });
-    emit('brief_failed', briefShape(brief, { error: msg, reason: 'dispatch_threw' }));
+    emit('brief_failed', briefShape(brief, { error: msg, reason: 'no_result' }));
     return;
   }
+  void lastNoSessionAt;
 
   const reply = result.reply;
   if (!reply) {

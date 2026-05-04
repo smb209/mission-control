@@ -298,7 +298,9 @@ function ResearchPreflightDot() {
   if (preflight.loading || preflight.ok) return null;
   const reason = !preflight.hasResearcher
     ? 'No researcher in this workspace — add one in Agents'
-    : 'No runner agent registered';
+    : !preflight.hasRunner
+      ? 'No runner agent registered'
+      : 'Openclaw gateway is reconnecting';
   return (
     <span title={reason} aria-label={reason} className="ml-1 shrink-0">
       <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
