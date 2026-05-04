@@ -30,6 +30,8 @@ import {
   Rocket,
   Settings as SettingsIcon,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Check,
   Zap,
   X,
@@ -147,10 +149,29 @@ interface AppNavProps {
   onCloseMobile: () => void;
 }
 
+const DESKTOP_COLLAPSED_KEY = 'mc.appnav.collapsed';
+
 export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [collapsed, setCollapsed] = useState(false);
   const currentWorkspaceId = useCurrentWorkspaceId();
+
+  // Restore the desktop collapse preference. Mobile drawer is a
+  // separate axis (full-width overlay) — ignored here.
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(DESKTOP_COLLAPSED_KEY) === '1');
+    } catch { /* ignore */ }
+  }, []);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed(c => {
+      const next = !c;
+      try { localStorage.setItem(DESKTOP_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   // Fetch workspaces in the parent so we can derive the active task-board
   // href and pass the same list to the switcher.
@@ -193,14 +214,14 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
         aria-label="Primary"
         className={`
           fixed md:static z-40 inset-y-0 left-0
-          w-60 bg-mc-bg-secondary border-r border-mc-border
+          bg-mc-bg-secondary border-r border-mc-border
           flex flex-col shrink-0
           transition-transform duration-200
-          ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}
-          md:translate-x-0
+          ${mobileOpen ? 'translate-x-0 w-60' : '-translate-x-full w-60'}
+          md:translate-x-0 ${collapsed ? 'md:w-12' : 'md:w-60'}
         `}
       >
-        {/* Mobile close button */}
+        {/* Mobile close button (mobile drawer always shows full width) */}
         <div className="md:hidden flex items-center justify-between px-3 py-2 border-b border-mc-border">
           <span className="flex items-center gap-2 text-sm font-semibold text-mc-text">
             <Zap className="w-4 h-4 text-mc-accent-cyan" />
@@ -216,9 +237,24 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
           </button>
         </div>
 
+        {/* Desktop collapse toggle. Sits at the top so it's reachable
+            in both expanded and collapsed states without scrolling. */}
+        <div className="hidden md:flex items-center justify-end px-1.5 py-1 border-b border-mc-border">
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+            title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          >
+            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          </button>
+        </div>
+
         <WorkspaceSwitcher
           workspaces={workspaces}
           onWorkspaceCreated={() => setRefreshKey(k => k + 1)}
+          collapsed={collapsed}
         />
 
         <div className="flex-1 overflow-y-auto py-2">
@@ -227,12 +263,13 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
               key={section.title}
               section={section}
               onNavigate={onCloseMobile}
+              collapsed={collapsed}
             />
           ))}
         </div>
 
         <div className="px-3 py-2 border-t border-mc-border text-[11px] text-mc-text-secondary/70">
-          <span className="hidden md:inline">v2.6 · unified shell</span>
+          {!collapsed && <span className="hidden md:inline">v2.6 · unified shell</span>}
         </div>
       </nav>
     </>
@@ -242,14 +279,22 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
 function NavSectionView({
   section,
   onNavigate,
+  collapsed,
 }: {
   section: NavSection;
   onNavigate: () => void;
+  collapsed: boolean;
 }) {
   const pathname = usePathname() ?? '/';
+  // `collapsed` is a desktop-only preference. On mobile the nav
+  // renders as a full-width drawer regardless, so labels must stay
+  // visible there. We gate label hiding behind `md:` so the drawer
+  // is unaffected.
   return (
     <div className="mb-3">
-      <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-mc-text-secondary/70">
+      <div className={`px-3 pb-1 text-[10px] uppercase tracking-wider text-mc-text-secondary/70 ${
+        collapsed ? 'md:hidden' : ''
+      }`}>
         {section.title}
       </div>
       <ul>
@@ -262,16 +307,22 @@ function NavSectionView({
                 href={item.href}
                 aria-current={active ? 'page' : undefined}
                 onClick={onNavigate}
+                title={collapsed ? item.label : undefined}
                 className={`
-                  mx-2 px-2 py-1.5 rounded-sm flex items-center gap-2 text-sm
+                  ${collapsed ? 'mx-2 md:mx-1 md:justify-center' : 'mx-2'}
+                  px-2 py-1.5 rounded-sm flex items-center gap-2 text-sm
                   ${active
                     ? 'bg-mc-accent/15 text-mc-accent'
                     : 'text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary'}
                 `}
               >
                 <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate flex-1">{item.label}</span>
-                {item.href === '/research' && <ResearchPreflightDot />}
+                <span className={`truncate flex-1 ${collapsed ? 'md:hidden' : ''}`}>{item.label}</span>
+                {item.href === '/research' && (
+                  <span className={collapsed ? 'md:hidden' : ''}>
+                    <ResearchPreflightDot />
+                  </span>
+                )}
               </Link>
             </li>
           );
@@ -317,9 +368,11 @@ function ResearchPreflightDot() {
 function WorkspaceSwitcher({
   workspaces,
   onWorkspaceCreated,
+  collapsed,
 }: {
   workspaces: WorkspaceLite[];
   onWorkspaceCreated: () => void;
+  collapsed: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -370,28 +423,31 @@ function WorkspaceSwitcher({
 
   return (
     <>
-      <div ref={ref} className="relative px-2 pt-2 pb-1">
+      <div ref={ref} className={`relative pt-2 pb-1 ${collapsed ? 'px-1 md:px-1' : 'px-2'}`}>
         <button
           type="button"
           aria-haspopup="listbox"
           aria-expanded={open}
           onClick={() => setOpen(v => !v)}
-          className="w-full px-2 py-1.5 rounded-sm border border-mc-border bg-mc-bg hover:bg-mc-bg-tertiary text-left flex items-center gap-2 min-h-9"
+          title={collapsed ? (current?.name ?? 'Select workspace') : undefined}
+          className={`w-full rounded-sm border border-mc-border bg-mc-bg hover:bg-mc-bg-tertiary text-left flex items-center gap-2 min-h-9 ${
+            collapsed ? 'px-2 md:justify-center md:px-1' : 'px-2 py-1.5'
+          }`}
         >
           {current ? (
             <>
               <span className="text-base shrink-0">{current.icon ?? '📁'}</span>
-              <span className="flex-1 truncate text-sm text-mc-text">{current.name}</span>
+              <span className={`flex-1 truncate text-sm text-mc-text ${collapsed ? 'md:hidden' : ''}`}>{current.name}</span>
             </>
           ) : (
             <>
               <Zap className="w-4 h-4 text-mc-accent-cyan shrink-0" />
-              <span className="flex-1 truncate text-sm text-mc-text-secondary">
+              <span className={`flex-1 truncate text-sm text-mc-text-secondary ${collapsed ? 'md:hidden' : ''}`}>
                 {workspaces.length === 0 ? 'No workspaces' : 'Select workspace'}
               </span>
             </>
           )}
-          <ChevronDown className={`w-3.5 h-3.5 text-mc-text-secondary transition-transform ${open ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`w-3.5 h-3.5 text-mc-text-secondary transition-transform ${open ? 'rotate-180' : ''} ${collapsed ? 'md:hidden' : ''}`} />
         </button>
         {open && (
           <ul
