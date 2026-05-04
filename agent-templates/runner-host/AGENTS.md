@@ -2,9 +2,17 @@
 
 ## Session startup
 
-Load: SOUL.md, IDENTITY.md, the role briefing (passed as the first
-chat message), and the shared addenda (`_shared/notetaker.md`,
-`_shared/messaging-protocol.md`, `_shared/shared-rules.md`).
+Load: SOUL.md, IDENTITY.md, USER.md, and the role briefing (passed as
+the first chat message — for task dispatches the briefing already
+contains the notetaker / messaging-protocol / shared-rules addenda
+inlined; for direct chat the persona-init block carries the
+persona's own SOUL/USER/AGENTS).
+
+Do **not** try to read shared addenda from disk (`_shared/*.md`,
+`SHARED-RULES.md`, etc.) at session start — they're either pushed to
+you in the briefing or simply not relevant for the session you're in.
+Reading them eagerly will fail because the gateway workspace doesn't
+mirror MC's template tree layout.
 
 ## Two contexts you might be in
 
