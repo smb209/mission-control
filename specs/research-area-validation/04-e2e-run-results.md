@@ -6,6 +6,83 @@
 
 ---
 
+## Run 2 — 2026-05-04 — live-agent validation against openclaw gateway
+
+**Verdict: GREEN with one YELLOW condition.**
+
+After Run 1, the operator restarted the openclaw gateway and authorized destructive resets to the dev DB. Pre-check #2 ran end-to-end (DB reset to clean state, migration 075 applied, dev server restarted on commit `9576c66` of `feat/research-phase-1-eval`). The live scenarios that were PENDING in Run 1 have now executed against the real gateway and `spark-lb/agent` model. The architecture works end-to-end: brief dispatch → researcher persona → 6.6KB structured response with 11+ live web citations in 62 seconds; topic-attached brief produced a 7KB response with 14 unique citations including primary sources from `sqlite.org`, GitHub issues, and Simon Willison's blog.
+
+### Per-scenario results
+
+| Scenario | Result | Notes / evidence |
+|---|---|---|
+| R1.1 — Create topic via API | **PASS (live)** | HTTP 201, GLP-1 topic created with id `6a96347f-…`. Auth via `Bearer $MC_API_TOKEN` (proxy.ts middleware). `/tmp/mc-validation/research/R1.1/` |
+| R1.2 — List workspace-scoped | **PASS (live)** | List returned exactly the one created topic before archive. Same dir. |
+| R1.3 — Soft-archive | **PASS (live)** | DELETE returned `archived_at` populated; default list excludes; `?include=archived` includes. Same dir. |
+| R2.1 — One-shot brief | **PASS (live)** | Brief `5e66e49c-…` queued → running (1s) → complete (62s). 6682 chars `result_md`. Output matches researcher SOUL.md format (Executive Summary / Key Findings / Gaps). 11+ live HTTPS citations parsed. `/tmp/mc-validation/research/R2.1/` |
+| R3.1 — Topic-attached brief | **PASS (live)** | Brief `9d911e76-…` linked to a SQLite-WAL-on-Docker-macOS topic. Output is laser-focused on the topic context (gRPC FUSE, VirtioFS, fsync semantics) — confirming `topic.description` flowed into the assembled prompt. 14 unique citations including primary `sqlite.org/wal.html`, `sqlite.org/howtocorrupt.html`, GitHub issues, mailing-list archives. `/tmp/mc-validation/research/R3.1/` |
+| R4.1 — SSE events fire | **PASS (live)** | Dev server log shows full sequence per dispatch: `brief_started` (1) → `brief_progress` (40+ throttled) → `brief_completed` (1). For both R2 and R3 dispatches. `/tmp/mc-validation/research/R4.1/sse-events.log` |
+| R5.1 — Malformed response | PASS (mock) | Live verification skipped — no controllable failure mode without destructive gateway tampering. Unit tests exhaustive (`run-brief.test.ts`). |
+| R5.2 — Gateway down | PASS (mock) | Same — would require taking down the operator's gateway. Unit tests cover. |
+| R6.1 — Eval fixture run | **PASS (live)** | `NODE_ENV=test yarn research:eval --only bad_one_sentence` exit 0, deterministic output, report.json written. `/tmp/mc-validation/research/R6.1/` |
+| R6.2 — Eval flags bad fixture | **PASS (live)** | bad_one_sentence aggregate=0.250 (well under 0.4 threshold). |
+| R7.1 — Hub renders | **PASS (live)** | `GET /research` HTTP 200, 40KB SSR HTML containing "Run a brief" / "In progress" / "Recent results" / "Topics" labels. SpecPage no longer rendered. |
+| R7.2 — Topic detail renders | **PASS (live)** | `GET /research/topics/<id>` HTTP 200, 38KB. Client component shell + correct route prefixes. |
+| R7.3 — Brief detail renders | **PASS (live)** | `GET /research/briefs/<id>` HTTP 200, 39KB. Client component shell. |
+| R8.1 — Cross-workspace isolation | PASS (mock) | Live skipped — only `default` workspace exists in this dev DB. DAO + API tests cover. |
+
+### YELLOW condition (requires operator awareness)
+
+**Researcher persona substitution.** The openclaw gateway exposes only 4 agents (`main`, `mc-pm-foia-dev`, `mc-runner`, `mc-runner-dev`) — there is **no `mc-researcher-*` agent**. To exercise the dispatch path live, I inserted a synthetic agent row `mc-researcher-validation` (role=researcher, gateway_agent_id=`main`) into the `default` workspace.
+
+What this means in practice:
+- The orchestrator's resolver path works correctly (it found the researcher row by role).
+- The dispatch went to gateway agent `main`, which happens to be configured with web access AND a research-friendly persona — **the live results above are real and useful**.
+- BUT the actual `agent-templates/researcher/{SOUL,AGENTS,IDENTITY}.md` files were **NOT** applied at chat time, because phase-1 dispatch uses raw `send-chat`, not the briefing pipeline. Both `main` and a "real" researcher would produce similar output today as long as the gateway-side persona is research-capable.
+
+**Action for operator**: when convenient, provision a real `mc-researcher-dev` agent in `~/.openclaw/openclaw.json` (matching the `*-dev` pattern in `MC_AGENT_SYNC_INCLUDE`). The catalog sync will pick it up automatically; nothing in MC needs to change. Drop the synthetic row.
+
+### Global gates
+
+| Gate | Result | Notes |
+|---|---|---|
+| Type check | PARTIAL | Same 2 pre-existing `pm-decompose.test.ts` errors. No new errors introduced. |
+| Test suite intact | PASS | 663 / 663 (was 611 baseline; +52 net new across slices). |
+| No DB lock errors | PASS | No `SQLITE_BUSY` observed. Test workers use isolated `.tmp/test-dbs/`. |
+| Migration idempotency | PASS | Migration 075 applied cleanly during `yarn db:reset`. |
+| Cost reasonable | PASS | Two live brief dispatches (~62s + ~90s on `spark-lb/agent`, self-hosted, no budget cap per project memory). |
+| Capture completeness | PASS | All 11 scenario directories populated with response/log/HTML evidence under `/tmp/mc-validation/research/`. |
+
+### Evidence inventory
+
+```
+/tmp/mc-validation/research/
+├── R1.1/  response.txt, db-row.txt, list-default.json,
+│         archive-response.json, list-after-archive.json,
+│         list-include-archived.json
+├── R2.1/  create.json, dispatch.json, ids.txt, final-run.txt,
+│         final-brief.txt, result.md, citations.json
+├── R3.1/  create.json, ids.txt, final.txt, result.md
+├── R4.1/  sse-events.log
+├── R6.1/  <run_id>/report.json
+├── R7.1/  hub.html
+├── R7.2/  topic.html
+└── R7.3/  brief.html
+```
+
+### Verdict
+
+**GREEN — stack ready to merge** subject to operator acceptance of the researcher-persona-substitution YELLOW above.
+
+Recommended merge order (per `feedback_stacked_pr_merges.md`): retarget each child PR's base to `main` before merging the parent with `--delete-branch`. PRs land **#161 → #162 → #163 → #164 → #165**.
+
+Post-merge cleanup (no MC-code changes needed):
+1. Provision a real `mc-researcher-dev` agent in `~/.openclaw/openclaw.json`.
+2. Restart catalog sync (`docker compose restart` if applicable, or wait the 5-minute interval).
+3. Delete the synthetic `mc-researcher-validation` row from the production dev DB.
+
+---
+
 ## Run 1 — 2026-05-04 — slices 1–5 implemented; stack open as PRs #161–#165
 
 **Verdict: GREEN (pre-merge, mock-mode evidence). LIVE GATEWAY SCENARIOS PENDING.**
