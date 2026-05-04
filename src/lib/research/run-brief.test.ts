@@ -155,6 +155,60 @@ test('parseCitations: handles empty / null input', () => {
   assert.deepEqual(parseCitations(''), []);
 });
 
+test('parseCitations: prefers explicit Sources section over inline links', () => {
+  const md = `Some prose with [inline](https://inline.example).
+
+## Sources
+
+- [Title A](https://a.example) — Background on the topic.
+- [Title B](https://b.example) — Confirmed the v3 release date.
+`;
+  const cites = parseCitations(md);
+  assert.equal(cites.length, 3);
+  // Sources-section entries land first (the section is parsed before
+  // the inline sweep runs).
+  assert.equal(cites[0].url, 'https://a.example');
+  assert.equal(cites[0].title, 'Title A');
+  assert.equal(cites[0].snippet, 'Background on the topic.');
+  assert.equal(cites[1].url, 'https://b.example');
+  assert.equal(cites[1].snippet, 'Confirmed the v3 release date.');
+  // Inline-only URLs still get captured.
+  assert.equal(cites[2].url, 'https://inline.example');
+  assert.equal(cites[2].snippet, undefined);
+});
+
+test('parseCitations: section entry overrides inline title for same URL', () => {
+  const md = `Cited [Vague label](https://a.example) inline.
+
+## Sources
+- [Better title](https://a.example) — Authoritative reference.`;
+  const cites = parseCitations(md);
+  assert.equal(cites.length, 1);
+  assert.equal(cites[0].title, 'Better title');
+  assert.equal(cites[0].snippet, 'Authoritative reference.');
+});
+
+test('parseCitations: accepts ## References as the section heading too', () => {
+  const md = `# Brief\nbody\n\n## References\n- [X](https://x.example) — note`;
+  const cites = parseCitations(md);
+  assert.equal(cites.length, 1);
+  assert.equal(cites[0].url, 'https://x.example');
+});
+
+test('parseCitations: section without notes still parses', () => {
+  const md = `## Sources\n- [X](https://x.example)\n- [Y](https://y.example)`;
+  const cites = parseCitations(md);
+  assert.equal(cites.length, 2);
+  assert.equal(cites[0].snippet, undefined);
+  assert.equal(cites[1].snippet, undefined);
+});
+
+test('parseCitations: backward-compatible — inline-only briefs still work', () => {
+  const md = `Findings cite [MDN](https://developer.mozilla.org/x) and [Caniuse](https://caniuse.com/x).`;
+  const cites = parseCitations(md);
+  assert.equal(cites.length, 2);
+});
+
 test('extractReplyText: prefers done event body when present', () => {
   const text = extractReplyText(
     [{ message: 'partial' }],
