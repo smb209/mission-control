@@ -150,11 +150,13 @@ interface AppNavProps {
 }
 
 const DESKTOP_COLLAPSED_KEY = 'mc.appnav.collapsed';
+const SECTIONS_OPEN_KEY = 'mc.appnav.sections';
 
 export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   const currentWorkspaceId = useCurrentWorkspaceId();
 
   // Restore the desktop collapse preference. Mobile drawer is a
@@ -162,6 +164,8 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(DESKTOP_COLLAPSED_KEY) === '1');
+      const raw = localStorage.getItem(SECTIONS_OPEN_KEY);
+      if (raw) setOpenSections(JSON.parse(raw) as Record<string, boolean>);
     } catch { /* ignore */ }
   }, []);
 
@@ -169,6 +173,17 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
     setCollapsed(c => {
       const next = !c;
       try { localStorage.setItem(DESKTOP_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  const toggleSection = useCallback((title: string) => {
+    setOpenSections(prev => {
+      // Default-open: a section is open unless explicitly stored
+      // false. Toggle flips that.
+      const currentlyOpen = prev[title] !== false;
+      const next = { ...prev, [title]: !currentlyOpen };
+      try { localStorage.setItem(SECTIONS_OPEN_KEY, JSON.stringify(next)); } catch { /* ignore */ }
       return next;
     });
   }, []);
@@ -237,13 +252,23 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
           </button>
         </div>
 
-        {/* Desktop collapse toggle. Sits at the top so it's reachable
-            in both expanded and collapsed states without scrolling. */}
-        <div className="hidden md:flex items-center justify-end px-1.5 py-1 border-b border-mc-border">
+        {/* Desktop header: brand + collapse toggle. Sits at the top
+            so the chevron is reachable in both states without
+            scrolling, and brand fills what would otherwise be dead
+            space when expanded. */}
+        <div className={`hidden md:flex items-center px-2 py-1 border-b border-mc-border ${
+          collapsed ? 'justify-center' : 'justify-between'
+        }`}>
+          {!collapsed && (
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-mc-text min-w-0">
+              <Zap className="w-4 h-4 text-mc-accent-cyan shrink-0" />
+              <span className="truncate">Mission Control</span>
+            </span>
+          )}
           <button
             type="button"
             onClick={toggleCollapsed}
-            className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+            className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary shrink-0"
             title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
             aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
           >
@@ -264,6 +289,8 @@ export function AppNav({ mobileOpen, onCloseMobile }: AppNavProps) {
               section={section}
               onNavigate={onCloseMobile}
               collapsed={collapsed}
+              open={openSections[section.title] !== false}
+              onToggleOpen={() => toggleSection(section.title)}
             />
           ))}
         </div>
@@ -280,24 +307,43 @@ function NavSectionView({
   section,
   onNavigate,
   collapsed,
+  open,
+  onToggleOpen,
 }: {
   section: NavSection;
   onNavigate: () => void;
   collapsed: boolean;
+  open: boolean;
+  onToggleOpen: () => void;
 }) {
   const pathname = usePathname() ?? '/';
   // `collapsed` is a desktop-only preference. On mobile the nav
   // renders as a full-width drawer regardless, so labels must stay
   // visible there. We gate label hiding behind `md:` so the drawer
   // is unaffected.
+  //
+  // Mobile drawer + desktop-expanded: items follow `open`.
+  // Desktop-collapsed (icons-only): the header is hidden, so we
+  // ignore `open` and keep the icons visible — otherwise the user
+  // would have no way to re-expand the section.
+  const ulClass =
+    open ? ''
+    : collapsed ? 'hidden md:block'
+    : 'hidden';
   return (
     <div className="mb-3">
-      <div className={`px-3 pb-1 text-[10px] uppercase tracking-wider text-mc-text-secondary/70 ${
-        collapsed ? 'md:hidden' : ''
-      }`}>
-        {section.title}
-      </div>
-      <ul>
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        aria-expanded={open}
+        className={`w-full px-3 pb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-mc-text-secondary/70 hover:text-mc-text ${
+          collapsed ? 'md:hidden' : ''
+        }`}
+      >
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span className="flex-1 text-left">{section.title}</span>
+      </button>
+      <ul className={ulClass}>
         {section.items.map(item => {
           const Icon = item.icon;
           const active = isActive(pathname, item);
