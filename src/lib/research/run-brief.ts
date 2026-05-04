@@ -158,27 +158,103 @@ export function buildBriefPrompt(input: BuildPromptInput): string {
   }
   sections.push(`## Question\n\n${input.prompt}`);
   sections.push(`## Output instructions\n\n${TEMPLATE_INSTRUCTIONS[input.template]}`);
+  // Required: explicit "## Sources" section at the end. Inline links
+  // are great for context but they're easy to miss in regex parsing
+  // and don't carry a "what this gave us" annotation. The Sources
+  // section is the canonical list — every URL the agent consulted,
+  // titled, with a one-line note. parseCitations prefers this
+  // section and falls back to inline links when missing.
+  sections.push(
+    `## Sources (REQUIRED)\n\n` +
+    `End your brief with a **\`## Sources\`** heading followed by a ` +
+    `markdown list of every URL you actually consulted while ` +
+    `synthesizing this brief. Format each entry as:\n\n` +
+    `\`- [Title](url) — one-line note on what this source contributed.\`\n\n` +
+    `Include every source — even ones cited only once inline. If you ` +
+    `consulted no live sources (i.e. answered from training only), ` +
+    `say so explicitly: \`- No live sources consulted; brief reflects ` +
+    `model knowledge as of the training cutoff.\``,
+  );
   return sections.join('\n\n');
 }
 
 /**
- * Best-effort citation extraction from a markdown body. Looks for
- * inline markdown links `[label](url)` and produces one citation per
- * unique URL.
+ * Citation extraction from a brief's markdown body. Two-pass:
+ *
+ *   1. Look for an explicit "## Sources" (or "## References") section
+ *      and extract entries from its markdown list. Each entry can
+ *      include a `— note` after the link, captured as `snippet`.
+ *      This is the agent's canonical "what I consulted" list.
+ *
+ *   2. Fall back to scanning every inline markdown link in the body
+ *      when no Sources section exists (older briefs, agents that
+ *      ignore the prompt instruction).
+ *
+ * Sources-section entries take precedence — if a URL appears both
+ * inline and in the section, the section's title + note win.
  */
 export function parseCitations(markdown: string): BriefCitation[] {
   if (!markdown) return [];
-  const re = /\[([^\]]+)\]\(([^)\s]+)\)/g;
-  const seen = new Map<string, BriefCitation>();
   const accessedAt = new Date().toISOString();
+  const seen = new Map<string, BriefCitation>();
+
+  const sectionBody = extractSourcesSection(markdown);
+  if (sectionBody) {
+    // Per-line walk; expect markdown list items like
+    //   - [Title](url) — note text
+    // We accept indented lines and either em-dash or hyphen as the
+    // note delimiter. Important: use `[ \t]` not `\s` between the
+    // URL and the note delimiter so we never cross a newline into
+    // the next list item (which would steal the next item as our
+    // own snippet).
+    const lineRe = /^[ \t]*[-*][ \t]+\[([^\]]+)\]\(([^)\s]+)\)[ \t]*(?:[—–-][ \t]+(.*))?$/gm;
+    let m: RegExpExecArray | null;
+    while ((m = lineRe.exec(sectionBody)) !== null) {
+      const [, title, url, note] = m;
+      if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
+      seen.set(url, {
+        url,
+        title: title.trim(),
+        accessed_at: accessedAt,
+        snippet: note?.trim() || undefined,
+      });
+    }
+  }
+
+  // Inline-link sweep for URLs that didn't appear in the Sources
+  // section (or for briefs without one).
+  const inlineRe = /\[([^\]]+)\]\(([^)\s]+)\)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(markdown)) !== null) {
+  while ((m = inlineRe.exec(markdown)) !== null) {
     const [, label, url] = m;
     if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
     if (seen.has(url)) continue;
     seen.set(url, { url, title: label, accessed_at: accessedAt });
   }
   return Array.from(seen.values());
+}
+
+/**
+ * Returns the body of the Sources/References section, or null if no
+ * such heading exists. Section ends at the next heading of equal or
+ * higher level, or at end-of-document.
+ */
+function extractSourcesSection(markdown: string): string | null {
+  // Find the heading line. We accept `## Sources`, `## References`,
+  // `## Sources (REQUIRED)`, etc. — the parenthetical is the prompt's
+  // own annotation that some agents echo into the body.
+  const headingRe = /^(\#{2,})\s+(sources|references)\b[^\n]*$/im;
+  const headingMatch = headingRe.exec(markdown);
+  if (!headingMatch) return null;
+
+  const start = headingMatch.index + headingMatch[0].length;
+  const rest = markdown.slice(start);
+  // Section ends at the next markdown heading (any level). JavaScript
+  // regex lacks `\Z`, so use a lookahead for the next heading and fall
+  // through to end-of-string when none matches.
+  const endRe = /^\#{1,}\s/m;
+  const endMatch = endRe.exec(rest);
+  return endMatch ? rest.slice(0, endMatch.index) : rest;
 }
 
 /**

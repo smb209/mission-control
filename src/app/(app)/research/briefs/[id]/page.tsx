@@ -19,7 +19,7 @@ interface Brief {
   title: string;
   prompt: string;
   result_md: string | null;
-  citations: Array<{ url: string; title?: string }>;
+  citations: Array<{ url: string; title?: string; snippet?: string }>;
   error_md: string | null;
   created_at: string;
   updated_at: string;
@@ -55,7 +55,6 @@ export default function BriefDetailPage() {
   const [topic, setTopic] = useState<Topic | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showCitations, setShowCitations] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -238,30 +237,36 @@ export default function BriefDetailPage() {
 
       {brief.citations.length > 0 && (
         <section className="mb-4">
-          <button
-            type="button"
-            onClick={() => setShowCitations(s => !s)}
-            className="text-[11px] uppercase tracking-wider text-mc-text-secondary hover:text-mc-accent mb-2"
-          >
-            Citations ({brief.citations.length}) {showCitations ? '▾' : '▸'}
-          </button>
-          {showCitations && (
-            <ul className="space-y-1">
-              {brief.citations.map(c => (
-                <li key={c.url} className="text-xs flex items-center gap-1.5">
-                  <ExternalLink className="w-3 h-3 text-mc-text-secondary shrink-0" />
+          <h2 className="text-[11px] uppercase tracking-wider text-mc-text-secondary mb-2">
+            Sources ({brief.citations.length})
+          </h2>
+          <ul className="space-y-2 px-4 py-3 bg-mc-bg-secondary border border-mc-border rounded-sm">
+            {brief.citations.map(c => (
+              <li key={c.url} className="text-xs">
+                <div className="flex items-baseline gap-1.5">
+                  <ExternalLink className="w-3 h-3 text-mc-text-secondary shrink-0 translate-y-[1px]" />
                   <a
                     href={c.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-mc-accent hover:underline truncate"
+                    className="text-mc-accent hover:underline break-all"
                   >
                     {c.title || c.url}
                   </a>
-                </li>
-              ))}
-            </ul>
-          )}
+                </div>
+                {c.snippet && (
+                  <div className="ml-[18px] mt-0.5 text-mc-text-secondary leading-snug">
+                    {c.snippet}
+                  </div>
+                )}
+                {c.title && c.title !== c.url && (
+                  <div className="ml-[18px] mt-0.5 text-[10px] text-mc-text-secondary/60 break-all">
+                    {c.url}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 
