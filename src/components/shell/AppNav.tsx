@@ -46,12 +46,14 @@ import {
   Lightbulb,
   Brain,
   Workflow,
+  AlertCircle,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
   useSetCurrentWorkspaceId,
   type WorkspaceLite,
 } from './workspace-context';
+import { useResearchPreflight } from '@/components/research/useResearchPreflight';
 import { CreateWorkspaceDrawer } from './CreateWorkspaceDrawer';
 import type { Workspace } from '@/lib/types';
 
@@ -268,13 +270,39 @@ function NavSectionView({
                 `}
               >
                 <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
+                <span className="truncate flex-1">{item.label}</span>
+                {item.href === '/research' && <ResearchPreflightDot />}
               </Link>
             </li>
           );
         })}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Renders a small amber AlertCircle to the right of the Research nav
+ * label when the current workspace can't dispatch briefs (no
+ * researcher in roster, or no runner registered). Silent when
+ * everything's healthy so the nav stays quiet.
+ *
+ * Lives in AppNav rather than the page so the indicator is visible
+ * even when the operator is on another route — the whole point of
+ * surfacing it on the nav is "you don't have to be on /research to
+ * notice."
+ */
+function ResearchPreflightDot() {
+  const workspaceId = useCurrentWorkspaceId();
+  const preflight = useResearchPreflight(workspaceId);
+  if (preflight.loading || preflight.ok) return null;
+  const reason = !preflight.hasResearcher
+    ? 'No researcher in this workspace — add one in Agents'
+    : 'No runner agent registered';
+  return (
+    <span title={reason} aria-label={reason} className="ml-1 shrink-0">
+      <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+    </span>
   );
 }
 

@@ -11,12 +11,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, RefreshCw, Search, FileText, Zap, Archive } from 'lucide-react';
+import { Plus, RefreshCw, Search, FileText, Zap, Archive, AlertTriangle } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { useMissionControl } from '@/lib/store';
 import { formatDistanceToNow } from 'date-fns';
 import { CreateTopicDrawer } from '@/components/research/CreateTopicDrawer';
 import { RunBriefDrawer } from '@/components/research/RunBriefDrawer';
+import { useResearchPreflight } from '@/components/research/useResearchPreflight';
 
 interface TopicSummary {
   id: string;
@@ -69,6 +70,8 @@ export default function ResearchHubPage() {
   const [createTopicOpen, setCreateTopicOpen] = useState(false);
   const [runBriefOpen, setRunBriefOpen] = useState(false);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
+
+  const preflight = useResearchPreflight(workspaceId);
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
@@ -191,13 +194,21 @@ export default function ResearchHubPage() {
             <button
               type="button"
               onClick={() => setRunBriefOpen(true)}
-              className="px-3 py-1.5 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:opacity-90 flex items-center gap-1.5"
+              disabled={!preflight.ok && !preflight.loading}
+              title={preflight.ok ? undefined : 'A researcher must be in this workspace before you can dispatch a brief'}
+              className="px-3 py-1.5 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
             >
               <Zap className="w-3.5 h-3.5" />
               Run a brief
             </button>
           </div>
         </header>
+
+        {/* Preflight warning. Renders only when something is missing —
+            staying GREEN keeps the chrome out of the operator's way. */}
+        {!preflight.loading && !preflight.ok && (
+          <PreflightBanner preflight={preflight} />
+        )}
 
         {error && (
           <div className="mb-4 px-3 py-2 rounded-sm bg-red-900/20 border border-red-500/30 text-red-300 text-sm">
@@ -236,6 +247,53 @@ export default function ResearchHubPage() {
         defaultTopicId={null}
         onLaunched={() => { setRunBriefOpen(false); load(); }}
       />
+    </div>
+  );
+}
+
+function PreflightBanner({
+  preflight,
+}: {
+  preflight: { hasResearcher: boolean; hasRunner: boolean };
+}) {
+  const messages: { title: string; body: React.ReactNode }[] = [];
+
+  if (!preflight.hasResearcher) {
+    messages.push({
+      title: 'No researcher in this workspace',
+      body: (
+        <>
+          A researcher must be in this workspace's roster before briefs can be dispatched. Add one via{' '}
+          <Link href="/agents" className="underline hover:text-mc-accent">
+            Agents → Add agents
+          </Link>{' '}
+          (the Researcher role, or the &ldquo;Research &amp; write&rdquo; team).
+        </>
+      ),
+    });
+  }
+  if (!preflight.hasRunner) {
+    messages.push({
+      title: 'No runner agent registered',
+      body: (
+        <>
+          A workspace runner (<code>mc-runner-dev</code>) hosts the actual chat sessions for role-scoped dispatches. Provision it via the openclaw gateway, then return here.
+        </>
+      ),
+    });
+  }
+
+  return (
+    <div className="mb-4 px-4 py-3 rounded-sm bg-amber-900/20 border border-amber-500/40 text-amber-100 text-sm flex gap-3">
+      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+      <div className="flex-1 space-y-2">
+        {messages.map((m, i) => (
+          <div key={i}>
+            <div className="font-medium">{m.title}</div>
+            <div className="text-amber-100/80">{m.body}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
