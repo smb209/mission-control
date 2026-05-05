@@ -4203,6 +4203,33 @@ const migrations: Migration[] = [
       console.log('[Migration 076] research_suggestions table created.');
     },
   },
+  {
+    id: '077',
+    name: 'recurring_jobs_research_columns',
+    up: (db) => {
+      // Research phase 2: bind a recurring_jobs row to a topic +
+      // brief template so the scheduler can dispatch via run-brief
+      // instead of dispatchScope. See
+      // specs/research-phase-2-schedules-build-plan.md §3.1.
+      //
+      // Both columns are nullable: a row whose topic_id IS NULL is a
+      // pre-phase-2 scope-keyed job and the scheduler keeps using
+      // dispatchScope. A row with topic_id set is a research schedule.
+      //
+      // FK has no ON DELETE clause: topics are soft-deleted via
+      // archived_at, never hard-deleted. Pause-on-archive will be
+      // plumbed at the application layer in slice 3.
+      const cols = db.prepare(`PRAGMA table_info(recurring_jobs)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'topic_id')) {
+        db.exec(`ALTER TABLE recurring_jobs ADD COLUMN topic_id TEXT REFERENCES topics(id)`);
+      }
+      if (!cols.some((c) => c.name === 'brief_template')) {
+        db.exec(`ALTER TABLE recurring_jobs ADD COLUMN brief_template TEXT`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_recurring_jobs_topic ON recurring_jobs(topic_id) WHERE topic_id IS NOT NULL`);
+      console.log('[Migration 077] recurring_jobs.topic_id + brief_template columns added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
