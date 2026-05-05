@@ -107,6 +107,12 @@ function PmChatPageInner() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One-at-a-time send. After POST /api/pm/proposals returns 201 with
+  // awaiting_agent: true, we keep the input disabled until the agent's
+  // reply lands (a new assistant message appears in the thread) OR a
+  // bounded fallback fires so the silent-PM scenario doesn't lock the
+  // operator out forever. See specs/pm-chat-prompt.md PR A §4.
+  const [awaitingAgent, setAwaitingAgent] = useState<{ since: number; userMessageCount: number } | null>(null);
   const [refining, setRefining] = useState<string | null>(null);
   const [refineText, setRefineText] = useState('');
   const [runningStandup, setRunningStandup] = useState(false);
@@ -247,8 +253,14 @@ function PmChatPageInner() {
     setStuckToBottom(true);
   }, []);
 
+  // Agent timeout in pm-dispatch is 60s with another 60s reconciler tail
+  // (NAMED_AGENT_TIMEOUT_MS + RECONCILER_TAIL_MS). Bound the UI lockout
+  // at 3× the inner timeout so a silent-PM scenario surfaces an error
+  // and re-enables send rather than wedging the input forever.
+  const AWAITING_AGENT_TIMEOUT_MS = 180_000;
+
   const handleSend = async () => {
-    if (!input.trim() || sending) return;
+    if (!input.trim() || sending || awaitingAgent) return;
     setSending(true);
     setError(null);
     try {
@@ -264,18 +276,51 @@ function PmChatPageInner() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Failed to dispatch (${res.status})`);
       }
+      const body = await res.json().catch(() => ({} as { awaiting_agent?: boolean }));
       setInput('');
       // The operator just dispatched — they want to see the result. Re-stick
       // to the bottom even if they had been scrolled up reading old cards.
       setStuckToBottom(true);
+      // Refetch so the user message appears immediately, then arm the
+      // "awaiting agent" gate so the next send is blocked until the
+      // assistant message lands (or we time out).
       await loadMessages();
       await loadRecent();
+      if (body.awaiting_agent !== false) {
+        // Snapshot the user-message count we have right now; agent's
+        // reply is detected as "thread grew an assistant message after
+        // the count of user messages stayed the same."
+        setAwaitingAgent({
+          since: Date.now(),
+          userMessageCount: messages.filter((m) => m.role === 'user').length + 1,
+        });
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSending(false);
     }
   };
+
+  // Watch for the agent's reply / timeout while awaiting. The 3s poll
+  // already runs; we just react to its results here.
+  useEffect(() => {
+    if (!awaitingAgent) return;
+    const lastAssistantAt = messages
+      .filter((m) => m.role === 'assistant')
+      .reduce((max, m) => Math.max(max, new Date(m.created_at).getTime()), 0);
+    if (lastAssistantAt > awaitingAgent.since) {
+      setAwaitingAgent(null);
+      return;
+    }
+    if (Date.now() - awaitingAgent.since > AWAITING_AGENT_TIMEOUT_MS) {
+      setAwaitingAgent(null);
+      setError(
+        'The PM didn\'t reply within ' + Math.round(AWAITING_AGENT_TIMEOUT_MS / 1000) +
+          's. Try /reset on the PM\'s dispatch session if this persists.',
+      );
+    }
+  }, [messages, awaitingAgent, AWAITING_AGENT_TIMEOUT_MS]);
 
   // plan_initiative proposals are advisory at the database level — they
   // carry the suggestions JSON inside impact_md but no link to a target
@@ -668,21 +713,24 @@ function PmChatPageInner() {
                 onKeyDown={onKeyDown}
                 rows={2}
                 placeholder={
-                  pmAgent
-                    ? 'Drop anything that reshapes the plan — blocker, opportunity, new idea — the PM will respond with a proposal.'
-                    : 'No PM agent in this workspace.'
+                  awaitingAgent
+                    ? 'PM is replying — send re-enables when the response lands.'
+                    : pmAgent
+                      ? 'Ask a question or describe a disruption — the PM picks chat or a structured proposal.'
+                      : 'No PM agent in this workspace.'
                 }
-                disabled={!pmAgent || sending}
+                disabled={!pmAgent || sending || !!awaitingAgent}
                 className="flex-1 bg-mc-bg border border-mc-border rounded-sm px-3 py-2 text-sm focus:outline-hidden focus:border-mc-accent resize-none disabled:opacity-50"
               />
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={!pmAgent || !input.trim() || sending}
-                className="self-end flex items-center gap-2 px-3 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+                disabled={!pmAgent || !input.trim() || sending || !!awaitingAgent}
+                title={awaitingAgent ? 'Wait for the PM\'s reply before sending another message.' : undefined}
+                className="self-end flex items-center gap-2 px-3 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {sending ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Dispatch
+                {sending || awaitingAgent ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {awaitingAgent ? 'Waiting' : 'Dispatch'}
               </button>
             </div>
           </div>
