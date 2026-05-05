@@ -12,7 +12,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Calendar as CalendarIcon, Loader2, Pause, Play, Trash2, Zap } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowUpRight, Calendar as CalendarIcon, Loader2, Pause, Play, Trash2, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { formatCadence } from './ScheduleDrawer';
@@ -26,8 +27,26 @@ export interface ScheduleSummary {
   status: 'active' | 'paused' | 'done';
   next_run_at: string;
   last_run_at: string | null;
+  /**
+   * The scope_key the schedule's last successful sweep recorded. For
+   * research schedules this is `research-brief-<briefId>` per
+   * dispatchResearchScheduleOnce; the row parses out the brief id to
+   * render the "View latest" link.
+   */
+  last_run_scope_key?: string | null;
   consecutive_failures: number;
   run_count: number;
+}
+
+/**
+ * Pull the brief id out of a `research-brief-<id>` scope key. Returns
+ * null for any other shape (defends against scope keys from the
+ * scope-keyed-sessions path or future schedule kinds).
+ */
+function lastBriefIdFrom(scopeKey: string | null | undefined): string | null {
+  if (!scopeKey) return null;
+  const m = /^research-brief-([0-9a-f-]+)$/i.exec(scopeKey);
+  return m ? m[1] : null;
 }
 
 interface ScheduleRowProps {
@@ -116,6 +135,7 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
   };
 
   const paused = schedule.status === 'paused';
+  const lastBriefId = lastBriefIdFrom(schedule.last_run_scope_key);
 
   // Pick the lead icon to make the row's state legible at a glance:
   // queued = pulsing spinner, paused = yellow calendar, idle = accent
@@ -148,6 +168,17 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
               <span>· Last: {formatDistanceToNow(new Date(schedule.last_run_at), { addSuffix: true })}</span>
             )}
             <span>· Run count: {schedule.run_count}</span>
+            {lastBriefId && (
+              <Link
+                href={`/research/briefs/${lastBriefId}`}
+                className="text-mc-accent hover:underline inline-flex items-center gap-0.5"
+                onClick={(e) => e.stopPropagation()}
+                title="View the most recent brief this schedule produced"
+              >
+                · View latest
+                <ArrowUpRight className="w-3 h-3" />
+              </Link>
+            )}
             {paused && (
               <span className="text-yellow-400">
                 · Paused{schedule.consecutive_failures > 0 ? ` (${schedule.consecutive_failures} failures)` : ''}
