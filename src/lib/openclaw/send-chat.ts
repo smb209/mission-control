@@ -131,8 +131,15 @@ export interface SendChatAndAwaitInput extends SendChatInput {
    * uses to write replies into agent_chat_messages / task_notes.
    */
   isDone?: (event: ChatEvent) => boolean;
-  /** Tap for every matching event between send and done. */
+  /** Tap for every matching chat_event between send and done. */
   onEvent?: (event: ChatEvent) => void;
+  /**
+   * Tap for every matching agent_event between send and done. Tool
+   * calls, tool results, and status transitions ride this channel.
+   * Filtered by sessionKey the same way chat_events are. Caller-side
+   * exceptions are swallowed so a noisy tap can't break the wait.
+   */
+  onAgentEvent?: (event: AgentEvent) => void;
 }
 
 export interface SendChatAndAwaitResult extends SendChatResult {
@@ -149,11 +156,29 @@ export interface SendChatAndAwaitResult extends SendChatResult {
  * Minimum surface we need from the openclaw client. The real
  * `OpenClawClient` satisfies this implicitly; tests inject a stub.
  */
+/**
+ * Loose shape for openclaw `agent_event` payloads. The gateway emits
+ * these for every agent activity that ISN'T a chat token (tool calls,
+ * tool results, status transitions). Field set varies by event kind;
+ * the only thing we rely on is the optional `sessionKey` for routing.
+ *
+ * Used by `sendChatAndAwaitReply`'s `onAgentEvent` tap (PR D of
+ * specs/pm-chat-prompt.md) so callers can surface tool calls to
+ * operators as they happen.
+ */
+export type AgentEvent = Record<string, unknown> & { sessionKey?: string };
+
 export interface SendChatClient {
   isConnected: () => boolean;
   call: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-  on: (event: 'chat_event', listener: (payload: ChatEvent) => void) => unknown;
-  off: (event: 'chat_event', listener: (payload: ChatEvent) => void) => unknown;
+  on: {
+    (event: 'chat_event', listener: (payload: ChatEvent) => void): unknown;
+    (event: 'agent_event', listener: (payload: AgentEvent) => void): unknown;
+  };
+  off: {
+    (event: 'chat_event', listener: (payload: ChatEvent) => void): unknown;
+    (event: 'agent_event', listener: (payload: AgentEvent) => void): unknown;
+  };
 }
 
 let clientOverride: SendChatClient | null = null;
@@ -353,7 +378,23 @@ export async function sendChatAndAwaitReply(
     }
   };
 
+  // Sibling listener for agent_event (tool calls, tool results,
+  // status transitions). Only attached when the caller supplies
+  // `onAgentEvent` — most callers don't care about non-chat
+  // activity. sessionKey filter mirrors the chat_event path.
+  const agentEventListener = input.onAgentEvent
+    ? (payload: AgentEvent) => {
+        if (!payload || payload.sessionKey !== sessionKey) return;
+        try {
+          input.onAgentEvent?.(payload);
+        } catch {
+          // Caller's tap shouldn't break the wait.
+        }
+      }
+    : null;
+
   client.on('chat_event', listener);
+  if (agentEventListener) client.on('agent_event', agentEventListener);
 
   try {
     // Send the frame. If this fails, short-circuit with the SendChatResult
@@ -405,5 +446,6 @@ export async function sendChatAndAwaitReply(
     };
   } finally {
     client.off('chat_event', listener);
+    if (agentEventListener) client.off('agent_event', agentEventListener);
   }
 }

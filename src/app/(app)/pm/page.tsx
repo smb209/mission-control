@@ -333,10 +333,12 @@ function PmChatPageInner() {
 
   // Live in-flight preview (PR C). The pm-dispatch onEvent tap
   // broadcasts `pm_dispatch_in_flight` events with kind 'delta'
-  // (assistant text streaming) and 'control' (final marker). We
-  // mirror just the latest delta preview here; a 'control' marker
-  // clears it.
+  // (assistant text streaming), 'control' (final marker), and
+  // 'tool_call' (PR D — agent_event taps). We mirror the latest
+  // delta preview + a small tail of recent tool calls so the
+  // operator can see what the PM is actually doing.
   const [livePreview, setLivePreview] = useState<{ text: string; length: number } | null>(null);
+  const [liveToolCalls, setLiveToolCalls] = useState<Array<{ tool: string; phase?: string; note?: string; at: number }>>([]);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -351,21 +353,35 @@ function PmChatPageInner() {
           const preview = typeof evt.payload.preview === 'string' ? evt.payload.preview : '';
           const length = typeof evt.payload.length === 'number' ? evt.payload.length : preview.length;
           setLivePreview({ text: preview, length });
+        } else if (evt.payload?.kind === 'tool_call') {
+          const tool = typeof evt.payload.tool === 'string' ? evt.payload.tool : '';
+          if (!tool) return;
+          const phase = typeof evt.payload.phase === 'string' ? evt.payload.phase : undefined;
+          const note = typeof evt.payload.note === 'string' ? evt.payload.note : undefined;
+          // Cap the trail at the last 6 entries — anything older
+          // becomes noise and crowds the in-flight strip.
+          setLiveToolCalls(prev => [...prev, { tool, phase, note, at: Date.now() }].slice(-6));
         } else if (evt.payload?.kind === 'control') {
-          // Any control event (final / aborted) clears the preview;
-          // the assistant message will land in the chat thread via
-          // the normal post-dispatch path.
+          // Any control event (final / aborted) clears the preview
+          // AND the tool-call trail; the assistant message will
+          // land in the chat thread via the normal post-dispatch
+          // path.
           setLivePreview(null);
+          setLiveToolCalls([]);
         }
       } catch { /* ignore parse errors */ }
     };
     return () => es.close();
   }, [workspaceId]);
 
-  // Clear the preview when we stop awaiting (timeout / response /
-  // abort) so a stale tail doesn't linger after the gate releases.
+  // Clear the preview + tool-call trail when we stop awaiting
+  // (timeout / response / abort) so stale state doesn't linger
+  // after the gate releases.
   useEffect(() => {
-    if (!awaitingAgent) setLivePreview(null);
+    if (!awaitingAgent) {
+      setLivePreview(null);
+      setLiveToolCalls([]);
+    }
   }, [awaitingAgent]);
 
   const submitSteer = useCallback(async () => {
@@ -841,6 +857,20 @@ function PmChatPageInner() {
                     {abortBusy ? '…' : 'Stop'}
                   </button>
                 </div>
+                {liveToolCalls.length > 0 && (
+                  <ul className="space-y-0.5 text-[11px] text-mc-text-secondary/80">
+                    {liveToolCalls.map((tc, i) => (
+                      <li key={`${tc.at}-${i}`} className="flex items-start gap-1.5">
+                        <span className="text-mc-accent shrink-0">↳</span>
+                        <span className="flex-1 min-w-0">
+                          <span className="font-mono text-mc-text">{tc.tool}</span>
+                          {tc.phase && <span className="text-mc-text-secondary/60"> · {tc.phase}</span>}
+                          {tc.note && <span className="text-mc-text-secondary/60"> — {tc.note}</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {livePreview && livePreview.text && (
                   <div className="font-mono text-[11px] text-mc-text-secondary/80 italic line-clamp-3 whitespace-pre-wrap">
                     …{livePreview.text}
