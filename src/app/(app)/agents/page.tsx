@@ -761,8 +761,8 @@ function HardStopDialog({ pattern, onChange, busy, onCancel, onConfirm }: HardSt
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      <div className="w-full max-w-lg rounded-lg bg-mc-bg-primary border border-mc-border-primary shadow-xl p-5">
-        <h2 className="text-base font-semibold text-mc-text-primary">Hard stop matching sessions</h2>
+      <div className="w-full max-w-lg rounded-lg bg-mc-bg border border-mc-border shadow-xl p-5">
+        <h2 className="text-base font-semibold text-mc-text">Hard stop matching sessions</h2>
         <p className="mt-2 text-sm text-mc-text-secondary">
           Aborts every gateway session whose key matches the pattern, then marks the
           corresponding rows in <code className="text-xs px-1 rounded bg-mc-bg-secondary">openclaw_sessions</code>,{' '}
@@ -786,18 +786,18 @@ function HardStopDialog({ pattern, onChange, busy, onCancel, onConfirm }: HardSt
             if (e.key === 'Escape' && !busy) onCancel();
           }}
           placeholder="*ws-rj-*"
-          className="mt-4 w-full rounded border border-mc-border-primary bg-mc-bg-secondary px-3 py-2 text-sm text-mc-text-primary font-mono"
+          className="mt-4 w-full rounded border border-mc-border bg-mc-bg-secondary px-3 py-2 text-sm text-mc-text font-mono"
           disabled={busy}
         />
         {tooBroad && (
-          <p className="mt-2 text-xs text-mc-status-failed-text">
+          <p className="mt-2 text-xs text-amber-400">
             Pattern too broad — use <span className="font-semibold">Reset all sessions</span> instead.
           </p>
         )}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
-            className="px-3 py-1.5 text-sm rounded border border-mc-border-primary text-mc-text-secondary hover:bg-mc-bg-secondary disabled:opacity-50"
+            className="px-3 py-1.5 text-sm rounded border border-mc-border text-mc-text-secondary hover:bg-mc-bg-secondary disabled:opacity-50"
             onClick={onCancel}
             disabled={busy}
           >
