@@ -374,6 +374,12 @@ export default function AgentDetailsPage({
     <PageWithRails
       header={header}
       leftRail={<SectionNav sections={sections} />}
+      collapsibleLeftRail
+      leftRailStorageKey="mc:agents:detail:rail"
+      // Wide right rail (routing preview + activity timeline) needs xl
+      // breathing room. Below xl it stacks under main as a labeled
+      // section so the form column stays readable. See PageWithRails docs.
+      rightRailMinViewport="xl"
       rightRail={
         <div className="space-y-4">
           <RoutingPreview info={sessionInfo} loading={sessionInfoLoading} error={sessionInfoError} />

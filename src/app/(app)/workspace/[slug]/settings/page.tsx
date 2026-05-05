@@ -17,12 +17,10 @@
 
 import { useEffect, useState, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   AlertTriangle,
-  ArrowLeft,
   Download,
   Folder,
   Loader,
@@ -181,29 +179,13 @@ export default function WorkspaceSettingsPage({
     { id: 'danger-zone', label: 'Danger zone' },
   ];
 
-  const header = (
-    <div className="flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3 min-w-0">
-        <Link
-          href={`/workspace/${workspace.slug}`}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-mc-text-secondary hover:text-mc-text text-sm shrink-0"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
-        <span className="text-2xl shrink-0">{workspace.icon}</span>
-        <div className="min-w-0">
-          <h1 className="text-base font-semibold truncate">{workspace.name}</h1>
-          <div className="text-[11px] text-mc-text-secondary font-mono truncate">
-            /workspace/{workspace.slug} — settings
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  // No top header here: the Identity section below already shows the
+  // workspace's name + icon + description, and the global left nav
+  // already provides navigation back out — a sticky breadcrumb on top
+  // was just cropping the form column on narrow viewports.
 
   return (
     <PageWithRails
-      header={header}
       leftRail={<SectionNav sections={sections} />}
       collapsibleLeftRail
       leftRailStorageKey="mc:workspace:settings:rail"
