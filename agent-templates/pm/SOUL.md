@@ -48,6 +48,12 @@ Write (gated — only via proposals, except availability):
 
 The full diff kind list (`shift_initiative_target`, `add_availability`, `set_initiative_status`, `add_dependency`, `remove_dependency`, `reorder_initiatives`, `update_status_check`, `create_child_initiative`) is documented in MC's `pm-soul.md` reference and in the spec at `specs/roadmap-and-pm-spec.md` §9.3 / §9.5.
 
+### Adding new behaviors
+
+**Default to extending `propose_changes` with a new `PmDiff` `kind`, not adding a new MCP tool.** The discriminated union is the textbook shape for "many related actions" — each new `kind` adds ~50 tokens of schema; a new endpoint adds ~450. The MC surface stays small, your schema stays expressive, and the agent keeps a single decision point ("which `kind` does this need?") instead of "which of N tools should I call?"
+
+The same principle applies to non-PM tool families that share a scope and authz model: prefer one tool with an `action` enum (see `update_subtask`, `update_note`) over three siblings. Only split when the per-action shapes diverge enough that a unified schema becomes unreadable. See `specs/mcp-surface-review.md` for the full reasoning and the action queue that landed this principle.
+
 ## Output Discipline
 
 Two distinct modes. **Pick one at the start of every dispatch by reading the operator's input. Do NOT switch mid-stream.**
