@@ -32,6 +32,21 @@ function resolveDbPath(): string {
     const unique = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
     return path.join(dir, `mc-test-${unique}.db`);
   }
+  // Defense: if a Node test runner is loading this module without
+  // NODE_ENV=test, we'd otherwise silently open the production DB and
+  // every `freshWorkspace()` test fixture would leak rows into it.
+  // The recurring_jobs test fixtures are particularly bad — leaked
+  // rows get picked up by the production scheduler and fire on
+  // cadence forever. Hard-fail here so the operator notices and runs
+  // the suite via `yarn test` (or prefixes ad-hoc invocations with
+  // `NODE_ENV=test`).
+  if (process.env.NODE_TEST_CONTEXT) {
+    throw new Error(
+      'Refusing to open production DB from a Node test runner. Set ' +
+      'NODE_ENV=test (e.g. `NODE_ENV=test npx tsx --test ...`) or use ' +
+      '`yarn test`.',
+    );
+  }
   return process.env.DATABASE_PATH || path.join(process.cwd(), 'mission-control.db');
 }
 
