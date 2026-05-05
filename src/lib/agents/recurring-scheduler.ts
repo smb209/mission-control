@@ -15,6 +15,7 @@ import {
 import {
   listDueJobs,
   markRunFailure,
+  markRunInFlight,
   markRunSuccess,
   renderScopeKey,
   type RecurringJob,
@@ -112,6 +113,12 @@ async function dispatchResearchScheduleOnce(job: RecurringJob): Promise<void> {
     `body in your final assistant message — do not save it to a file ` +
     `and do not call register_deliverable.`;
 
+  // Reserve the row before we start the brief: advance next_run_at by
+  // one cadence so a slow brief (or a mid-brief server restart) can't
+  // be re-picked by the next sweep. markRunSuccess re-advances on
+  // completion; markRunFailure overrides with its own backoff.
+  markRunInFlight(job.id);
+
   let result: { brief_id: string; agent_run_id: string; state: 'started' | 'rejected'; reason?: string };
   try {
     const created = createBriefWithRun({
@@ -191,6 +198,10 @@ export async function dispatchRecurringJobOnce(job: RecurringJob): Promise<void>
   // rendered key as the suffix; dispatchScope then prepends the prefix
   // automatically. We strip-once-if-present to avoid double-prefixing
   // when templates are written like `agent:mc-runner-dev:main:recurring-{job_id}`.
+
+  // Reserve the row before dispatch — see dispatchResearchScheduleOnce
+  // for rationale. Prevents overlapping sweeps and post-restart re-fires.
+  markRunInFlight(job.id);
 
   try {
     const result = await dispatchScope({

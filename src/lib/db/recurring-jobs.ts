@@ -242,6 +242,26 @@ export function listDueJobs(opts: { now?: string; limit?: number } = {}): Recurr
 }
 
 /**
+ * Reserve a job for an in-flight dispatch. Advances `next_run_at` by
+ * one full cadence immediately so that:
+ *   - a slow brief (longer than the sweep interval) can't be re-picked
+ *     by an overlapping sweep tick, and
+ *   - a server restart mid-brief doesn't see the row as "due" again
+ *     (the orphaned brief surfaces via its own brief_failed signal,
+ *     not via the scheduler re-firing).
+ *
+ * Returns the updated row. Does NOT bump run_count or touch
+ * last_run_at — that happens on terminal success/failure.
+ */
+export function markRunInFlight(id: string): RecurringJob | null {
+  const job = getRecurringJob(id);
+  if (!job) return null;
+  const next = new Date(Date.now() + job.cadence_seconds * 1000).toISOString();
+  run(`UPDATE recurring_jobs SET next_run_at = ? WHERE id = ?`, [next, id]);
+  return getRecurringJob(id);
+}
+
+/**
  * Mark a successful run. Bumps run_count, clears consecutive_failures,
  * advances next_run_at by cadence_seconds, records the scope_key
  * actually used.
