@@ -96,12 +96,23 @@ async function dispatchResearchScheduleOnce(job: RecurringJob): Promise<void> {
 
   const today = new Date().toISOString().slice(0, 10);
   const title = `${topic.name} · ${today}`;
-  // The brief's prompt is the topic description by default. If the
-  // operator left description empty, a minimal directive keeps the
-  // researcher productive.
-  const prompt = topic.description.trim()
-    ? topic.description
-    : `Survey "${topic.name}" and produce a research brief.`;
+  // The auto-prompt frames this as a recurring survey ASK rather than
+  // a topic DESCRIPTION. The researcher persona's AGENTS.md leans
+  // hard on "save file + register_deliverable" when given a vague
+  // descriptive prompt; framing it as "produce a current brief and
+  // reply with it" puts the orchestrator's reply-capture path back
+  // on the rails. See run-brief.ts buildBriefPrompt for the
+  // anti-deliverable override the orchestrator stacks on top.
+  const desc = topic.description.trim();
+  const prompt =
+    `Recurring research brief — ${today}.\n\n` +
+    `Topic: ${topic.name}\n` +
+    (desc ? `Context: ${desc}\n\n` : '\n') +
+    `Produce a fresh research brief on this topic right now. Cover ` +
+    `current state, what changed since any prior coverage, key findings ` +
+    `with citations, gaps, and concrete next steps. Reply with the brief ` +
+    `body in your final assistant message — do not save it to a file ` +
+    `and do not call register_deliverable.`;
 
   let result: { brief_id: string; agent_run_id: string; state: 'started' | 'rejected'; reason?: string };
   try {
