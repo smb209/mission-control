@@ -97,6 +97,37 @@ const KIND_BADGE: Record<Kind, string> = {
   story: 'bg-emerald-500/20 text-emerald-300',
 };
 
+/**
+ * Pills next to the kind badge surface notable statuses on the tree
+ * row at a glance. `planned` and `in_progress` are intentionally
+ * omitted — they're the boring default and would clutter every row;
+ * the title/kind already convey "this is a thing being worked on".
+ * `cancelled` had its own pill before this map landed; we fold it in
+ * here for consistency and keep the existing red treatment.
+ */
+const STATUS_BADGE: Partial<Record<Status, { label: string; className: string; tooltip: string }>> = {
+  done: {
+    label: 'done',
+    className: 'bg-green-500/15 text-green-300 border border-green-500/30',
+    tooltip: 'Marked done',
+  },
+  blocked: {
+    label: 'blocked',
+    className: 'bg-red-500/15 text-red-300 border border-red-500/30',
+    tooltip: 'Blocked — see status check',
+  },
+  at_risk: {
+    label: 'at risk',
+    className: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    tooltip: 'At risk — see status check',
+  },
+  cancelled: {
+    label: 'cancelled',
+    className: 'bg-red-500/15 text-red-300 border border-red-500/30',
+    tooltip: 'This initiative is cancelled',
+  },
+};
+
 const SHOW_CANCELLED_LS_KEY = 'mc:initiatives:show_cancelled';
 
 // Toggle persisted across the URL (`?show_cancelled=1`) so links survive
@@ -839,12 +870,12 @@ function InitiativeRow({
             <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
               {node.kind}
             </span>
-            {node.status === 'cancelled' && (
+            {STATUS_BADGE[node.status] && (
               <span
-                className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-red-500/15 text-red-300 border border-red-500/30"
-                title="This initiative is cancelled"
+                className={`text-[10px] uppercase tracking-wide px-1 py-0.5 rounded ${STATUS_BADGE[node.status]!.className}`}
+                title={STATUS_BADGE[node.status]!.tooltip}
               >
-                cancelled
+                {STATUS_BADGE[node.status]!.label}
               </span>
             )}
             {!childrenExpanded && directChildrenCount > 0 && (
