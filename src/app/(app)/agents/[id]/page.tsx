@@ -46,6 +46,13 @@ const EMOJI_OPTIONS = ['🤖', '🦞', '💻', '🔍', '✍️', '🎨', '📊',
 // (e.g. planners, glue agents) that don't fit the standard taxonomy.
 const STANDARD_ROLES = [
   'pm',
+  // `runner` is the gateway-bound scope-keyed-session host
+  // (mc-runner / mc-runner-dev). Not a BriefingRole — it doesn't
+  // carry a persona briefing — but it IS a first-class role for
+  // operator-facing agents. Was missing, so newly-imported runner
+  // rows landed in "Custom…" instead of matching their canonical
+  // label.
+  'runner',
   'coordinator',
   'builder',
   'researcher',
