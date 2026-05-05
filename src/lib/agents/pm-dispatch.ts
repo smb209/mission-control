@@ -372,21 +372,45 @@ async function runDisruptionDispatchInBackground(
   setDispatchState(placeholder.id, 'synth_only');
 
   // Surface what the agent ACTUALLY said. The structured-proposal
-  // path didn't fire (no propose_changes call landed), but the agent
-  // typically still replied with text — that's the most useful thing
-  // to show in chat. If we have nothing usable, fall back to the
-  // synth content so the operator at least sees that.
-  const replyText = extractAgentReplyText(result);
-  const chatBody = replyText.trim() || placeholder.impact_md;
-  try {
-    postPmChatMessage({
-      workspace_id: input.workspace_id,
-      content: chatBody,
-      proposal_id: replyText ? undefined : placeholder.id,
-      role: 'assistant',
-    });
-  } catch (err) {
-    console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
+  // path didn't fire (no propose_changes call landed). Three sub-cases:
+  //
+  //   - Agent replied with usable text → post that. Most useful path
+  //     for chatty prompts ("Test", "What about X?") that don't merit
+  //     a structured proposal.
+  //   - Agent replied empty AND the synth produced ≥1 structured
+  //     change → post the synth content (it's at least factual about
+  //     workspace state).
+  //   - Agent replied empty AND synth has 0 changes → post NOTHING.
+  //     The misleading "Proposal — 0 changes / disruption acknowledged"
+  //     card was the worst of all worlds: implied a proposal where
+  //     none exists. Better to leave the chat clean; the placeholder
+  //     row still exists in pm_proposals for /pm/activity.
+  const replyText = extractAgentReplyText(result).trim();
+  if (replyText) {
+    try {
+      postPmChatMessage({
+        workspace_id: input.workspace_id,
+        content: replyText,
+        role: 'assistant',
+      });
+    } catch (err) {
+      console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
+    }
+  } else if (placeholder.proposed_changes.length > 0) {
+    try {
+      postPmChatMessage({
+        workspace_id: input.workspace_id,
+        content: placeholder.impact_md,
+        proposal_id: placeholder.id,
+        role: 'assistant',
+      });
+    } catch (err) {
+      console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
+    }
+  } else {
+    console.log(
+      `[pm-dispatch] synth-only with empty reply + 0 changes for ${placeholder.id}; suppressing misleading chat post`,
+    );
   }
 
   broadcast({
