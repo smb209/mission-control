@@ -586,6 +586,7 @@ export default function InitiativesPage() {
                 revealAncestors(id);
                 selectInitiative(id);
               }}
+              onChanged={refresh}
             />
           ) : (
             <div className="rounded-lg border border-dashed border-mc-border bg-mc-bg-secondary/30 p-12 text-center text-sm text-mc-text-secondary">

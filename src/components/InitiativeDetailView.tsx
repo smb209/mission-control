@@ -144,6 +144,24 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
   { value: 'cancelled', label: 'cancelled' },
 ];
 
+/**
+ * Pill styling for each status. Mirrors STATUS_BADGE in
+ * `(app)/initiatives/page.tsx` for the four notable states; adds
+ * muted treatments for `planned` / `in_progress` so the picker
+ * popover renders every option as a recognisable pill.
+ *
+ * Keep these two maps in sync — if you tweak a color here, update
+ * the tree row map too (or factor both to a shared module).
+ */
+const STATUS_PILL: Record<Status, { label: string; className: string }> = {
+  planned:     { label: 'planned',     className: 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border' },
+  in_progress: { label: 'in progress', className: 'bg-blue-500/15 text-blue-300 border border-blue-500/30' },
+  at_risk:     { label: 'at risk',     className: 'bg-amber-500/15 text-amber-300 border border-amber-500/30' },
+  blocked:     { label: 'blocked',     className: 'bg-red-500/15 text-red-300 border border-red-500/30' },
+  done:        { label: 'done',        className: 'bg-green-500/15 text-green-300 border border-green-500/30' },
+  cancelled:   { label: 'cancelled',   className: 'bg-red-500/15 text-red-300 border border-red-500/30' },
+};
+
 const COMPLEXITY_OPTIONS: { value: Complexity | ''; label: string }[] = [
   { value: '', label: '(unset)' },
   { value: 'S', label: 'S' },
@@ -199,6 +217,11 @@ export interface InitiativeDetailViewProps {
    *  route — the master-detail host uses this to flip the selection
    *  and reveal the row in the rail. */
   onSelectInitiative?: (id: string) => void;
+  /** Fired after any successful PATCH on the initiative so the host
+   *  (e.g. the master-detail tree) can refetch its own state. The
+   *  detail view already optimistically merges the changed fields
+   *  locally, but tree rows are owned by the host page. */
+  onChanged?: () => void;
 }
 
 export function InitiativeDetailView({
@@ -206,6 +229,7 @@ export function InitiativeDetailView({
   variant,
   onDeleted,
   onSelectInitiative,
+  onChanged,
 }: InitiativeDetailViewProps) {
   const id = initiativeId;
   const router = useRouter();
@@ -423,8 +447,11 @@ export function InitiativeDetailView({
         setInitiative(prev => (prev ? { ...prev, ...next } : prev));
       }
       refresh();
+      // Notify the host (e.g. the initiatives tree) so its own copy of
+      // the row reflects the change without a manual page reload.
+      onChanged?.();
     },
-    [id, refresh],
+    [id, refresh, onChanged],
   );
 
   const titleFor = useCallback(
@@ -629,15 +656,9 @@ export function InitiativeDetailView({
                 >
                   {initiative.kind}
                 </button>
-                <InlineSelect<Status>
+                <StatusPickerPill
                   value={initiative.status}
-                  options={STATUS_OPTIONS}
                   onSave={next => patch({ status: next })}
-                  className="text-xs uppercase"
-                  renderDisplay={v => (
-                    <span className="text-mc-text-secondary uppercase">{v}</span>
-                  )}
-                  label="Edit status"
                 />
               </div>
               <InlineText
@@ -1458,6 +1479,111 @@ function PromoteToTaskModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Status pill + popover picker. Replaces the native-select InlineSelect
+ * specifically for status so the trigger AND every option in the
+ * popover render as the colored pill the operator will see in the
+ * tree once the change saves. Keeps focus + outside-click behavior
+ * sane so the popover dismisses cleanly.
+ */
+function StatusPickerPill({
+  value,
+  onSave,
+}: {
+  value: Status;
+  onSave: (next: Status) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const pick = async (next: Status) => {
+    if (next === value) {
+      setOpen(false);
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSave(next);
+      setOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const current = STATUS_PILL[value];
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        disabled={saving}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Edit status"
+        title="Change status"
+        className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide hover:ring-1 hover:ring-mc-accent/40 disabled:opacity-50 ${current.className}`}
+      >
+        {current.label}
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Status options"
+          className="absolute left-0 mt-1 z-30 min-w-[10rem] p-1 rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg flex flex-col gap-1"
+        >
+          {STATUS_OPTIONS.map(opt => {
+            const pill = STATUS_PILL[opt.value];
+            const selected = opt.value === value;
+            return (
+              <li key={opt.value}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => pick(opt.value)}
+                  disabled={saving}
+                  className={`w-full text-left px-2 py-0.5 rounded text-xs uppercase tracking-wide ${pill.className} ${
+                    selected ? 'ring-1 ring-mc-accent/60' : 'hover:ring-1 hover:ring-mc-accent/40'
+                  } disabled:opacity-50`}
+                >
+                  {pill.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {err && (
+        <span className="ml-2 text-[11px] text-red-400">{err}</span>
+      )}
     </div>
   );
 }
