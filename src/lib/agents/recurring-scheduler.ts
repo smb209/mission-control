@@ -19,6 +19,9 @@ import {
   renderScopeKey,
   type RecurringJob,
 } from '@/lib/db/recurring-jobs';
+import { createBriefWithRun, type BriefTemplate } from '@/lib/db/briefs';
+import { queryOne } from '@/lib/db';
+import { runBrief } from '@/lib/research/run-brief';
 import { dispatchScope } from './dispatch-scope';
 import { getRunnerAgent } from './runner';
 import type { BriefingRole } from './briefing';
@@ -41,7 +44,127 @@ function isBriefingRole(role: string): role is BriefingRole {
   );
 }
 
+/**
+ * Phase 2 research schedules. When a recurring_jobs row has `topic_id`
+ * set, the dispatch flow uses the topic + brief_template to spin up a
+ * fresh brief row and call `runBrief` (the same orchestrator the
+ * /api/briefs POST path uses). The scope-keyed `dispatchScope` path
+ * is bypassed entirely — research dispatches are brief-shaped, not
+ * task-shaped.
+ *
+ * On rejected start (topic missing/archived, runner missing,
+ * researcher missing) we mark the run failed so the auto-pause logic
+ * applies after `PAUSE_THRESHOLD` consecutive failures. On a started
+ * dispatch we mark the run successful — the brief itself surfaces
+ * its own outcome via `brief_completed` / `brief_failed` SSE events.
+ */
+async function dispatchResearchScheduleOnce(job: RecurringJob): Promise<void> {
+  if (!job.topic_id || !job.brief_template) {
+    // Defensive: caller already gated on these.
+    return;
+  }
+
+  const topic = queryOne<{ id: string; name: string; description: string; archived_at: string | null }>(
+    `SELECT id, name, description, archived_at FROM topics WHERE id = ?`,
+    [job.topic_id],
+  );
+  if (!topic) {
+    failResearchSchedule(job, 'topic missing');
+    return;
+  }
+  if (topic.archived_at) {
+    failResearchSchedule(job, 'topic archived');
+    return;
+  }
+
+  // Preflight: matches the API's createBriefWithRun + runBrief flow.
+  // Quick checks here let us mark a clean fail-and-pause without
+  // creating an orphan brief row.
+  const researcher = queryOne<{ id: string }>(
+    `SELECT id FROM agents WHERE workspace_id = ? AND role = 'researcher' AND COALESCE(is_active, 1) = 1 LIMIT 1`,
+    [job.workspace_id],
+  );
+  if (!researcher) {
+    failResearchSchedule(job, 'no researcher in workspace roster');
+    return;
+  }
+  const runner = getRunnerAgent();
+  if (!runner) {
+    failResearchSchedule(job, 'no runner agent registered');
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const title = `${topic.name} · ${today}`;
+  // The brief's prompt is the topic description by default. If the
+  // operator left description empty, a minimal directive keeps the
+  // researcher productive.
+  const prompt = topic.description.trim()
+    ? topic.description
+    : `Survey "${topic.name}" and produce a research brief.`;
+
+  let result: { brief_id: string; agent_run_id: string; state: 'started' | 'rejected'; reason?: string };
+  try {
+    const created = createBriefWithRun({
+      workspace_id: job.workspace_id,
+      template: job.brief_template as BriefTemplate,
+      title,
+      prompt,
+      topic_id: job.topic_id,
+      requested_by: 'schedule',
+      source_kind: 'schedule',
+      source_ref: job.id,
+    });
+    result = await runBrief(created.brief.id);
+  } catch (err) {
+    failResearchSchedule(job, `brief create/run threw: ${(err as Error).message}`);
+    return;
+  }
+
+  if (result.state === 'rejected') {
+    failResearchSchedule(job, `runBrief rejected: ${result.reason ?? 'unknown'}`);
+    return;
+  }
+
+  markRunSuccess(job.id, `research-brief-${result.brief_id}`);
+}
+
+function failResearchSchedule(job: RecurringJob, reason: string): void {
+  console.warn(`[recurring/research] job ${job.id}: ${reason}`);
+  const next = markRunFailure(job.id, { pauseThreshold: PAUSE_THRESHOLD });
+  if (next?.status === 'paused') {
+    try {
+      createNote({
+        workspace_id: job.workspace_id,
+        agent_id: null,
+        task_id: null,
+        initiative_id: null,
+        scope_key: 'mc:recurring-scheduler',
+        role: 'system',
+        run_group_id: `recurring-pause-${job.id}`,
+        kind: 'blocker',
+        audience: 'pm',
+        body:
+          `Recurring research schedule "${job.name}" auto-paused after ` +
+          `${PAUSE_THRESHOLD} consecutive failures. Last reason: ${reason}.`,
+        importance: 2,
+      });
+    } catch (noteErr) {
+      console.warn(
+        `[recurring/research] failed to write pause note for job ${job.id}:`,
+        (noteErr as Error).message,
+      );
+    }
+  }
+}
+
 export async function dispatchRecurringJobOnce(job: RecurringJob): Promise<void> {
+  // Phase 2: research-bound rows take a different dispatch path.
+  if (job.topic_id) {
+    await dispatchResearchScheduleOnce(job);
+    return;
+  }
+
   const runner = getRunnerAgent();
   if (!runner) {
     console.warn(`[recurring] job ${job.id}: no runner agent registered; skipping`);
