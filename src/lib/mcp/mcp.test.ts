@@ -122,8 +122,13 @@ test('PM-scoped server (core+read+pm) excludes worker + crud tools', async () =>
   // Worker absent
   for (const t of ['register_deliverable', 'submit_evidence', 'update_task_status', 'fail_task',
                    'spawn_subtask', 'update_subtask',
-                   'register_subagent_dispatch', 'mark_note_consumed', 'archive_note']) {
+                   'register_subagent_dispatch', 'update_note']) {
     assert.ok(!names.has(t), `pm mount must not expose worker tool ${t}`);
+  }
+  // The pre-PR5 note lifecycle pair collapsed into update_note —
+  // neither old name should appear anywhere.
+  for (const removed of ['mark_note_consumed', 'archive_note']) {
+    assert.ok(!names.has(removed), `${removed} should be removed (consolidated into update_note)`);
   }
   // CRUD absent
   for (const t of ['create_initiative', 'update_initiative', 'move_initiative', 'convert_initiative']) {
@@ -150,11 +155,18 @@ test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () 
   }
 });
 
-test('default server (no groups arg) keeps full union of 45 tools', async () => {
+test('default server (no groups arg) keeps full union of 44 tools', async () => {
   const names = await listToolsForGroups(undefined);
-  // 45 tools post-PR4: accept/reject/cancel_subtask collapsed into the
-  // single update_subtask discriminator (47 - 3 + 1).
-  assert.equal(names.size, 45, `expected 45 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  // 44 tools post-PR4+PR5: accept/reject/cancel_subtask → update_subtask
+  // and mark_note_consumed/archive_note → update_note (47 - 3 + 1 - 2 + 1).
+  assert.equal(names.size, 44, `expected 44 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  // Make absences explicit so a regression has a clear failure.
+  for (const removed of ['accept_subtask', 'reject_subtask', 'cancel_subtask', 'mark_note_consumed', 'archive_note']) {
+    assert.ok(!names.has(removed), `${removed} should not be present`);
+  }
+  for (const present of ['update_subtask', 'update_note']) {
+    assert.ok(names.has(present), `${present} should be present`);
+  }
 });
 
 // ─── whoami ─────────────────────────────────────────────────────────

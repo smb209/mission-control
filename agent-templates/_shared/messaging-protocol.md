@@ -40,7 +40,7 @@ OpenClaw namespaces MCP tools as `<server-name>__<tool-name>`, so the exact name
 | Action | Tool |
 |---|---|
 | Query notes by task / scope / audience | `read_notes({ agent_id, task_id?, audience?, … })` |
-| Acknowledge a note from a prior stage | `mark_note_consumed({ agent_id, note_id, stage_slug })` |
+| Acknowledge a note from a prior stage / archive a stale note | `update_note({ agent_id, note_id, action: 'consume' \| 'archive', stage_slug?, reason? })` (`stage_slug` required for `consume`; `reason` optional for `archive`) |
 | Recall lessons from the workspace knowledge base | `request_knowledge({ agent_id, query, task_id?, workspace_id? })` |
 | Save a lesson (Learner role) | `save_knowledge({ agent_id, workspace_id, category, title, content, … })` |
 
