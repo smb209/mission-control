@@ -371,6 +371,76 @@ export function pauseSchedulesForTopic(topicId: string): number {
   return result.changes ?? 0;
 }
 
+export interface BriefOutcomeUpdate {
+  job_id: string;
+  status: JobStatus;
+  consecutive_failures: number;
+}
+
+/**
+ * Record the async outcome of a brief produced by a research
+ * schedule. Resolves the schedule via `agent_runs.source_kind` +
+ * `agent_runs.source_ref`, then:
+ *   - on 'completed' clears consecutive_failures (a successful run
+ *     after a failure streak resets the counter so a transient
+ *     blip doesn't pause an otherwise-healthy schedule).
+ *   - on 'failed' bumps consecutive_failures, pauses the row when
+ *     it reaches `pauseThreshold` (default 3, matching the synchronous
+ *     dispatch-time path).
+ *
+ * Does NOT touch `next_run_at`: the dispatch path already advanced
+ * it by `cadence_seconds` to prevent concurrent runs while the brief
+ * was in flight. Returns null if the agent_run isn't schedule-bound
+ * or the schedule no longer exists (deleted while in flight).
+ */
+export function recordBriefOutcome(
+  agentRunId: string,
+  outcome: 'completed' | 'failed',
+  opts: { pauseThreshold?: number } = {},
+): BriefOutcomeUpdate | null {
+  const sched = queryOne<{ id: string; status: JobStatus; consecutive_failures: number }>(
+    `SELECT rj.id, rj.status, rj.consecutive_failures
+       FROM recurring_jobs rj
+       JOIN agent_runs ar ON ar.source_ref = rj.id
+      WHERE ar.id = ? AND ar.source_kind = 'schedule'
+      LIMIT 1`,
+    [agentRunId],
+  );
+  if (!sched) return null;
+
+  if (outcome === 'completed') {
+    if (sched.consecutive_failures > 0) {
+      run(
+        `UPDATE recurring_jobs SET consecutive_failures = 0 WHERE id = ?`,
+        [sched.id],
+      );
+    }
+    return {
+      job_id: sched.id,
+      status: sched.status,
+      consecutive_failures: 0,
+    };
+  }
+
+  // outcome === 'failed'
+  const newFailures = sched.consecutive_failures + 1;
+  const threshold = opts.pauseThreshold ?? 3;
+  const nextStatus: JobStatus =
+    newFailures >= threshold && sched.status === 'active' ? 'paused' : sched.status;
+  run(
+    `UPDATE recurring_jobs
+        SET consecutive_failures = ?,
+            status = ?
+      WHERE id = ?`,
+    [newFailures, nextStatus, sched.id],
+  );
+  return {
+    job_id: sched.id,
+    status: nextStatus,
+    consecutive_failures: newFailures,
+  };
+}
+
 /**
  * Render a scope_key_template by substituting `{wsid}`, `{job_id}`,
  * and `{run_n}` placeholders. Defaults to the job's actual values.
