@@ -71,9 +71,14 @@ export async function POST(request: Request) {
     }
   }
 
-  let sessions;
+  // The gateway's `sessions.list` RPC returns either a bare array
+  // OR an envelope `{ sessions: [...] }` (the current shape on this
+  // build). Each entry's session-key field is `key` (not `id`). The
+  // OpenClawSessionInfo TS type lies about both, so we treat the
+  // payload as unknown and unwrap defensively.
+  let raw: unknown;
   try {
-    sessions = await client.listSessions();
+    raw = await client.listSessions();
   } catch (err) {
     return NextResponse.json(
       { error: `sessions.list failed: ${(err as Error).message}` },
@@ -81,7 +86,18 @@ export async function POST(request: Request) {
     );
   }
 
-  const matched = sessions.filter((s) => re.test(s.id));
+  type GwSessionLike = { key?: string; id?: string };
+  const sessionList: GwSessionLike[] = Array.isArray(raw)
+    ? (raw as GwSessionLike[])
+    : Array.isArray((raw as { sessions?: unknown })?.sessions)
+      ? ((raw as { sessions: GwSessionLike[] }).sessions)
+      : [];
+
+  const sessionKeyOf = (s: GwSessionLike): string => s.key ?? s.id ?? '';
+  const matched = sessionList
+    .map(sessionKeyOf)
+    .filter((k) => k && re.test(k))
+    .map((k) => ({ id: k }));
   const aborted: string[] = [];
   const failed: { id: string; error: string }[] = [];
 
