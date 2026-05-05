@@ -291,8 +291,73 @@ export function markRunFailure(id: string, opts: { pauseThreshold?: number; back
 }
 
 export function setJobStatus(id: string, status: JobStatus): RecurringJob | null {
-  run(`UPDATE recurring_jobs SET status = ? WHERE id = ?`, [status, id]);
+  // Resuming from paused: clear consecutive_failures and bring next_run_at
+  // forward so the resumed job picks up on the next sweep.
+  const current = getRecurringJob(id);
+  if (!current) return null;
+  if (current.status === 'paused' && status === 'active') {
+    run(
+      `UPDATE recurring_jobs
+          SET status = 'active', consecutive_failures = 0, next_run_at = datetime('now')
+        WHERE id = ?`,
+      [id],
+    );
+  } else {
+    run(`UPDATE recurring_jobs SET status = ? WHERE id = ?`, [status, id]);
+  }
   return getRecurringJob(id);
+}
+
+/**
+ * Adjust cadence on an existing job. Re-anchors `next_run_at` so the
+ * new cadence takes effect from `last_run_at` (or `now()` if never
+ * run). Throws on invalid input.
+ */
+export function setJobCadence(id: string, cadenceSeconds: number): RecurringJob | null {
+  if (cadenceSeconds <= 0) {
+    throw new RecurringJobValidationError('cadence_seconds must be > 0');
+  }
+  const current = getRecurringJob(id);
+  if (!current) return null;
+  const anchorMs = current.last_run_at ? Date.parse(current.last_run_at) : Date.now();
+  const next = new Date(anchorMs + cadenceSeconds * 1000).toISOString();
+  run(
+    `UPDATE recurring_jobs SET cadence_seconds = ?, next_run_at = ? WHERE id = ?`,
+    [cadenceSeconds, next, id],
+  );
+  return getRecurringJob(id);
+}
+
+/**
+ * Force the job to run on the next sweep — used by the "Run now"
+ * affordance. Leaves cadence_seconds + last_run_at intact so the
+ * post-success cadence advancement works as usual.
+ */
+export function setJobRunNow(id: string): RecurringJob | null {
+  run(`UPDATE recurring_jobs SET next_run_at = datetime('now') WHERE id = ?`, [id]);
+  return getRecurringJob(id);
+}
+
+export function deleteRecurringJob(id: string): boolean {
+  const row = getRecurringJob(id);
+  if (!row) return false;
+  run(`DELETE FROM recurring_jobs WHERE id = ?`, [id]);
+  return true;
+}
+
+/**
+ * Pause every active research schedule belonging to a topic. Called
+ * when a topic is archived so the scheduler stops dispatching against
+ * the now-hidden topic. Returns the number of rows paused.
+ */
+export function pauseSchedulesForTopic(topicId: string): number {
+  const result = run(
+    `UPDATE recurring_jobs
+        SET status = 'paused'
+      WHERE topic_id = ? AND status = 'active'`,
+    [topicId],
+  );
+  return result.changes ?? 0;
 }
 
 /**
