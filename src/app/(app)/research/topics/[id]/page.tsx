@@ -100,8 +100,8 @@ export default function TopicDetailPage() {
 
   return (
     <div className="px-6 py-5 max-w-4xl">
-      <header className="flex items-start justify-between mb-4">
-        <div className="flex-1 min-w-0">
+      <header className="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h1 className="text-xl font-semibold text-mc-text">{topic.name}</h1>
             {topic.archived_at && (
@@ -119,7 +119,7 @@ export default function TopicDetailPage() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <button
             type="button"
             onClick={load}
