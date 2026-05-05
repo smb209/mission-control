@@ -20,6 +20,7 @@ import {
   listResearchSchedulesForTopic,
   listUpcomingResearch,
   markRunFailure,
+  markRunInFlight,
   markRunSuccess,
   recordBriefOutcome,
   RecurringJobValidationError,
@@ -133,6 +134,27 @@ test('markRunSuccess: bumps run_count, advances next_run_at, clears failures', (
   const nowMs = Date.now();
   assert.ok(nextMs >= nowMs + 50_000 && nextMs <= nowMs + 70_000,
     `next_run_at not advanced by cadence: delta=${nextMs - nowMs}`);
+});
+
+test('markRunInFlight: advances next_run_at without bumping run_count or last_run_at', () => {
+  const ws = freshWorkspace();
+  const job = createRecurringJob(baseInput(ws, { cadence_seconds: 60 }));
+  const beforeMs = new Date(job.next_run_at).getTime();
+  // The lock should push next_run_at to ~now + cadence so an
+  // overlapping sweep tick (or a post-restart sweep) won't re-pick it.
+  const after = markRunInFlight(job.id);
+  assert.ok(after);
+  const nextMs = new Date(after!.next_run_at).getTime();
+  const nowMs = Date.now();
+  assert.ok(nextMs >= nowMs + 50_000 && nextMs <= nowMs + 70_000,
+    `next_run_at not advanced by cadence: delta=${nextMs - nowMs}`);
+  assert.ok(nextMs > beforeMs, 'next_run_at must move forward');
+  // run_count + last_run_at stay untouched — those move on terminal outcome.
+  assert.equal(after!.run_count, 0);
+  assert.equal(after!.last_run_at, null);
+  // Job is no longer due, so listDueJobs would skip it on the next tick.
+  const dueIds = new Set(listDueJobs().map((j) => j.id));
+  assert.equal(dueIds.has(job.id), false);
 });
 
 test('markRunFailure: pauses after threshold', () => {
