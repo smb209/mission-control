@@ -258,17 +258,45 @@ function extractSourcesSection(markdown: string): string | null {
 }
 
 /**
- * Extract a single concatenated text body from the gateway's
- * collected ChatEvents. The done event typically carries the full
- * reply but we fall back to the concatenated stream if missing.
+ * Extract the brief body from the gateway's ChatEvents.
+ *
+ * The naive read — concatenate everything or use the `done` event's
+ * message — fails when the researcher makes tool calls. A typical
+ * problem run interleaves narration messages with `register_deliverable`
+ * / file-write tool calls; the `done` event then carries only the
+ * final narration ("A copy has been saved to research-brief-*.md")
+ * and we lose the actual brief body that landed in an earlier
+ * assistant message.
+ *
+ * Heuristic, in priority order:
+ *
+ *   1. If any assistant message contains a markdown heading
+ *      (`# `, `## `, `### `, with optional leading `***`/`---`
+ *      separator), pick the LONGEST such message. Briefs always
+ *      open with a heading; narrations almost never do.
+ *   2. Otherwise fall back to the `done` event's text.
+ *   3. Otherwise concatenate the stream.
  */
 export function extractReplyText(reply: ChatEvent[], doneEvent?: ChatEvent): string {
-  const fromDone = readMessageText(doneEvent?.message);
-  if (fromDone) return fromDone;
-  const parts = reply
+  const candidates = reply
     .map(e => readMessageText(e.message))
-    .filter((s): s is string => !!s);
-  return parts.join('').trim();
+    .filter((s): s is string => !!s)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  // Headings the brief writer reliably emits. Allow optional leading
+  // `***`/`---`/whitespace so a leading separator before the heading
+  // isn't a miss.
+  const HEADING_RE = /(^|\n)\s*(?:[*-]{3,}\s*\n+)?\s*#{1,3}\s+\S/;
+  const headingMatches = candidates.filter(s => HEADING_RE.test(s));
+  if (headingMatches.length > 0) {
+    headingMatches.sort((a, b) => b.length - a.length);
+    return headingMatches[0];
+  }
+
+  const fromDone = readMessageText(doneEvent?.message)?.trim();
+  if (fromDone) return fromDone;
+  return candidates.join('').trim();
 }
 
 function readMessageText(message: unknown): string | null {

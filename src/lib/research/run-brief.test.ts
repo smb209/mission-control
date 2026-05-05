@@ -233,6 +233,52 @@ test('extractReplyText: handles object-shape messages with content arrays', () =
   assert.equal(text, 'hello world');
 });
 
+test('extractReplyText: prefers heading-bearing message over later narration', () => {
+  // Mimics the failure mode observed during phase-2 validation: the
+  // researcher emits the brief as one long heading-bearing message,
+  // then narrates about saving the file in a final short message,
+  // which the gateway captures as the `done` event.
+  const briefBody = '# Research Brief: Topic X\n\n## Executive Summary\n\nFindings...';
+  const text = extractReplyText(
+    [
+      { message: 'Now let me compile the findings.' },
+      { message: briefBody },
+      { message: 'A copy has been saved to research-brief-abc.md.' },
+    ],
+    { state: 'final', message: 'A copy has been saved to research-brief-abc.md.' },
+  );
+  assert.equal(text, briefBody);
+});
+
+test('extractReplyText: matches heading after a leading separator', () => {
+  // Real briefs sometimes lead with `***\n\n# Heading` because the
+  // researcher uses a horizontal rule before the brief body.
+  const briefBody = '***\n\n# Brief\n\n## Body\n\nText';
+  const text = extractReplyText(
+    [{ message: briefBody }, { message: 'short narration' }],
+    { state: 'final', message: 'short narration' },
+  );
+  assert.equal(text, briefBody);
+});
+
+test('extractReplyText: ignores empty-string messages without breaking the heuristic', () => {
+  const text = extractReplyText(
+    [{ message: '' }, { message: '   ' }, { message: '## Heading\n\nbody' }],
+    { state: 'final' },
+  );
+  assert.equal(text, '## Heading\n\nbody');
+});
+
+test('extractReplyText: picks the longest heading message when multiple have headings', () => {
+  const short = '# A\n\nshort';
+  const long = '# B\n\nA much longer body with more content for readers.';
+  const text = extractReplyText(
+    [{ message: short }, { message: long }],
+    { state: 'final' },
+  );
+  assert.equal(text, long);
+});
+
 test('buildBriefPrompt: includes topic context when supplied', () => {
   const prompt = buildBriefPrompt({
     template: 'general_brief',
