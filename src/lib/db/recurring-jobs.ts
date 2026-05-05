@@ -296,11 +296,15 @@ export function setJobStatus(id: string, status: JobStatus): RecurringJob | null
   const current = getRecurringJob(id);
   if (!current) return null;
   if (current.status === 'paused' && status === 'active') {
+    // Use ISO 8601 with `Z` so JS Date.parse() reads it as UTC. The
+    // bare `datetime('now')` SQLite literal omits the timezone marker
+    // and gets parsed as local time, drifting next_run_at by the
+    // browser's TZ offset on the rail / topic page.
     run(
       `UPDATE recurring_jobs
-          SET status = 'active', consecutive_failures = 0, next_run_at = datetime('now')
+          SET status = 'active', consecutive_failures = 0, next_run_at = ?
         WHERE id = ?`,
-      [id],
+      [new Date().toISOString(), id],
     );
   } else {
     run(`UPDATE recurring_jobs SET status = ? WHERE id = ?`, [status, id]);
@@ -334,7 +338,9 @@ export function setJobCadence(id: string, cadenceSeconds: number): RecurringJob 
  * post-success cadence advancement works as usual.
  */
 export function setJobRunNow(id: string): RecurringJob | null {
-  run(`UPDATE recurring_jobs SET next_run_at = datetime('now') WHERE id = ?`, [id]);
+  // ISO with `Z` so client-side Date.parse() reads it as UTC; bare
+  // SQLite `datetime('now')` is naive and ends up local-time-shifted.
+  run(`UPDATE recurring_jobs SET next_run_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
   return getRecurringJob(id);
 }
 

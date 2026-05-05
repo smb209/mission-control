@@ -11,11 +11,12 @@
  * the user-perceived path.
  */
 
-import { useState } from 'react';
-import { Calendar as CalendarIcon, Pause, Play, Trash2, Zap } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Calendar as CalendarIcon, Loader2, Pause, Play, Trash2, Zap } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { formatCadence } from './ScheduleDrawer';
+
 
 export interface ScheduleSummary {
   id: string;
@@ -39,6 +40,27 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A schedule whose next_run_at has already elapsed is queued for the
+  // next sweep tick (~60s loop). We track the current time to drive
+  // the "queued" indicator + the run-now cooldown without polling.
+  // useEffect re-renders every second so the timestamp transitions
+  // from "next_run_at in 5s" to "queued" to "fired" naturally as the
+  // sweep advances next_run_at past now() again.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // A schedule whose next_run_at is already in the past is "queued":
+  // the next sweep tick (~60s) will fire it. This is the steady state
+  // right after Run-now (which sets next_run_at = now()), so we use
+  // it both for the visual indicator and the cooldown that prevents
+  // queuing the same job multiple times.
+  const nextMs = Date.parse(schedule.next_run_at);
+  const queuedForNextSweep =
+    schedule.status === 'active' && nextMs <= now;
 
   const patch = async (body: unknown) => {
     setBusy(true); setError(null);
@@ -95,19 +117,33 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
 
   const paused = schedule.status === 'paused';
 
+  // Pick the lead icon to make the row's state legible at a glance:
+  // queued = pulsing spinner, paused = yellow calendar, idle = accent
+  // calendar.
+  const LeadIcon = queuedForNextSweep ? Loader2 : CalendarIcon;
+  const leadIconClass = queuedForNextSweep
+    ? 'text-mc-accent animate-spin'
+    : paused
+      ? 'text-yellow-400'
+      : 'text-mc-accent';
+
   return (
     <div className="border border-mc-border rounded-sm bg-mc-bg-secondary px-3 py-2">
       <div className="flex items-center gap-3">
-        <CalendarIcon className={`w-4 h-4 shrink-0 ${paused ? 'text-yellow-400' : 'text-mc-accent'}`} />
+        <LeadIcon className={`w-4 h-4 shrink-0 ${leadIconClass}`} />
         <div className="flex-1 min-w-0">
           <div className="text-sm text-mc-text truncate">
             {topicName && <span className="text-mc-text-secondary">{topicName} · </span>}
             {formatCadence(schedule.cadence_seconds)} · {schedule.brief_template ?? 'general_brief'}
           </div>
           <div className="text-[11px] text-mc-text-secondary mt-0.5 flex flex-wrap gap-2">
-            <span>
-              Next: {formatDistanceToNow(new Date(schedule.next_run_at), { addSuffix: true })}
-            </span>
+            {queuedForNextSweep ? (
+              <span className="text-mc-accent">Queued — running on next sweep</span>
+            ) : (
+              <span>
+                Next: {formatDistanceToNow(new Date(schedule.next_run_at), { addSuffix: true })}
+              </span>
+            )}
             {schedule.last_run_at && (
               <span>· Last: {formatDistanceToNow(new Date(schedule.last_run_at), { addSuffix: true })}</span>
             )}
@@ -124,9 +160,9 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
             <button
               type="button"
               onClick={runNow}
-              disabled={busy}
-              className="p-1.5 rounded-sm text-mc-text-secondary hover:text-mc-accent hover:bg-mc-bg-tertiary disabled:opacity-40"
-              title="Run now"
+              disabled={busy || queuedForNextSweep}
+              className="p-1.5 rounded-sm text-mc-text-secondary hover:text-mc-accent hover:bg-mc-bg-tertiary disabled:opacity-40 disabled:cursor-not-allowed"
+              title={queuedForNextSweep ? 'Already queued for the next sweep' : 'Run now'}
               aria-label="Run now"
             >
               <Zap className="w-3.5 h-3.5" />
