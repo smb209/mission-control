@@ -1,35 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queryOne, run, transaction } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { sendChatToAgent } from '@/lib/openclaw/send-chat';
+import { buildAgentSessionKey, sendChatToAgent } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
 import { logDebugEvent } from '@/lib/debug-log';
 import type { Agent } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-// POST /api/agents/[id]/reset
+// POST /api/agents/[id]/reset[?session_suffix=<suffix>]
 //
-// Reset a single agent's session — the per-agent equivalent of
-// `DELETE /api/openclaw/sessions` (the bulk "Reset all sessions" action in
-// the sidebar). Used by the Agent info modal so the operator can re-init
-// one agent (e.g., after editing its SOUL.md / AGENTS.md / USER.md) without
-// blowing away every session in the workspace.
+// Reset an agent's session(s). Two modes:
 //
-// Two phases, mirroring the bulk reset:
-//   1. Wipe this agent's rows in `openclaw_sessions` so MC's session map
-//      stops pointing at the soon-to-be-restarted session.
-//   2. Send `/reset` via chat to the agent's main session, forcing the
-//      gateway to re-init. The agent's next message reloads its persona
-//      files. `/reset` is one of OpenClaw's built-in init commands.
+//   - Default (no `session_suffix`): wipe ALL openclaw_sessions rows for
+//     this agent, then `/reset` the main session. Use when the operator
+//     edited the agent's persona files or wants a clean slate.
+//
+//   - Per-session (with `session_suffix`): wipe ONLY the row matching
+//     that suffix's full sessionKey, then `/reset` that one session.
+//     The /pm "Reset chat session" button passes
+//     `session_suffix=dispatch-main` to clear stale conversation history
+//     on the PM dispatch session without re-initialising every other
+//     session this agent has (each /reset is a model-init, so bulk
+//     reset is real LLM spend).
 //
 // Returns: { success, deleted, sent, sessionKey, error?, gateway_error? }
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id } = await params;
+    const sessionSuffix = new URL(request.url).searchParams.get('session_suffix')?.trim() || null;
     const agent = queryOne<Agent>('SELECT * FROM agents WHERE id = ?', [id]);
     if (!agent) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
@@ -43,24 +45,47 @@ export async function POST(
       );
     }
 
-    // Phase 1: clear MC's session map for this agent + flip status to
-    // standby so the sidebar doesn't show stale "active" pills until the
-    // gateway re-init lands.
+    const targetSessionKey = sessionSuffix ? buildAgentSessionKey(agent, sessionSuffix) : null;
+
+    // Phase 1: clear MC's session map. Per-session resets touch only the
+    // matching row; the broad reset (no suffix) wipes everything for
+    // this agent and parks status back at standby so the sidebar
+    // doesn't show stale "active" pills until the gateway re-init lands.
     let deleted = 0;
     transaction(() => {
-      const result = run('DELETE FROM openclaw_sessions WHERE agent_id = ?', [agent.id]);
-      deleted = result.changes ?? 0;
-      run('UPDATE agents SET status = ? WHERE id = ?', ['standby', agent.id]);
+      if (targetSessionKey) {
+        // openclaw_sessions stores the full gateway sessionKey in
+        // `openclaw_session_id` (see persona-init.ts markSessionInitialized).
+        // We may or may not have a row for this specific session — many
+        // dispatch sessions (dispatchScope-based) don't go through
+        // markSessionInitialized at all. The /reset call below is the
+        // authoritative cleanup; this just keeps MC's bookkeeping in
+        // sync if we did happen to have a row.
+        const result = run(
+          'DELETE FROM openclaw_sessions WHERE agent_id = ? AND openclaw_session_id = ?',
+          [agent.id, targetSessionKey],
+        );
+        deleted = result.changes ?? 0;
+      } else {
+        const result = run('DELETE FROM openclaw_sessions WHERE agent_id = ?', [agent.id]);
+        deleted = result.changes ?? 0;
+        run('UPDATE agents SET status = ? WHERE id = ?', ['standby', agent.id]);
+      }
     });
 
     logDebugEvent({
       type: 'session.end',
       direction: 'internal',
       agentId: agent.id,
-      metadata: { reason: 'single_agent_reset', deleted },
+      sessionKey: targetSessionKey,
+      metadata: {
+        reason: targetSessionKey ? 'agent_session_reset' : 'single_agent_reset',
+        deleted,
+        session_suffix: sessionSuffix,
+      },
     });
 
-    // Phase 2: ask the gateway to re-init the agent's main session.
+    // Phase 2: ask the gateway to re-init the targeted session.
     const client = getOpenClawClient();
     try {
       if (!client.isConnected()) await client.connect();
@@ -79,7 +104,8 @@ export async function POST(
     const result = await sendChatToAgent({
       agent,
       message: '/reset',
-      idempotencyKey: `reset-${agent.id}-${Date.now()}`,
+      idempotencyKey: `reset-${agent.id}-${sessionSuffix ?? 'main'}-${Date.now()}`,
+      sessionSuffix: sessionSuffix ?? undefined,
     });
 
     broadcast({
