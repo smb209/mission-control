@@ -21,6 +21,7 @@ import {
   Loader2,
   Megaphone,
   RotateCcw,
+  Octagon,
   Plus,
   Search,
   Power,
@@ -93,6 +94,9 @@ export default function AgentsPage() {
   const [rollCallBusy, setRollCallBusy] = useState(false);
   const [rollCallResult, setRollCallResult] = useState<RollCallResultView | null>(null);
   const [resetSessionsBusy, setResetSessionsBusy] = useState(false);
+  const [hardStopBusy, setHardStopBusy] = useState(false);
+  const [showHardStopDialog, setShowHardStopDialog] = useState(false);
+  const [hardStopPattern, setHardStopPattern] = useState('');
   const [syncBusy, setSyncBusy] = useState(false);
   // Replaces native window.confirm() — see §1.7 finding in PREVIEW_TEST_FINDINGS.
   // The native dialog blocks automation tooling and breaks the test-flow walk.
@@ -339,6 +343,48 @@ export default function AgentsPage() {
     }
   };
 
+  const doHardStopMatching = async (pattern: string) => {
+    setHardStopBusy(true);
+    try {
+      const res = await fetch('/api/openclaw/sessions/abort-matching', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pattern }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAlertDialog('Hard stop failed', data.error || 'Failed to abort sessions');
+        return;
+      }
+      const lines: string[] = [
+        `Pattern: ${data.pattern}`,
+        `Matched ${data.matched} session(s) on the gateway.`,
+        `Aborted: ${data.aborted.length}`,
+      ];
+      if (data.failed?.length) {
+        lines.push(`Abort failed: ${data.failed.length}`);
+      }
+      const lm = data.local_marked ?? {};
+      lines.push(
+        `Local rows scrubbed — openclaw_sessions: ${lm.openclaw_sessions ?? 0}, ` +
+          `research_cycles: ${lm.research_cycles ?? 0}, ideation_cycles: ${lm.ideation_cycles ?? 0}.`,
+      );
+      if (data.aborted.length) {
+        lines.push('', 'Aborted keys:', ...data.aborted.slice(0, 20).map((k: string) => `  ${k}`));
+        if (data.aborted.length > 20) lines.push(`  …and ${data.aborted.length - 20} more`);
+      }
+      showAlertDialog('Hard stop result', lines.join('\n'));
+      setShowHardStopDialog(false);
+      setHardStopPattern('');
+      // Refresh session display so the matrix reflects ended rows.
+      void loadOpenClawSessions();
+    } catch (err) {
+      showAlertDialog('Hard stop failed', `Request failed: ${(err as Error).message}`);
+    } finally {
+      setHardStopBusy(false);
+    }
+  };
+
   // ─── per-agent actions ──────────────────────────────────────────────
 
   // Generic optimistic-update PATCH used by the inline avatar / role /
@@ -526,6 +572,14 @@ export default function AgentsPage() {
               {resetSessionsBusy ? 'Resetting…' : 'Reset all sessions'}
             </HeaderButton>
             <HeaderButton
+              icon={hardStopBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Octagon className="w-4 h-4" />}
+              onClick={() => setShowHardStopDialog(true)}
+              disabled={hardStopBusy}
+              tone="amber"
+            >
+              {hardStopBusy ? 'Stopping…' : 'Hard stop matching…'}
+            </HeaderButton>
+            <HeaderButton
               icon={<Search className="w-4 h-4" />}
               onClick={() => setShowDiscoverModal(true)}
               tone="blue"
@@ -661,6 +715,104 @@ export default function AgentsPage() {
         }}
         onCancel={() => setPendingConfirm(null)}
       />
+      {showHardStopDialog && (
+        <HardStopDialog
+          pattern={hardStopPattern}
+          onChange={setHardStopPattern}
+          busy={hardStopBusy}
+          onCancel={() => {
+            if (hardStopBusy) return;
+            setShowHardStopDialog(false);
+            setHardStopPattern('');
+          }}
+          onConfirm={() => {
+            const p = hardStopPattern.trim();
+            if (!p) return;
+            void doHardStopMatching(p);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface HardStopDialogProps {
+  pattern: string;
+  onChange: (next: string) => void;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+/**
+ * Modal for the "Hard stop matching" action. Lives inline so it can
+ * read/write the page's pattern state without a context bridge. The
+ * destructive flag styles the confirm button red — aborting gateway
+ * sessions is irreversible (the agent loop is killed mid-tool-call,
+ * losing whatever the agent was about to emit).
+ */
+function HardStopDialog({ pattern, onChange, busy, onCancel, onConfirm }: HardStopDialogProps) {
+  const trimmed = pattern.trim();
+  const tooBroad = trimmed === '*' || trimmed === '**';
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="w-full max-w-lg rounded-lg bg-mc-bg border border-mc-border shadow-xl p-5">
+        <h2 className="text-base font-semibold text-mc-text">Hard stop matching sessions</h2>
+        <p className="mt-2 text-sm text-mc-text-secondary">
+          Aborts every gateway session whose key matches the pattern, then marks the
+          corresponding rows in <code className="text-xs px-1 rounded bg-mc-bg-secondary">openclaw_sessions</code>,{' '}
+          <code className="text-xs px-1 rounded bg-mc-bg-secondary">research_cycles</code>, and{' '}
+          <code className="text-xs px-1 rounded bg-mc-bg-secondary">ideation_cycles</code> ended/interrupted
+          so a server restart won't resurrect them.
+        </p>
+        <p className="mt-2 text-xs text-mc-text-secondary">
+          Wildcard: <code className="px-1 rounded bg-mc-bg-secondary">*</code>. Examples:{' '}
+          <code className="px-1 rounded bg-mc-bg-secondary">*ws-rj-*</code>,{' '}
+          <code className="px-1 rounded bg-mc-bg-secondary">*recurring-*</code>,{' '}
+          <code className="px-1 rounded bg-mc-bg-secondary">*brief-*</code>.
+        </p>
+        <input
+          autoFocus
+          type="text"
+          value={pattern}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && trimmed && !tooBroad && !busy) onConfirm();
+            if (e.key === 'Escape' && !busy) onCancel();
+          }}
+          placeholder="*ws-rj-*"
+          className="mt-4 w-full rounded border border-mc-border bg-mc-bg-secondary px-3 py-2 text-sm text-mc-text font-mono"
+          disabled={busy}
+        />
+        {tooBroad && (
+          <p className="mt-2 text-xs text-amber-400">
+            Pattern too broad — use <span className="font-semibold">Reset all sessions</span> instead.
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm rounded border border-mc-border text-mc-text-secondary hover:bg-mc-bg-secondary disabled:opacity-50"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+            onClick={onConfirm}
+            disabled={busy || !trimmed || tooBroad}
+          >
+            {busy ? 'Stopping…' : 'Hard stop'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
