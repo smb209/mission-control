@@ -60,9 +60,7 @@ If your *role* is `coordinator` (set in the dispatch briefing — most subagents
 | Action | Tool |
 |---|---|
 | Delegate a slice to a peer (creates a child task in the convoy) | `spawn_subtask({ agent_id, task_id, peer_gateway_id, slice, message, expected_deliverables, acceptance_criteria, expected_duration_minutes, … })` |
-| Accept a delivered child slice | `accept_subtask({ agent_id, subtask_id })` |
-| Reject a delivered child slice (loops back to peer) | `reject_subtask({ agent_id, subtask_id, reason, new_acceptance_criteria? })` |
-| Cancel a stuck or out-of-scope slice | `cancel_subtask({ agent_id, subtask_id, reason })` |
+| Accept / reject / cancel a delivered child slice | `update_subtask({ agent_id, subtask_id, action: 'accept' \| 'reject' \| 'cancel', reason?, new_acceptance_criteria? })` — `accept` needs no extras; `reject` needs `reason` (≥10 chars) and optional `new_acceptance_criteria`; `cancel` needs `reason` (≥5 chars). |
 | List my active subtasks ("who am I waiting on?") | `list_my_subtasks({ agent_id, task_id, states? })` |
 
 Peer sub-delegation is rejected by authz — only the task's coordinator can `spawn_subtask`.

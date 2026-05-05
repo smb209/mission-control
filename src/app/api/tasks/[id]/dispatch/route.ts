@@ -652,14 +652,14 @@ Each row has a \`state_derived\` (dispatched / in_progress / drifting / overdue 
 
 **When a peer delivers** (state_derived = "delivered"):
 \`\`\`
-accept_subtask({ agent_id: "${agentId}", subtask_id: "<id>" })
+update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "accept" })
 # or if the work doesn't meet acceptance criteria:
-reject_subtask({ agent_id: "${agentId}", subtask_id: "<id>", reason: "<specific>", new_acceptance_criteria: [ ... ] })
+update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "reject", reason: "<specific>", new_acceptance_criteria: [ ... ] })
 \`\`\`
 
 **If a peer is stuck and the slice was wrong,** cancel and re-spawn with a better brief:
 \`\`\`
-cancel_subtask({ agent_id: "${agentId}", subtask_id: "<id>", reason: "<why>" })
+update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "cancel", reason: "<why>" })
 spawn_subtask({ ... })   # fresh slice
 \`\`\`
 
@@ -875,7 +875,7 @@ You were delegated this work by coordinator ${contract.coordinator_name ?? '(unk
 - **Slice:** ${contract.slice ?? '(unset)'}
 - **Expected deliverables** (register every one via \`register_deliverable\`):
 ${delivs.length > 0 ? delivs.map(d => `  - ${d.title} (${d.kind})`).join('\n') : '  - (none declared)'}
-- **Acceptance criteria** (all must hold for accept_subtask):
+- **Acceptance criteria** (all must hold for update_subtask({action: "accept"})):
 ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none declared)'}
 - **Expected duration:** ${contract.expected_duration_minutes} minutes (due at ${contract.due_at ?? 'unset'})
 - **Check-in cadence:** call \`log_activity\` at least every ${contract.checkin_interval_minutes ?? 15} minutes with a substantive note. Silence past 2\u00D7 cadence = drift alert to coordinator.

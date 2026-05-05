@@ -492,7 +492,7 @@ export async function PATCH(
     // Convoy progress + completion + drainQueue side effects. The shared
     // helper (also called from MCP-driven transitions in transitionTaskStatus)
     // is the single source of truth so a status change behaves the same
-    // whether it came from this route or update_task_status / accept_subtask.
+    // whether it came from this route or update_task_status / update_subtask({action: "accept"}).
     if (nextStatus && nextStatus !== existing.status) {
       runPostStatusChangeSideEffects({
         taskId: id,

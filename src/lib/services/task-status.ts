@@ -187,7 +187,7 @@ export function transitionTaskStatus(
 
   // Convoy + workflow side effects. These used to live only in the
   // /api/tasks/[id] PATCH route, so MCP-driven status changes
-  // (`update_task_status`, `accept_subtask`) bypassed them entirely. The
+  // (`update_task_status`, `update_subtask`) bypassed them entirely. The
   // Builder marking a subtask done would update the row but never bump
   // the parent convoy's completed_subtasks, so checkConvoyCompletion
   // never ran and the parent stayed in convoy_active until the stall
