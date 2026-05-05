@@ -615,6 +615,37 @@ export class OpenClawClient extends EventEmitter {
     return this.call<OpenClawSessionInfo>('sessions.create', { channel, peer });
   }
 
+  /**
+   * Steer an active session — inject an additional operator message
+   * into a run that's already in flight. The gateway queues the
+   * steering at the next model boundary; pending tool calls are
+   * preserved (it's not an abort). Used by /pm's "Steer" button so
+   * the operator can correct course without aborting + restarting.
+   *
+   * sessionKey is the FULL gateway session identifier (e.g.
+   * `agent:mc-pm-default-dev:dispatch-main`), not just the suffix.
+   *
+   * Param shape confirmed via the gateway's validation error
+   * response: `key` (not `sessionKey`); `message`. The `mode`
+   * variants documented in the broader protocol (interrupt /
+   * collect / followup / steer-backlog) are NOT accepted by
+   * `sessions.steer` — that's covered by `/queue` slash modes
+   * embedded in the message text instead, which is a more
+   * operator-driven affordance than something MC controls today.
+   */
+  async steerSession(sessionKey: string, message: string): Promise<unknown> {
+    return this.call('sessions.steer', { key: sessionKey, message });
+  }
+
+  /**
+   * Abort the active run on a session. Used by /pm's "Stop" button
+   * when the operator wants to kill the in-flight PM dispatch
+   * outright (typing-indicator stuck, agent went off-track, etc.).
+   */
+  async abortSession(sessionKey: string): Promise<unknown> {
+    return this.call('sessions.abort', { key: sessionKey });
+  }
+
   // Agent methods
   async listAgents(): Promise<unknown[]> {
     const result = await this.call<{ agents?: unknown[] }>('agents.list');
