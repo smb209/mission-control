@@ -1035,7 +1035,14 @@ export type SSEEventType =
   | 'brief_started'
   | 'brief_progress'
   | 'brief_completed'
-  | 'brief_failed';
+  | 'brief_failed'
+  // PM dispatch in-flight visibility (PR C of pm-chat-prompt). The
+  // /pm chat surface taps these to show what the PM agent is doing
+  // mid-run (streaming text deltas, tool calls). Payload carries a
+  // `correlation_id` (matches pm-dispatch's correlationId) plus a
+  // discriminator `kind: 'delta' | 'tool_call' | 'control'` and
+  // event-specific extras. See spec/pm-chat-prompt.md PR B.
+  | 'pm_dispatch_in_flight';
 
 export interface SSEEvent {
   type: SSEEventType;

@@ -48,6 +48,7 @@ import { getOpenClawClient } from '@/lib/openclaw/client';
 import {
   sendChatAndAwaitReply,
   __setSendChatClientForTests,
+  type ChatEvent,
   type SendChatClient,
 } from '@/lib/openclaw/send-chat';
 import { buildNotesIntakeMessage } from './pm-prompts/notes-intake';
@@ -364,6 +365,60 @@ async function runDisruptionDispatchInBackground(
   // eslint-disable-next-line @typescript-eslint/no-shadow
   async function runDispatchBody(): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
   try {
+    // In-flight visibility (PR C): tap chat_event deltas + final
+    // markers and broadcast as `pm_dispatch_in_flight` so /pm can
+    // render a live work-products strip while the dispatch runs. We
+    // debounce streaming text deltas to ~250ms cadence so the SSE
+    // channel doesn't get hammered token-by-token. tool_call events
+    // ride through chat_event payloads when state is non-final and
+    // the message contains structured tool data (depends on gateway
+    // shape — broadcast everything non-final for now and let the UI
+    // filter).
+    let lastDeltaBroadcastAt = 0;
+    let accumulatedText = '';
+    const DELTA_BROADCAST_INTERVAL_MS = 250;
+    const onEvent = (event: ChatEvent): void => {
+      try {
+        const msgText = readChatEventMessage(event);
+        if (event.state === 'final') {
+          // Final marker — let the UI clear its in-flight strip.
+          broadcast({
+            type: 'pm_dispatch_in_flight',
+            payload: {
+              workspace_id: input.workspace_id,
+              correlation_id: correlationId,
+              placeholder_id: placeholder.id,
+              kind: 'control',
+              control: 'final',
+            },
+          });
+          return;
+        }
+        if (msgText && msgText.length > accumulatedText.length) {
+          accumulatedText = msgText;
+          const now = Date.now();
+          if (now - lastDeltaBroadcastAt >= DELTA_BROADCAST_INTERVAL_MS) {
+            lastDeltaBroadcastAt = now;
+            broadcast({
+              type: 'pm_dispatch_in_flight',
+              payload: {
+                workspace_id: input.workspace_id,
+                correlation_id: correlationId,
+                placeholder_id: placeholder.id,
+                kind: 'delta',
+                // Ship the tail so /pm can show a live preview without
+                // streaming the whole accumulated body every tick.
+                preview: accumulatedText.slice(-400),
+                length: accumulatedText.length,
+              },
+            });
+          }
+        }
+      } catch {
+        // Diagnostics-only path; never let it break dispatch.
+      }
+    };
+
     const dispatch = await dispatchScope({
       workspace_id: input.workspace_id,
       role: 'pm',
@@ -373,6 +428,7 @@ async function runDisruptionDispatchInBackground(
       trigger_kind: input.trigger_kind ?? 'manual',
       idempotencyKey: `pm-dispatch-${correlationId}`,
       timeoutMs: namedAgentTimeoutMs(),
+      onEvent,
     });
     result = dispatch.reply;
   } catch (err) {
@@ -521,6 +577,34 @@ function extractAgentReplyText(
   const fromDone = readMessage(result.doneEvent?.message).trim();
   if (fromDone) return fromDone;
   return (result.reply ?? []).map(e => readMessage(e.message)).join('').trim();
+}
+
+/**
+ * Pull a flat string out of a single ChatEvent's message payload.
+ * Used by the in-flight visibility tap in PR C; same heuristic as
+ * extractAgentReplyText but per-event.
+ */
+function readChatEventMessage(e: ChatEvent): string {
+  const m = e?.message;
+  if (!m) return '';
+  if (typeof m === 'string') return m;
+  if (typeof m === 'object' && 'content' in m) {
+    const c = (m as { content: unknown }).content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+      return c
+        .map(part =>
+          typeof part === 'string'
+            ? part
+            : typeof part === 'object' && part && 'text' in part && typeof (part as { text: unknown }).text === 'string'
+              ? (part as { text: string }).text
+              : '',
+        )
+        .filter(Boolean)
+        .join('');
+    }
+  }
+  return '';
 }
 
 // ─── Named-agent dispatch ───────────────────────────────────────────

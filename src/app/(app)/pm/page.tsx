@@ -331,6 +331,43 @@ function PmChatPageInner() {
   const [steerBusy, setSteerBusy] = useState(false);
   const [abortBusy, setAbortBusy] = useState(false);
 
+  // Live in-flight preview (PR C). The pm-dispatch onEvent tap
+  // broadcasts `pm_dispatch_in_flight` events with kind 'delta'
+  // (assistant text streaming) and 'control' (final marker). We
+  // mirror just the latest delta preview here; a 'control' marker
+  // clears it.
+  const [livePreview, setLivePreview] = useState<{ text: string; length: number } | null>(null);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const es = new EventSource('/api/events/stream');
+    es.onmessage = (raw) => {
+      try {
+        if (raw.data.startsWith(':')) return;
+        const evt = JSON.parse(raw.data) as { type?: string; payload?: Record<string, unknown> };
+        if (evt.type !== 'pm_dispatch_in_flight') return;
+        if (evt.payload?.workspace_id !== workspaceId) return;
+        if (evt.payload?.kind === 'delta') {
+          const preview = typeof evt.payload.preview === 'string' ? evt.payload.preview : '';
+          const length = typeof evt.payload.length === 'number' ? evt.payload.length : preview.length;
+          setLivePreview({ text: preview, length });
+        } else if (evt.payload?.kind === 'control') {
+          // Any control event (final / aborted) clears the preview;
+          // the assistant message will land in the chat thread via
+          // the normal post-dispatch path.
+          setLivePreview(null);
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    return () => es.close();
+  }, [workspaceId]);
+
+  // Clear the preview when we stop awaiting (timeout / response /
+  // abort) so a stale tail doesn't linger after the gate releases.
+  useEffect(() => {
+    if (!awaitingAgent) setLivePreview(null);
+  }, [awaitingAgent]);
+
   const submitSteer = useCallback(async () => {
     if (!workspaceId || !steerText.trim() || steerBusy) return;
     setSteerBusy(true);
@@ -775,29 +812,40 @@ function PmChatPageInner() {
                 Stop calls sessions.abort and re-enables send
                 immediately. */}
             {awaitingAgent && (
-              <div className="rounded-sm border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-xs flex items-center gap-2">
-                <Loader className="w-3.5 h-3.5 animate-spin text-mc-accent shrink-0" />
-                <span className="flex-1 text-mc-text-secondary">PM is replying…</span>
-                {!steerOpen && (
+              <div className="rounded-sm border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-xs space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Loader className="w-3.5 h-3.5 animate-spin text-mc-accent shrink-0" />
+                  <span className="flex-1 text-mc-text-secondary">
+                    {livePreview
+                      ? `PM is composing — ${livePreview.length} chars so far…`
+                      : 'PM is replying…'}
+                  </span>
+                  {!steerOpen && (
+                    <button
+                      type="button"
+                      onClick={() => setSteerOpen(true)}
+                      disabled={steerBusy || abortBusy}
+                      className="px-2 py-1 rounded-sm text-mc-accent hover:bg-mc-accent/10 disabled:opacity-50"
+                      title="Inject an additional message at the next model boundary"
+                    >
+                      Steer
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => setSteerOpen(true)}
-                    disabled={steerBusy || abortBusy}
-                    className="px-2 py-1 rounded-sm text-mc-accent hover:bg-mc-accent/10 disabled:opacity-50"
-                    title="Inject an additional message at the next model boundary"
+                    onClick={submitAbort}
+                    disabled={abortBusy || steerBusy}
+                    className="px-2 py-1 rounded-sm text-red-400 hover:bg-red-400/10 disabled:opacity-50"
+                    title="Abort the in-flight dispatch"
                   >
-                    Steer
+                    {abortBusy ? '…' : 'Stop'}
                   </button>
+                </div>
+                {livePreview && livePreview.text && (
+                  <div className="font-mono text-[11px] text-mc-text-secondary/80 italic line-clamp-3 whitespace-pre-wrap">
+                    …{livePreview.text}
+                  </div>
                 )}
-                <button
-                  type="button"
-                  onClick={submitAbort}
-                  disabled={abortBusy || steerBusy}
-                  className="px-2 py-1 rounded-sm text-red-400 hover:bg-red-400/10 disabled:opacity-50"
-                  title="Abort the in-flight dispatch"
-                >
-                  {abortBusy ? '…' : 'Stop'}
-                </button>
               </div>
             )}
 
