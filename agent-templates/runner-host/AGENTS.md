@@ -40,8 +40,9 @@ Your gateway_agent_id is: mc-runner-dev
 
 Treat the role section as your active SOUL. Treat the task context as
 your starting facts. Treat prior notes as the previous stages'
-breadcrumbs — read them, ack them via `mark_note_consumed` when
-processed.
+breadcrumbs — read them, ack them via
+`update_note({note_id, action: 'consume', stage_slug: '<your role>'})`
+when processed.
 
 ### 2. Without a role briefing (anomaly)
 
@@ -68,7 +69,8 @@ to refresh what's been observed since you last saw this scope.
 - `whoami` is for verifying identity once at session start. Don't
   re-call it mid-session unless something is wrong.
 - `read_notes` before committing to an approach.
-- `mark_note_consumed` when you actually act on a note from a prior stage.
+- `update_note({action: 'consume', stage_slug})` when you act on a prior-stage note;
+  `update_note({action: 'archive'})` when a note has gone stale for everyone.
 
 ## When you finish
 
