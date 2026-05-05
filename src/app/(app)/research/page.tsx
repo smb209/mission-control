@@ -19,6 +19,7 @@ import { RefreshCw, FileText, AlertTriangle } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { formatDistanceToNow } from 'date-fns';
 import { useResearchPreflight } from '@/components/research/useResearchPreflight';
+import { ScheduleRow, type ScheduleSummary } from '@/components/research/ScheduleRow';
 
 interface TopicSummary {
   id: string;
@@ -47,6 +48,10 @@ const RELEVANT_EVENTS = new Set([
   'brief_started', 'brief_progress', 'brief_completed', 'brief_failed',
 ]);
 
+interface ScheduleSummaryWithTopic extends ScheduleSummary {
+  topic_id: string;
+}
+
 const STATUS_COLOR: Record<AgentRunSummary['status'], string> = {
   queued:    'bg-mc-bg-tertiary text-mc-text-secondary border-mc-border',
   running:   'bg-mc-accent/15 text-mc-accent border-mc-accent/30',
@@ -62,6 +67,7 @@ export default function ResearchHubPage() {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [briefs, setBriefs] = useState<BriefSummary[]>([]);
   const [runs, setRuns] = useState<AgentRunSummary[]>([]);
+  const [upcoming, setUpcoming] = useState<ScheduleSummaryWithTopic[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,14 +77,16 @@ export default function ResearchHubPage() {
     setError(null);
     try {
       const qs = `?workspace_id=${encodeURIComponent(workspaceId)}`;
-      const [t, b, r] = await Promise.all([
+      const [t, b, r, sched] = await Promise.all([
         fetch(`/api/topics${qs}`).then(res => res.ok ? res.json() : Promise.reject(new Error(`topics: ${res.status}`))),
         fetch(`/api/briefs${qs}&limit=20`).then(res => res.ok ? res.json() : Promise.reject(new Error(`briefs: ${res.status}`))),
         fetch(`/api/agent-runs${qs}&kind=brief&limit=50`).then(res => res.ok ? res.json() : Promise.reject(new Error(`agent-runs: ${res.status}`))),
+        fetch(`/api/schedules${qs}&limit=10`).then(res => res.ok ? res.json() : []),
       ]);
       setTopics(t);
       setBriefs(b);
       setRuns(r);
+      setUpcoming(sched);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load research data');
     } finally {
@@ -163,7 +171,22 @@ export default function ResearchHubPage() {
         ))}
       </Lane>
 
-      <Lane title="Upcoming" emptyText="Schedules land in phase 2 — this lane will populate then." />
+      <Lane
+        title="Upcoming"
+        emptyText="No schedules yet. Open a topic and hit Schedule to start one."
+      >
+        {upcoming.map(s => {
+          const topic = topics.find(t => t.id === s.topic_id);
+          return (
+            <ScheduleRow
+              key={s.id}
+              schedule={s}
+              topicName={topic?.name}
+              onChanged={load}
+            />
+          );
+        })}
+      </Lane>
 
       <Lane title="Recent results" emptyText="Completed briefs appear here.">
         {recent.map(b => (

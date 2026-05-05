@@ -49,6 +49,7 @@ import {
   Loader2,
   Pin,
   PinOff,
+  Clock,
 } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { useResearchPreflight } from '@/components/research/useResearchPreflight';
@@ -76,6 +77,12 @@ interface BriefSummary {
 interface AgentRunSummary {
   id: string;
   status: 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
+}
+
+interface ScheduleSummary {
+  id: string;
+  topic_id: string | null;
+  status: 'active' | 'paused' | 'done';
 }
 
 const RAIL_COLLAPSED_KEY = 'mc.research.rail.collapsed';
@@ -136,6 +143,7 @@ export function ResearchSideRail() {
   const [topics, setTopics] = useState<TopicSummary[]>([]);
   const [briefs, setBriefs] = useState<BriefSummary[]>([]);
   const [runs, setRuns] = useState<AgentRunSummary[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
   const [createTopicOpen, setCreateTopicOpen] = useState(false);
   const [runBriefOpen, setRunBriefOpen] = useState(false);
   const [suggestKind, setSuggestKind] = useState<'topic' | 'brief' | null>(null);
@@ -254,19 +262,23 @@ export function ResearchSideRail() {
 
   const load = useCallback(async () => {
     if (!workspaceId) {
-      setTopics([]); setBriefs([]); setRuns([]);
+      setTopics([]); setBriefs([]); setRuns([]); setSchedules([]);
       return;
     }
     const qs = `?workspace_id=${encodeURIComponent(workspaceId)}`;
     try {
-      const [t, b, r] = await Promise.all([
+      const [t, b, r, s] = await Promise.all([
         fetch(`/api/topics${qs}`).then(res => res.ok ? res.json() : []),
         fetch(`/api/briefs${qs}&limit=20`).then(res => res.ok ? res.json() : []),
         fetch(`/api/agent-runs${qs}&kind=brief&limit=50`).then(res => res.ok ? res.json() : []),
+        // limit=100 covers any realistic per-workspace schedule count;
+        // we just need topic_ids for the indicator dot.
+        fetch(`/api/schedules${qs}&limit=100`).then(res => res.ok ? res.json() : []),
       ]);
       setTopics(t);
       setBriefs(b);
       setRuns(r);
+      setSchedules(s);
     } catch {
       // Quiet failure — main panel surfaces its own load error.
     }
@@ -305,6 +317,16 @@ export function ResearchSideRail() {
     const rest = topics.filter(t => !pinSet.has(t.id));
     return [...pinned, ...rest];
   }, [topics, pinnedTopics]);
+
+  // topic_ids that have at least one active schedule attached.
+  // Drives the small clock indicator next to the topic name.
+  const scheduledTopicIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const sc of schedules) {
+      if (sc.topic_id && sc.status === 'active') s.add(sc.topic_id);
+    }
+    return s;
+  }, [schedules]);
 
   const sortedBriefs = useMemo(() => {
     const pinSet = new Set(pinnedBriefs);
@@ -467,6 +489,7 @@ export function ResearchSideRail() {
               {sortedTopics.map(t => {
                 const active = activeTopicId === t.id;
                 const pinned = pinnedTopics.includes(t.id);
+                const hasSchedule = scheduledTopicIds.has(t.id);
                 return (
                   <li key={t.id} className="group">
                     <div className={`mx-2 rounded-sm flex items-center ${
@@ -482,6 +505,12 @@ export function ResearchSideRail() {
                         {pinned && <Pin className="w-3 h-3 shrink-0 text-mc-accent fill-mc-accent" />}
                         {t.archived_at && <Archive className="w-3 h-3 shrink-0 opacity-60" />}
                         <span className="truncate">{t.name}</span>
+                        {hasSchedule && (
+                          <Clock
+                            className="w-3 h-3 shrink-0 text-mc-accent ml-auto"
+                            aria-label="Has active schedule"
+                          />
+                        )}
                       </Link>
                       <PinToggle
                         pinned={pinned}

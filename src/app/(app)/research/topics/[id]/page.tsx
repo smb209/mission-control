@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Archive, ArchiveRestore, FileText, RefreshCw, Zap } from 'lucide-react';
+import { Archive, ArchiveRestore, Calendar, FileText, RefreshCw, Zap } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { formatDistanceToNow } from 'date-fns';
 import { RunBriefDrawer } from '@/components/research/RunBriefDrawer';
+import { ScheduleDrawer } from '@/components/research/ScheduleDrawer';
+import { ScheduleRow, type ScheduleSummary } from '@/components/research/ScheduleRow';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface Topic {
@@ -35,9 +37,11 @@ export default function TopicDetailPage() {
   const workspaceId = useCurrentWorkspaceId();
   const [topic, setTopic] = useState<Topic | null>(null);
   const [briefs, setBriefs] = useState<BriefSummary[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [runBriefOpen, setRunBriefOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
 
   const load = useCallback(async () => {
@@ -46,8 +50,12 @@ export default function TopicDetailPage() {
     try {
       const t = await fetch(`/api/topics/${params.id}`).then(r => r.ok ? r.json() : Promise.reject(new Error(`topic: ${r.status}`)));
       setTopic(t);
-      const b = await fetch(`/api/briefs?workspace_id=${encodeURIComponent(t.workspace_id)}&topic_id=${encodeURIComponent(t.id)}`).then(r => r.ok ? r.json() : []);
+      const [b, s] = await Promise.all([
+        fetch(`/api/briefs?workspace_id=${encodeURIComponent(t.workspace_id)}&topic_id=${encodeURIComponent(t.id)}`).then(r => r.ok ? r.json() : []),
+        fetch(`/api/topics/${encodeURIComponent(t.id)}/schedules`).then(r => r.ok ? r.json() : []),
+      ]);
       setBriefs(b);
+      setSchedules(s);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load topic');
     } finally {
@@ -92,8 +100,8 @@ export default function TopicDetailPage() {
 
   return (
     <div className="px-6 py-5 max-w-4xl">
-      <header className="flex items-start justify-between mb-4">
-        <div className="flex-1 min-w-0">
+      <header className="flex items-start justify-between gap-3 flex-wrap mb-4">
+        <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h1 className="text-xl font-semibold text-mc-text">{topic.name}</h1>
             {topic.archived_at && (
@@ -111,7 +119,7 @@ export default function TopicDetailPage() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <button
             type="button"
             onClick={load}
@@ -138,16 +146,41 @@ export default function TopicDetailPage() {
             </button>
           )}
           {!topic.archived_at && (
-            <button
-              type="button"
-              onClick={() => setRunBriefOpen(true)}
-              className="px-3 py-1.5 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:opacity-90 flex items-center gap-1.5"
-            >
-              <Zap className="w-3.5 h-3.5" /> Run a brief
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setScheduleOpen(true)}
+                className="px-3 py-1.5 text-sm rounded-sm text-mc-text-secondary hover:bg-mc-bg-tertiary border border-mc-border flex items-center gap-1.5"
+              >
+                <Calendar className="w-3.5 h-3.5" /> Schedule
+              </button>
+              <button
+                type="button"
+                onClick={() => setRunBriefOpen(true)}
+                className="px-3 py-1.5 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:opacity-90 flex items-center gap-1.5"
+              >
+                <Zap className="w-3.5 h-3.5" /> Run a brief
+              </button>
+            </>
           )}
         </div>
       </header>
+
+      {/* Schedules section. Renders only when at least one schedule
+          exists; the Schedule button at the top is the create entry
+          point so an empty state would just duplicate that affordance. */}
+      {schedules.length > 0 && (
+        <section className="mb-6">
+          <h2 className="text-[11px] uppercase tracking-wider text-mc-text-secondary mb-2">Schedules</h2>
+          <ul className="space-y-2">
+            {schedules.map(s => (
+              <li key={s.id}>
+                <ScheduleRow schedule={s} onChanged={load} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section>
         <h2 className="text-[11px] uppercase tracking-wider text-mc-text-secondary mb-2">Brief history</h2>
@@ -179,6 +212,14 @@ export default function TopicDetailPage() {
         topics={[{ id: topic.id, name: topic.name }]}
         defaultTopicId={topic.id}
         onLaunched={() => setRunBriefOpen(false)}
+      />
+
+      <ScheduleDrawer
+        open={scheduleOpen}
+        onClose={() => setScheduleOpen(false)}
+        topicId={topic.id}
+        topicName={topic.name}
+        onCreated={() => { setScheduleOpen(false); load(); }}
       />
 
       <ConfirmDialog
