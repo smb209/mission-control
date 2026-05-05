@@ -322,6 +322,69 @@ function PmChatPageInner() {
     }
   }, [messages, awaitingAgent, AWAITING_AGENT_TIMEOUT_MS]);
 
+  // Steer / Abort wiring. Both target the active dispatch via
+  // /api/pm/active-dispatch — that endpoint resolves the gateway
+  // sessionKey from MC's in-memory registry so we don't need to
+  // re-derive the session here.
+  const [steerOpen, setSteerOpen] = useState(false);
+  const [steerText, setSteerText] = useState('');
+  const [steerBusy, setSteerBusy] = useState(false);
+  const [abortBusy, setAbortBusy] = useState(false);
+
+  const submitSteer = useCallback(async () => {
+    if (!workspaceId || !steerText.trim() || steerBusy) return;
+    setSteerBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/pm/active-dispatch?workspace_id=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'steer', message: steerText.trim() }),
+        },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Steer failed (${res.status})`);
+      }
+      setSteerText('');
+      setSteerOpen(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSteerBusy(false);
+    }
+  }, [workspaceId, steerText, steerBusy]);
+
+  const submitAbort = useCallback(async () => {
+    if (!workspaceId || abortBusy) return;
+    setAbortBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/pm/active-dispatch?workspace_id=${encodeURIComponent(workspaceId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'abort' }),
+        },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Abort failed (${res.status})`);
+      }
+      // Clear the awaiting gate optimistically; the operator wants to
+      // send something else.
+      setAwaitingAgent(null);
+      setSteerOpen(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAbortBusy(false);
+    }
+  }, [workspaceId, abortBusy]);
+
   // plan_initiative proposals are advisory at the database level — they
   // carry the suggestions JSON inside impact_md but no link to a target
   // initiative. Clicking Accept on one used to flip the proposal to
@@ -706,6 +769,76 @@ function PmChatPageInner() {
           </div>
 
           <div className="border-t border-mc-border p-3 space-y-2 shrink-0">
+            {/* In-flight strip — visible while a PM dispatch is in
+                flight. Steer queues an additional operator message at
+                the next model boundary (cheap, doesn't kill work).
+                Stop calls sessions.abort and re-enables send
+                immediately. */}
+            {awaitingAgent && (
+              <div className="rounded-sm border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-xs flex items-center gap-2">
+                <Loader className="w-3.5 h-3.5 animate-spin text-mc-accent shrink-0" />
+                <span className="flex-1 text-mc-text-secondary">PM is replying…</span>
+                {!steerOpen && (
+                  <button
+                    type="button"
+                    onClick={() => setSteerOpen(true)}
+                    disabled={steerBusy || abortBusy}
+                    className="px-2 py-1 rounded-sm text-mc-accent hover:bg-mc-accent/10 disabled:opacity-50"
+                    title="Inject an additional message at the next model boundary"
+                  >
+                    Steer
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={submitAbort}
+                  disabled={abortBusy || steerBusy}
+                  className="px-2 py-1 rounded-sm text-red-400 hover:bg-red-400/10 disabled:opacity-50"
+                  title="Abort the in-flight dispatch"
+                >
+                  {abortBusy ? '…' : 'Stop'}
+                </button>
+              </div>
+            )}
+
+            {awaitingAgent && steerOpen && (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={steerText}
+                  onChange={(e) => setSteerText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      submitSteer();
+                    } else if (e.key === 'Escape') {
+                      setSteerOpen(false);
+                      setSteerText('');
+                    }
+                  }}
+                  placeholder="Steer with additional context (e.g. &ldquo;only consider initiatives owned by Sarah&rdquo;)"
+                  disabled={steerBusy}
+                  autoFocus
+                  className="flex-1 bg-mc-bg border border-mc-accent/40 rounded-sm px-3 py-1.5 text-xs focus:outline-hidden focus:border-mc-accent disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  onClick={submitSteer}
+                  disabled={!steerText.trim() || steerBusy}
+                  className="px-2 py-1 text-xs rounded-sm bg-mc-accent text-mc-bg hover:opacity-90 disabled:opacity-50"
+                >
+                  {steerBusy ? '…' : 'Send'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setSteerOpen(false); setSteerText(''); }}
+                  className="px-2 py-1 text-xs rounded-sm text-mc-text-secondary hover:bg-mc-bg-tertiary"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <textarea
                 value={input}
@@ -726,7 +859,7 @@ function PmChatPageInner() {
                 type="button"
                 onClick={handleSend}
                 disabled={!pmAgent || !input.trim() || sending || !!awaitingAgent}
-                title={awaitingAgent ? 'Wait for the PM\'s reply before sending another message.' : undefined}
+                title={awaitingAgent ? 'Wait for the PM\'s reply before sending another message — use Steer above to add context, or Stop to abort.' : undefined}
                 className="self-end flex items-center gap-2 px-3 py-2 bg-mc-accent text-mc-bg rounded-sm text-sm font-medium hover:bg-mc-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {sending || awaitingAgent ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}

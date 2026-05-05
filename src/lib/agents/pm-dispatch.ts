@@ -109,6 +109,28 @@ export class PmDispatchGatewayUnavailableError extends Error {
 const NAMED_AGENT_TIMEOUT_MS = 60_000;
 
 /**
+ * In-memory registry of active PM dispatches keyed by workspace_id.
+ * Lets steer/abort REST endpoints look up the gateway sessionKey and
+ * placeholder proposal id without re-deriving them. Cleared the moment
+ * the dispatch resolves (success, failure, or synth_only fallback).
+ *
+ * Workspace-keyed (one PM per workspace; one in-flight dispatch at a
+ * time per the one-at-a-time UI gate from PR A).
+ */
+interface ActivePmDispatch {
+  workspace_id: string;
+  correlation_id: string;
+  placeholder_id: string;
+  session_key: string;
+  started_at: number;
+}
+const activePmDispatches = new Map<string, ActivePmDispatch>();
+
+export function getActivePmDispatch(workspaceId: string): ActivePmDispatch | null {
+  return activePmDispatches.get(workspaceId) ?? null;
+}
+
+/**
  * Dependency seam for tests. Routes BOTH the local connection probe
  * (`isConnected()`) and the underlying chat send through a shared mock,
  * so tests can simulate "agent finishes its turn → final frame arrives"
@@ -308,7 +330,39 @@ async function runDisruptionDispatchInBackground(
         `Hard rule: every response MUST contain a \`propose_changes\` call with a non-empty array OR at least one full sentence of chat text. A fully empty reply is a bug.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
+  // Compute the FULL gateway sessionKey here so the activePmDispatches
+  // registry holds the same key the gateway uses (mirrors how
+  // sendChatAndAwaitReply derives it via buildAgentSessionKey).
+  const fullSessionKey = (() => {
+    const prefix = (pm as Agent & { session_key_prefix?: string | null }).session_key_prefix?.trim();
+    if (prefix) return prefix.endsWith(':') ? `${prefix}${sessionSuffix}` : `${prefix}:${sessionSuffix}`;
+    if (pm.gateway_agent_id) return `agent:${pm.gateway_agent_id}:${sessionSuffix}`;
+    return sessionSuffix;
+  })();
+
+  // Register this dispatch so the steer/abort REST endpoints can look
+  // up the sessionKey by workspace. Cleared in `finally` regardless of
+  // outcome so we never leak a stale entry.
+  activePmDispatches.set(input.workspace_id, {
+    workspace_id: input.workspace_id,
+    correlation_id: correlationId,
+    placeholder_id: placeholder.id,
+    session_key: fullSessionKey,
+    started_at: Date.now(),
+  });
+
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
+  try {
+    return await runDispatchBody();
+  } finally {
+    // Clear the in-flight registry entry on any exit path so steer/abort
+    // never targets a stale dispatch. The body function below populates
+    // `result` via closure capture before its returns hit.
+    activePmDispatches.delete(input.workspace_id);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-shadow
+  async function runDispatchBody(): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
   try {
     const dispatch = await dispatchScope({
       workspace_id: input.workspace_id,
@@ -430,6 +484,7 @@ async function runDisruptionDispatchInBackground(
     used_named_agent: false,
     used_synthesize_fallback: true,
   };
+  }
 }
 
 /**
