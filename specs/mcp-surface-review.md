@@ -198,17 +198,76 @@ The dependency-tools merge (`add_initiative_dependency` / `remove_initiative_dep
 
    This is the operator-facing change that actually realizes the savings from the route split — code-only work without it just adds inert routes.
 
+## Agent template impact
+
+Agent templates teach tools **by name, not by endpoint** — the route split is invisible to agents, which is good for migration but means the consolidation/rename PRs each have a doc-edit footprint that has to land in the same commit as the code change or role docs diverge from reality.
+
+`agent-templates/_shared/messaging-protocol.md` is the **canonical tool table** every role-specific doc leans on. It must be updated synchronously with any rename/consolidate PR. The role-specific files (`coordinator/AGENTS.md`, etc.) reference these tools prescriptively in decision tables and example flows — those need worked rewrites, not just find/replace.
+
+### Per-PR doc-edit footprint
+
+**PR 4 (subtask consolidation → `update_subtask`):**
+- `_shared/messaging-protocol.md` — canonical table rows (~lines 63–65). Rename three rows to one.
+- `coordinator/SOUL.md` (~lines 19–20) — replace tool list reference.
+- `coordinator/AGENTS.md` — densest surface; full decision table (~lines 14, 49–60, 73) maps peer states to `accept_/reject_/cancel_subtask`. Needs rewritten worked example using `update_subtask({action: ...})`, not a mechanical replacement.
+
+**PR 5 (note lifecycle → `update_note`):**
+- `_shared/messaging-protocol.md` — canonical table.
+- `_shared/notetaker.md` (~line 34) — currently documents `archive_note` only.
+- **Gap to fix as part of this PR**: `mark_note_consumed` is **not referenced in any agent template today**. Templates only document the archive path. The consolidation PR should *add* prescriptive guidance for the `consume` action (likely in `notetaker.md` and/or `messaging-protocol.md`) — agents currently don't know that tool exists. Without this, the consolidation doesn't fix the underlying coverage gap; it just relabels half of it.
+- `runner-host/AGENTS.md` (~lines 60–78) — references note tools per-role; cross-check.
+
+**PR 2 (new `/api/mcp/pm` and `/api/mcp/crud` routes) — add a small doc edit:**
+- `pm/SOUL.md` (~line 32) currently names `create_initiative` / `update_initiative` explicitly to forbid them. Once CRUD is unmounted from the PM endpoint those tools aren't visible to the PM at all — the prohibition becomes redundant/misleading. Rewrite as "the PM mount doesn't expose direct write tools; use `propose_changes` for all roadmap mutations" rather than enumerating tool names.
+
+**PR 1 (refactor into groups) and PR 3 (`yarn openclaw:apply-mc-servers`):** no agent template edits — refactor is invisible to agents, sync script is operator-facing only.
+
+### Named-agent template sync (new tooling)
+
+Runner-hosted personas resolve `_shared/*.md` at briefing time inside MC, so edits to `_shared` propagate automatically the next time MC dispatches them. **The named gateway agents (PM, runner-host) are different** — their AGENTS.md / SOUL.md / IDENTITY.md live as physical files inside `~/.openclaw/workspaces/mc-{pm-default,runner}-{dev,stable}/` and are read by the gateway at session start, *outside* MC's briefing pipeline. When `_shared/messaging-protocol.md` or `_shared/notetaker.md` changes — exactly what PR 4 and PR 5 do — those gateway-agent workspace files go stale until they're hand-refreshed.
+
+**New tool needed:** `yarn openclaw:sync-named-agents` (script `scripts/sync-named-agent-workspaces.ts`).
+
+Responsibilities:
+- For each named gateway agent declared in `openclaw.json` whose persona maps to one of our role templates (currently PM, runner-host; future: any directly-mounted role), recompose its workspace `AGENTS.md` / `SOUL.md` / `IDENTITY.md` from `agent-templates/<role>/*.md` plus the appropriate `_shared/*.md` addenda — using the same composition order MC's briefing builder uses for runner-hosted personas, so the two surfaces stay in lockstep.
+- Idempotent: write only when content differs; report a per-file diff summary.
+- `--dry-run` mode (matches `openclaw:sync:check`).
+- Handles dev/stable variants in one pass by walking `~/.openclaw/workspaces/mc-*-{dev,stable}/`.
+- Fails loudly if a named agent's directory is present in `openclaw.json` but missing on disk (or vice versa).
+
+This belongs in the same family as `openclaw:sync` / `workspace:provision` / `runner-host:reseed`. It's the missing piece that closes the loop: today, edits to `_shared` quietly diverge between runner-hosted personas (which see the new content next dispatch) and named gateway agents (which keep reading their stale on-disk copy until someone manually refreshes).
+
+**Sequencing note:** this tool should land *before* PR 4 / PR 5, because those PRs are the first concrete edits to `_shared/messaging-protocol.md` since the named-agent gap was identified. Add it as **PR 3.5** (or fold into PR 3 if compact).
+
+### Per-agent tool-group sanity check (validates allowlist plan)
+
+Audit confirmed no template currently prescribes a CRUD tool to a non-PM role, so the planned per-agent `alsoAllow` patterns are consistent with how docs already segregate roles:
+
+| Agent | core | read | work | pm | crud |
+|---|---|---|---|---|---|
+| pm | yes | yes | minimal (`take_note`, `send_mail`) | **yes** (`propose_changes`, `add_owner_availability`) | **explicitly forbidden** |
+| coordinator | yes | yes | yes (+ `spawn_subtask`, accept/reject/cancel) | no | no |
+| runner-host | yes | yes | yes | mentions `propose_changes` only when impersonating PM | no |
+| builder / tester / reviewer / writer / researcher / learner | yes | yes | yes | no (learner descriptive only) | no |
+
+### Surprises worth flagging
+
+- The `sc-mission-control__` MCP-prefix appears in only three template files (`messaging-protocol.md`, `shared-rules.md`, one block in `coordinator/AGENTS.md`); most refer to bare tool names. If we ever want to disambiguate per-route prefixes in docs, the surface to update is small.
+- IDENTITY/HEARTBEAT/USER files across all roles are pure persona/style — no MCP tool references — so they're untouched by all six PRs.
+
 ## Recommended action queue
 
 1. **PR 1 — Refactor `tools.ts` + `roadmap-tools.ts` into scope groups.** Pure code move; zero runtime change. Files end up in `src/lib/mcp/groups/{core,read,work,pm,crud}.ts` plus a `buildServer(groups[])` factory. The default `/api/mcp` route imports all of them — same tool surface as today. Easy review (it's a refactor); sets the foundation for everything else.
 
-2. **PR 2 — New `/api/mcp/pm` and `/api/mcp/crud` routes.** PM endpoint imports `core+read+pm`; CRUD endpoint imports `core+read+crud`. Default route unchanged. No agent picks them up yet — the gateway-side config update is a separate operator action.
+2. **PR 2 — New `/api/mcp/pm` and `/api/mcp/crud` routes.** PM endpoint imports `core+read+pm`; CRUD endpoint imports `core+read+crud`. Default route unchanged. No agent picks them up yet — the gateway-side config update is a separate operator action. **Includes:** rewrite `agent-templates/pm/SOUL.md` line ~32 — drop the enumerated CRUD-tool prohibition (those tools won't be on the PM mount anymore) in favor of a positive "use `propose_changes`" framing.
 
 3. **PR 3 — Operator action: re-point PM gateway config to `/api/mcp/pm`.** Documentation + concrete config diff. Validates the split actually saves ~14K tokens per PM dispatch. Mostly a one-line config change in `~/.openclaw/workspaces/mc-pm-default-dev/skills.json` (or whichever file declares MCP servers there).
 
+3.5. **PR 3.5 — `yarn openclaw:sync-named-agents`.** New `scripts/sync-named-agent-workspaces.ts`. Recomposes the on-disk AGENTS.md / SOUL.md / IDENTITY.md for each named gateway agent (PM, runner-host) from `agent-templates/<role>/*.md` + `_shared/*.md`, using MC's briefing-builder composition order. Idempotent; `--dry-run` supported; covers dev + stable variants. Closes the gap where edits to `_shared` propagate to runner-hosted personas automatically but leave named-agent workspace files stale. **Must land before PR 4 / PR 5** so the first `_shared` edits in this work don't go out of sync.
+
 4. **PR 4 — Consolidate subtask actions.** New `update_subtask({ subtask_id, action: 'accept'|'reject'|'cancel', reason?, new_acceptance_criteria? })`. Replaces three separate tools. Touches: `src/lib/mcp/groups/work.ts`, `agent-templates/coordinator/{SOUL,AGENTS}.md`, `agent-templates/_shared/messaging-protocol.md`, `src/app/api/tasks/[id]/dispatch/route.ts` (the dispatch template that coaches coordinators). Saves ~900 tokens. Lands in `work.ts` so it propagates to default + work + pm endpoints automatically.
 
-5. **PR 5 — Consolidate note lifecycle.** New `update_note({ note_id, action: 'consume'|'archive', stage_slug?, reason? })`. Replaces `mark_note_consumed` + `archive_note`. Touches: `src/lib/mcp/groups/core.ts`, `agent-templates/runner-host/AGENTS.md`, `agent-templates/_shared/{messaging-protocol,notetaker}.md`. Saves ~450 tokens.
+5. **PR 5 — Consolidate note lifecycle.** New `update_note({ note_id, action: 'consume'|'archive', stage_slug?, reason? })`. Replaces `mark_note_consumed` + `archive_note`. Touches: `src/lib/mcp/groups/core.ts`, `agent-templates/runner-host/AGENTS.md`, `agent-templates/_shared/{messaging-protocol,notetaker}.md`. Saves ~450 tokens. **Coverage fix:** `mark_note_consumed` is currently undocumented in any agent template — this PR must *add* prescriptive guidance for the `consume` action (in `notetaker.md` + `messaging-protocol.md`), not just rename the existing `archive` reference.
 
 6. **PR 6 — Doc-only.** Codify the discriminated-union principle in the PM SOUL + this review file as the standing reference for "should I add a new MCP tool or extend `propose_changes`?". Cheap, sets direction.
 
