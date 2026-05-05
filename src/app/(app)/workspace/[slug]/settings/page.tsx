@@ -205,6 +205,13 @@ export default function WorkspaceSettingsPage({
     <PageWithRails
       header={header}
       leftRail={<SectionNav sections={sections} />}
+      collapsibleLeftRail
+      leftRailStorageKey="mc:workspace:settings:rail"
+      // Defer the 3-col layout until xl (1280px). At lg the right rail
+      // ate so much horizontal room that the center column squashed
+      // text per-character and the right rail visually overlapped the
+      // form fields.
+      rightRailMinViewport="xl"
       rightRail={
         <AgentPromptPreview
           contextMd={conventionsDraft ?? workspace.context_md ?? ''}

@@ -35,6 +35,7 @@
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface PageWithRailsProps {
@@ -74,8 +75,33 @@ interface PageWithRailsProps {
   leftRailMinWidth?: number;
   /** Maximum left-rail width in pixels when resizable. Default 720. */
   leftRailMaxWidth?: number;
+  /** When true, the left rail can be collapsed to a thin icon column
+   *  via a chevron toggle at its top edge. Mirrors the research-rail
+   *  pattern. Collapsed state persists at
+   *  `${leftRailStorageKey}.collapsed` when a storage key is provided.
+   *  Default false. */
+  collapsibleLeftRail?: boolean;
+  /** Breakpoint above which the right rail renders side-by-side; below
+   *  it the rail stacks under main with a labeled section header (the
+   *  same `<details>`-style fallback used for the left rail).
+   *  Default 'lg' — pages with a wide right rail or narrow main column
+   *  can pass 'xl' / '2xl' to defer the 3-col layout until the viewport
+   *  has the room for it. */
+  rightRailMinViewport?: 'lg' | 'xl' | '2xl';
   children: ReactNode;
 }
+
+const RIGHT_RAIL_VISIBLE_CLASS: Record<NonNullable<PageWithRailsProps['rightRailMinViewport']>, string> = {
+  lg: 'hidden lg:block',
+  xl: 'hidden xl:block',
+  '2xl': 'hidden 2xl:block',
+};
+
+const RIGHT_RAIL_STACK_CLASS: Record<NonNullable<PageWithRailsProps['rightRailMinViewport']>, string> = {
+  lg: 'lg:hidden',
+  xl: 'xl:hidden',
+  '2xl': '2xl:hidden',
+};
 
 export function PageWithRails({
   header,
@@ -91,8 +117,27 @@ export function PageWithRails({
   leftRailStorageKey,
   leftRailMinWidth = 240,
   leftRailMaxWidth = 720,
+  collapsibleLeftRail = false,
+  rightRailMinViewport = 'lg',
   children,
 }: PageWithRailsProps) {
+  const COLLAPSED_KEY = leftRailStorageKey ? `${leftRailStorageKey}.collapsed` : null;
+  const [leftRailCollapsed, setLeftRailCollapsed] = useState(false);
+  useEffect(() => {
+    if (!collapsibleLeftRail || !COLLAPSED_KEY) return;
+    try {
+      setLeftRailCollapsed(window.localStorage.getItem(COLLAPSED_KEY) === '1');
+    } catch { /* ignore */ }
+  }, [collapsibleLeftRail, COLLAPSED_KEY]);
+  const toggleLeftRailCollapsed = useCallback(() => {
+    setLeftRailCollapsed(c => {
+      const next = !c;
+      if (COLLAPSED_KEY) {
+        try { window.localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      }
+      return next;
+    });
+  }, [COLLAPSED_KEY]);
   // Drag-resizable rail width. Off → null (rail uses leftRailWidth
   // tailwind class). On → state-driven inline pixel width persisted to
   // localStorage so the operator's preferred rail size sticks. We
@@ -168,19 +213,35 @@ export function PageWithRails({
               <aside
                 className={clsx(
                   'hidden lg:block shrink-0',
-                  // Fallback width via tailwind class for both modes; the
-                  // inline style below overrides it once the operator has
-                  // dragged a custom width in resizable mode (also avoids
-                  // a flash of zero-width on initial mount when
-                  // localStorage hydration hasn't run yet).
-                  leftRailWidth,
+                  // When collapsed, override the configured width with
+                  // a thin chevron-only column. Otherwise fall back to
+                  // the tailwind class (resizable mode replaces this
+                  // via inline style once dragged).
+                  leftRailCollapsed ? 'w-12' : leftRailWidth,
                   'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
                 )}
-                style={resizableLeftRail && resizedWidth != null ? { width: resizedWidth } : undefined}
+                style={!leftRailCollapsed && resizableLeftRail && resizedWidth != null ? { width: resizedWidth } : undefined}
               >
-                {leftRail}
+                {collapsibleLeftRail && (
+                  <div className={clsx(
+                    'flex items-center px-1.5 py-1 border-b border-mc-border/60 mb-2',
+                    leftRailCollapsed ? 'justify-center' : 'justify-end',
+                  )}>
+                    <button
+                      type="button"
+                      onClick={toggleLeftRailCollapsed}
+                      className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+                      title={leftRailCollapsed ? 'Expand sections' : 'Collapse sections'}
+                      aria-label={leftRailCollapsed ? 'Expand sections' : 'Collapse sections'}
+                      aria-expanded={!leftRailCollapsed}
+                    >
+                      {leftRailCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                    </button>
+                  </div>
+                )}
+                {!leftRailCollapsed && leftRail}
               </aside>
-              {resizableLeftRail && (
+              {resizableLeftRail && !leftRailCollapsed && (
                 <div
                   onPointerDown={startDrag}
                   role="separator"
@@ -209,7 +270,10 @@ export function PageWithRails({
             )}
             {children}
             {rightRail && (
-              <section className="lg:hidden mt-6 rounded-lg border border-mc-border/60 bg-mc-bg-secondary">
+              <section className={clsx(
+                RIGHT_RAIL_STACK_CLASS[rightRailMinViewport],
+                'mt-6 rounded-lg border border-mc-border/60 bg-mc-bg-secondary',
+              )}>
                 <header className="px-4 py-2 border-b border-mc-border/60">
                   <h2 className="text-xs uppercase tracking-wide text-mc-text-secondary">
                     {rightRailTitle}
@@ -223,7 +287,8 @@ export function PageWithRails({
           {rightRail && (
             <aside
               className={clsx(
-                'hidden lg:block shrink-0',
+                RIGHT_RAIL_VISIBLE_CLASS[rightRailMinViewport],
+                'shrink-0',
                 rightRailWidth,
                 'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
               )}
