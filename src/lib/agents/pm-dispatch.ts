@@ -290,18 +290,22 @@ async function runDisruptionDispatchInBackground(
   // the `trigger_body` parameter.
   const correlationId = uuidv4();
   const sinceIso = new Date().toISOString();
-  const summary = buildSnapshotSummary(snapshot);
+  // notes_intake still ships the precomputed summary inline because that
+  // path is a one-shot bulk-process flow, not interactive chat — context
+  // cost matters less and the caller benefits from having every initiative
+  // in front of it. Interactive PM chat (the disruption path below) drops
+  // the inline summary and tells the agent to fetch on demand. See
+  // specs/pm-chat-prompt.md §"Trigger_body changes".
   const trigger_body =
     input.trigger_kind === 'notes_intake'
-      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
+      ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary: buildSnapshotSummary(snapshot) })
       : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator input:\n> ${input.trigger_text}\n\n` +
-        `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
-        `${summary}\n\n` +
-        `Pick output mode per your SOUL.md:\n` +
-        `- If this is a disruption or planning ask warranting one or more structural changes, call ` +
-        `\`propose_changes\` with PmDiff[] + impact_md (reference only ids from the snapshot), then reply with the single line \`Proposal {id}.\`.\n` +
-        `- If this is conversational / ambiguous / status-check / has nothing structural to propose, reply with a brief conversational message (1–4 sentences). Do NOT call \`propose_changes\` with \`[]\` — that produces a misleading "0 changes" card. The conversational reply is surfaced to the operator as chat.`;
+        `Pick mode per your SOUL.md:\n` +
+        `- **Mode A (disruption / planning)** — call \`propose_changes\` with PmDiff[] + impact_md, then reply with the single line \`Proposal {id}.\`.\n` +
+        `- **Mode B (conversational)** — reply with 1–4 plain-text sentences. No \`propose_changes\` (especially not with \`[]\`).\n\n` +
+        `If you need workspace state to answer (status questions, "what's blocked", impact analysis, planning), call \`get_roadmap_snapshot\` via MCP. Skip it for greetings, ambiguous prompts, or "Test"-style inputs.\n\n` +
+        `Hard rule: every response MUST contain a \`propose_changes\` call with a non-empty array OR at least one full sentence of chat text. A fully empty reply is a bug.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
