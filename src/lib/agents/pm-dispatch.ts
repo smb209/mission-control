@@ -295,13 +295,13 @@ async function runDisruptionDispatchInBackground(
     input.trigger_kind === 'notes_intake'
       ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary })
       : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
-        `Operator-reported event:\n> ${input.trigger_text}\n\n` +
+        `Operator input:\n> ${input.trigger_text}\n\n` +
         `Workspace snapshot summary (call \`get_roadmap_snapshot\` via MCP for full detail):\n\n` +
         `${summary}\n\n` +
-        `Per your SOUL.md: analyse the disruption and call \`propose_changes\` ` +
-        `with a structured PmDiff[] and impact_md. Reference only ids that ` +
-        `appear in the snapshot. Output discipline: tool call FIRST, then a single-line ` +
-        `\`Proposal {id}.\` reply — no freeform summary (it's discarded).`;
+        `Pick output mode per your SOUL.md:\n` +
+        `- If this is a disruption or planning ask warranting one or more structural changes, call ` +
+        `\`propose_changes\` with PmDiff[] + impact_md (reference only ids from the snapshot), then reply with the single line \`Proposal {id}.\`.\n` +
+        `- If this is conversational / ambiguous / status-check / has nothing structural to propose, reply with a brief conversational message (1–4 sentences). Do NOT call \`propose_changes\` with \`[]\` — that produces a misleading "0 changes" card. The conversational reply is surfaced to the operator as chat.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
   let result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null = null;
