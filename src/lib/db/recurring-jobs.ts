@@ -32,6 +32,13 @@ export interface RecurringJob {
   run_count: number;
   created_at: string;
   created_by_agent_id: string | null;
+  /**
+   * Phase-2 research binding (migration 077). When set, this row is a
+   * research schedule and the scheduler dispatches via run-brief
+   * instead of dispatchScope.
+   */
+  topic_id: string | null;
+  brief_template: string | null;
 }
 
 export class RecurringJobValidationError extends Error {
@@ -54,6 +61,15 @@ export interface CreateRecurringJobInput {
   /** ISO datetime; defaults to now (fires immediately on first sweep). */
   first_run_at?: string;
   created_by_agent_id?: string | null;
+  /**
+   * Phase-2 research binding. Set both `topic_id` and `brief_template`
+   * to make this a research schedule. The scheduler will dispatch via
+   * run-brief; `scope_key_template` is unused in that path but the
+   * column remains NOT NULL, so callers can pass any placeholder
+   * (`createResearchSchedule` below fills one in for them).
+   */
+  topic_id?: string | null;
+  brief_template?: string | null;
 }
 
 export function createRecurringJob(input: CreateRecurringJobInput): RecurringJob {
@@ -74,6 +90,12 @@ export function createRecurringJob(input: CreateRecurringJobInput): RecurringJob
   if (!input.briefing_template.trim()) {
     throw new RecurringJobValidationError('briefing_template is required');
   }
+  // Research binding: both fields go together or neither.
+  if ((input.topic_id == null) !== (input.brief_template == null)) {
+    throw new RecurringJobValidationError(
+      'topic_id and brief_template must be set together or both omitted',
+    );
+  }
 
   const id = uuidv4();
   const nextRun = input.first_run_at ?? new Date().toISOString();
@@ -83,8 +105,9 @@ export function createRecurringJob(input: CreateRecurringJobInput): RecurringJob
        id, workspace_id, name, role, scope_key_template, briefing_template,
        initiative_id, task_id, cadence_seconds, attempt_strategy,
        status, last_run_at, last_run_scope_key, next_run_at,
-       consecutive_failures, run_count, created_at, created_by_agent_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, 0, 0, datetime('now'), ?)`,
+       consecutive_failures, run_count, created_at, created_by_agent_id,
+       topic_id, brief_template
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, 0, 0, datetime('now'), ?, ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -98,6 +121,8 @@ export function createRecurringJob(input: CreateRecurringJobInput): RecurringJob
       input.attempt_strategy ?? 'reuse',
       nextRun,
       input.created_by_agent_id ?? null,
+      input.topic_id ?? null,
+      input.brief_template ?? null,
     ],
   );
 
@@ -128,6 +153,76 @@ export function listForTask(taskId: string): RecurringJob[] {
     `SELECT * FROM recurring_jobs WHERE task_id = ? ORDER BY created_at DESC`,
     [taskId],
   );
+}
+
+/**
+ * Research phase 2: list every recurring research schedule (topic_id
+ * IS NOT NULL) for a topic, newest first.
+ */
+export function listResearchSchedulesForTopic(topicId: string): RecurringJob[] {
+  return queryAll<RecurringJob>(
+    `SELECT * FROM recurring_jobs WHERE topic_id = ? ORDER BY created_at DESC`,
+    [topicId],
+  );
+}
+
+/**
+ * Research phase 2: the next ~N due research schedules in a workspace
+ * (active + topic-bound), ordered by next_run_at ASC. Drives the
+ * "Upcoming" lane on /research.
+ */
+export function listUpcomingResearch(workspaceId: string, limit = 10): RecurringJob[] {
+  const cap = Math.min(Math.max(limit, 1), 100);
+  return queryAll<RecurringJob>(
+    `SELECT * FROM recurring_jobs
+       WHERE workspace_id = ?
+         AND topic_id IS NOT NULL
+         AND status = 'active'
+       ORDER BY next_run_at ASC
+       LIMIT ${cap}`,
+    [workspaceId],
+  );
+}
+
+export interface CreateResearchScheduleInput {
+  workspace_id: string;
+  topic_id: string;
+  brief_template: string;
+  cadence_seconds: number;
+  /** Defaults to a topic+template-derived label if omitted. */
+  name?: string;
+  /**
+   * Defaults to `now() + cadence_seconds` (wait one full cadence on
+   * first run). Pass an earlier ISO timestamp to fire sooner; the
+   * `run-now` endpoint sets this to `now()` to dispatch on the next
+   * sweep. See build-plan §3.3.
+   */
+  first_run_at?: string;
+  created_by_agent_id?: string | null;
+}
+
+/**
+ * Convenience constructor for research schedules. Fills in the
+ * NOT-NULL columns (`scope_key_template`, `briefing_template`) that
+ * the run-brief dispatch path doesn't actually use, then delegates to
+ * `createRecurringJob`.
+ */
+export function createResearchSchedule(input: CreateResearchScheduleInput): RecurringJob {
+  const firstRun = input.first_run_at ?? new Date(Date.now() + input.cadence_seconds * 1000).toISOString();
+  return createRecurringJob({
+    workspace_id: input.workspace_id,
+    name: input.name ?? `research:${input.topic_id}:${input.brief_template}`,
+    role: 'researcher',
+    // Placeholder — the research dispatch path ignores it but the
+    // column is NOT NULL with the {job_id}/{wsid} validator.
+    scope_key_template: 'research-brief-{job_id}',
+    briefing_template: 'researcher',
+    cadence_seconds: input.cadence_seconds,
+    first_run_at: firstRun,
+    created_by_agent_id: input.created_by_agent_id ?? null,
+    topic_id: input.topic_id,
+    brief_template: input.brief_template,
+  });
 }
 
 /**
