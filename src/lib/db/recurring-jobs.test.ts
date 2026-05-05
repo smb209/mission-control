@@ -21,6 +21,7 @@ import {
   listUpcomingResearch,
   markRunFailure,
   markRunSuccess,
+  recordBriefOutcome,
   RecurringJobValidationError,
   renderScopeKey,
   setJobStatus,
@@ -265,4 +266,80 @@ test('listUpcomingResearch: orders by next_run_at and excludes paused / non-rese
   const upcoming = listUpcomingResearch(ws, 10);
   assert.equal(upcoming.length, 2);
   assert.equal(upcoming[0].id, earliest.id);
+});
+
+// --- recordBriefOutcome (async outcome tracking) ------------------
+
+function makeScheduledAgentRun(workspaceId: string, scheduleId: string): string {
+  const id = `ar-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO agent_runs (id, workspace_id, kind, status, source_kind, source_ref, created_at, updated_at)
+     VALUES (?, ?, 'brief', 'queued', 'schedule', ?, datetime('now'), datetime('now'))`,
+    [id, workspaceId, scheduleId],
+  );
+  return id;
+}
+
+test('recordBriefOutcome: returns null for non-schedule runs', () => {
+  const ws = freshWorkspace();
+  const id = `ar-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO agent_runs (id, workspace_id, kind, status, source_kind, created_at, updated_at)
+     VALUES (?, ?, 'brief', 'queued', 'manual', datetime('now'), datetime('now'))`,
+    [id, ws],
+  );
+  assert.equal(recordBriefOutcome(id, 'failed'), null);
+  assert.equal(recordBriefOutcome(id, 'completed'), null);
+});
+
+test('recordBriefOutcome: failure bumps consecutive_failures, no next_run_at change', () => {
+  const ws = freshWorkspace();
+  const tp = freshTopic(ws);
+  const sched = createResearchSchedule({
+    workspace_id: ws, topic_id: tp, brief_template: 'general_brief', cadence_seconds: 60,
+  });
+  const ar = makeScheduledAgentRun(ws, sched.id);
+  const beforeNext = getRecurringJob(sched.id)!.next_run_at;
+
+  const out = recordBriefOutcome(ar, 'failed');
+  assert.equal(out?.consecutive_failures, 1);
+  assert.equal(out?.status, 'active');
+  // next_run_at MUST NOT be touched — dispatch already advanced it.
+  assert.equal(getRecurringJob(sched.id)!.next_run_at, beforeNext);
+});
+
+test('recordBriefOutcome: pauses after 3 async failures', () => {
+  const ws = freshWorkspace();
+  const tp = freshTopic(ws);
+  const sched = createResearchSchedule({
+    workspace_id: ws, topic_id: tp, brief_template: 'general_brief', cadence_seconds: 60,
+  });
+  // Three independent agent_runs all marked failed.
+  const ar1 = makeScheduledAgentRun(ws, sched.id);
+  const ar2 = makeScheduledAgentRun(ws, sched.id);
+  const ar3 = makeScheduledAgentRun(ws, sched.id);
+  recordBriefOutcome(ar1, 'failed');
+  recordBriefOutcome(ar2, 'failed');
+  const out = recordBriefOutcome(ar3, 'failed');
+  assert.equal(out?.consecutive_failures, 3);
+  assert.equal(out?.status, 'paused');
+});
+
+test('recordBriefOutcome: completion clears consecutive_failures', () => {
+  const ws = freshWorkspace();
+  const tp = freshTopic(ws);
+  const sched = createResearchSchedule({
+    workspace_id: ws, topic_id: tp, brief_template: 'general_brief', cadence_seconds: 60,
+  });
+  // Simulate two prior failures, then a successful run.
+  const ar1 = makeScheduledAgentRun(ws, sched.id);
+  const ar2 = makeScheduledAgentRun(ws, sched.id);
+  const ar3 = makeScheduledAgentRun(ws, sched.id);
+  recordBriefOutcome(ar1, 'failed');
+  recordBriefOutcome(ar2, 'failed');
+  assert.equal(getRecurringJob(sched.id)!.consecutive_failures, 2);
+
+  const out = recordBriefOutcome(ar3, 'completed');
+  assert.equal(out?.consecutive_failures, 0);
+  assert.equal(getRecurringJob(sched.id)!.consecutive_failures, 0);
 });

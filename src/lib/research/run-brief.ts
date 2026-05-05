@@ -49,6 +49,7 @@ import {
   type BriefTemplate,
 } from '@/lib/db/briefs';
 import { getTopic } from '@/lib/db/topics';
+import { recordBriefOutcome } from '@/lib/db/recurring-jobs';
 import { broadcast } from '@/lib/events';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { getRunnerAgent } from '@/lib/agents/runner';
@@ -323,6 +324,23 @@ function emit(
     broadcast({ type, payload });
   } catch (err) {
     console.error(`[run-brief] failed to broadcast ${type}:`, err);
+  }
+  // Async outcome tracking for research schedules: when a brief that
+  // came from a recurring schedule terminates, update the schedule's
+  // failure counter so async failures bump consecutive_failures and
+  // pause-after-3 fires correctly. The dispatch path's
+  // markRunSuccess already advanced next_run_at — we only adjust the
+  // failure book-keeping here. Non-schedule briefs return null and
+  // this is a no-op.
+  if (type === 'brief_completed' || type === 'brief_failed') {
+    const agentRunId = payload.agent_run_id;
+    if (typeof agentRunId === 'string' && agentRunId) {
+      try {
+        recordBriefOutcome(agentRunId, type === 'brief_completed' ? 'completed' : 'failed');
+      } catch (err) {
+        console.error(`[run-brief] recordBriefOutcome failed:`, err);
+      }
+    }
   }
 }
 
