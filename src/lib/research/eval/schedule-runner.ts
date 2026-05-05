@@ -144,6 +144,25 @@ export async function runScheduleEval(opts: ScheduleEvalOptions = {}): Promise<S
     }
   } finally {
     __setSendChatClientForTests(null);
+    // Self-cleanup: the eval creates a workspace + topic + schedule
+    // with cadence_seconds=1 specifically so the sweeper picks it up
+    // without waiting. If we leave that schedule in place, the
+    // production recurring scheduler will keep firing it every 60s
+    // forever, accumulating gateway sessions for no real benefit.
+    // Delete the schedule + scrub the brief row + drop the workspace
+    // so the eval is hermetic and doesn't pollute MC's running state.
+    try {
+      run(`DELETE FROM recurring_jobs WHERE id = ?`, [schedule.id]);
+      run(`DELETE FROM briefs WHERE workspace_id = ?`, [workspaceId]);
+      run(`DELETE FROM agent_runs WHERE workspace_id = ?`, [workspaceId]);
+      run(`DELETE FROM topics WHERE id = ?`, [topic.id]);
+      // The eval creates a fresh workspace per run (uuid suffix) so
+      // dropping it is safe. Workspace cascade-deletes the agent
+      // rows we inserted; runner is in 'default' so it's untouched.
+      run(`DELETE FROM workspaces WHERE id = ?`, [workspaceId]);
+    } catch (err) {
+      console.warn('[schedule-eval] cleanup failed:', (err as Error).message);
+    }
   }
 
   const after = getRecurringJob(schedule.id);
