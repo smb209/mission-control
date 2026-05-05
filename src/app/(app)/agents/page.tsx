@@ -48,6 +48,24 @@ import { showAlertDialog } from '@/lib/show-alert';
 
 type FilterTab = 'all' | 'working' | 'standby';
 
+interface HardStopResult {
+  pattern: string;
+  matched: number;
+  aborted: string[];
+  failed: { id: string; error: string }[];
+  local_marked: {
+    openclaw_sessions: number;
+    research_cycles: number;
+    ideation_cycles: number;
+  };
+  // Filled in after the operator clicks Delete.
+  delete?: {
+    deleted: string[];
+    failed: { key: string; error: string }[];
+    local_rows_removed: number;
+  };
+}
+
 // Sortable columns. The action column is intentionally not sortable.
 type SortKey = 'name' | 'role' | 'model' | 'status' | 'gateway';
 interface SortState { key: SortKey; dir: 'asc' | 'desc' }
@@ -97,6 +115,8 @@ export default function AgentsPage() {
   const [hardStopBusy, setHardStopBusy] = useState(false);
   const [showHardStopDialog, setShowHardStopDialog] = useState(false);
   const [hardStopPattern, setHardStopPattern] = useState('');
+  const [hardStopResult, setHardStopResult] = useState<HardStopResult | null>(null);
+  const [deletingKeys, setDeletingKeys] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   // Replaces native window.confirm() — see §1.7 finding in PREVIEW_TEST_FINDINGS.
   // The native dialog blocks automation tooling and breaks the test-flow walk.
@@ -356,24 +376,7 @@ export default function AgentsPage() {
         showAlertDialog('Hard stop failed', data.error || 'Failed to abort sessions');
         return;
       }
-      const lines: string[] = [
-        `Pattern: ${data.pattern}`,
-        `Matched ${data.matched} session(s) on the gateway.`,
-        `Aborted: ${data.aborted.length}`,
-      ];
-      if (data.failed?.length) {
-        lines.push(`Abort failed: ${data.failed.length}`);
-      }
-      const lm = data.local_marked ?? {};
-      lines.push(
-        `Local rows scrubbed — openclaw_sessions: ${lm.openclaw_sessions ?? 0}, ` +
-          `research_cycles: ${lm.research_cycles ?? 0}, ideation_cycles: ${lm.ideation_cycles ?? 0}.`,
-      );
-      if (data.aborted.length) {
-        lines.push('', 'Aborted keys:', ...data.aborted.slice(0, 20).map((k: string) => `  ${k}`));
-        if (data.aborted.length > 20) lines.push(`  …and ${data.aborted.length - 20} more`);
-      }
-      showAlertDialog('Hard stop result', lines.join('\n'));
+      setHardStopResult(data as HardStopResult);
       setShowHardStopDialog(false);
       setHardStopPattern('');
       // Refresh session display so the matrix reflects ended rows.
@@ -382,6 +385,29 @@ export default function AgentsPage() {
       showAlertDialog('Hard stop failed', `Request failed: ${(err as Error).message}`);
     } finally {
       setHardStopBusy(false);
+    }
+  };
+
+  const doDeleteStoppedSessions = async () => {
+    if (!hardStopResult || hardStopResult.aborted.length === 0) return;
+    setDeletingKeys(true);
+    try {
+      const res = await fetch('/api/openclaw/sessions/delete-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: hardStopResult.aborted }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAlertDialog('Delete failed', data.error || 'Failed to delete sessions');
+        return;
+      }
+      setHardStopResult({ ...hardStopResult, delete: data });
+      void loadOpenClawSessions();
+    } catch (err) {
+      showAlertDialog('Delete failed', `Request failed: ${(err as Error).message}`);
+    } finally {
+      setDeletingKeys(false);
     }
   };
 
@@ -732,6 +758,121 @@ export default function AgentsPage() {
           }}
         />
       )}
+      {hardStopResult && (
+        <HardStopResultDialog
+          result={hardStopResult}
+          deleting={deletingKeys}
+          onDelete={doDeleteStoppedSessions}
+          onDismiss={() => {
+            if (deletingKeys) return;
+            setHardStopResult(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface HardStopResultDialogProps {
+  result: HardStopResult;
+  deleting: boolean;
+  onDelete: () => void;
+  onDismiss: () => void;
+}
+
+/**
+ * Result modal shown after an abort-matching call resolves. Surfaces
+ * the count summary and a sample of aborted keys, plus a Delete
+ * affordance that calls /api/openclaw/sessions/delete-keys with the
+ * just-aborted set. After delete, the modal swaps to a result panel
+ * for the delete pass; Dismiss closes the whole thing.
+ */
+function HardStopResultDialog({ result, deleting, onDelete, onDismiss }: HardStopResultDialogProps) {
+  const lm = result.local_marked;
+  const del = result.delete;
+  const showDelete = result.aborted.length > 0 && !del;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onDismiss();
+      }}
+    >
+      <div className="w-full max-w-lg rounded-lg bg-mc-bg border border-mc-border shadow-xl p-5">
+        <h2 className="text-base font-semibold text-mc-text">Hard stop result</h2>
+        <div className="mt-3 space-y-1.5 text-sm text-mc-text-secondary">
+          <div>
+            Pattern: <code className="px-1 rounded bg-mc-bg-secondary text-mc-text">{result.pattern}</code>
+          </div>
+          <div>
+            Matched <span className="text-mc-text font-medium">{result.matched}</span> session(s) ·
+            aborted <span className="text-mc-text font-medium">{result.aborted.length}</span>
+            {result.failed.length > 0 && (
+              <> · <span className="text-amber-400">{result.failed.length} abort failure(s)</span></>
+            )}
+          </div>
+          <div className="text-xs">
+            Local rows scrubbed: openclaw_sessions {lm.openclaw_sessions} · research_cycles{' '}
+            {lm.research_cycles} · ideation_cycles {lm.ideation_cycles}
+          </div>
+        </div>
+
+        {result.aborted.length > 0 && (
+          <details className="mt-3 text-xs text-mc-text-secondary">
+            <summary className="cursor-pointer hover:text-mc-text">
+              Aborted keys ({result.aborted.length})
+            </summary>
+            <pre className="mt-2 max-h-40 overflow-auto rounded bg-mc-bg-secondary p-2 text-[11px] leading-relaxed font-mono">
+              {result.aborted.slice(0, 100).join('\n')}
+              {result.aborted.length > 100 && `\n…and ${result.aborted.length - 100} more`}
+            </pre>
+          </details>
+        )}
+
+        {del && (
+          <div className="mt-4 rounded border border-mc-border bg-mc-bg-secondary p-3 text-sm">
+            <div className="text-mc-text font-medium">Delete result</div>
+            <div className="mt-1 text-mc-text-secondary text-xs">
+              Removed from gateway: <span className="text-mc-text">{del.deleted.length}</span>
+              {del.failed.length > 0 && (
+                <> · <span className="text-amber-400">{del.failed.length} delete failure(s)</span></>
+              )}{' '}
+              · local openclaw_sessions rows removed:{' '}
+              <span className="text-mc-text">{del.local_rows_removed}</span>
+            </div>
+            {del.failed.length > 0 && (
+              <details className="mt-2 text-xs text-mc-text-secondary">
+                <summary className="cursor-pointer hover:text-mc-text">First failures</summary>
+                <pre className="mt-1 max-h-32 overflow-auto rounded bg-mc-bg p-2 text-[11px] font-mono">
+                  {del.failed.slice(0, 20).map((f) => `${f.key}\n  ${f.error}`).join('\n')}
+                </pre>
+              </details>
+            )}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm rounded border border-mc-border text-mc-text-secondary hover:bg-mc-bg-secondary disabled:opacity-50"
+            onClick={onDismiss}
+            disabled={deleting}
+          >
+            Dismiss
+          </button>
+          {showDelete && (
+            <button
+              type="button"
+              className="px-3 py-1.5 text-sm rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 inline-flex items-center gap-2"
+              onClick={onDelete}
+              disabled={deleting}
+            >
+              {deleting && <Loader2 className="w-4 h-4 animate-spin" />}
+              {deleting ? 'Deleting…' : `Delete ${result.aborted.length} from gateway`}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

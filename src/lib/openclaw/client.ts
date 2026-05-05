@@ -646,6 +646,16 @@ export class OpenClawClient extends EventEmitter {
     return this.call('sessions.abort', { key: sessionKey });
   }
 
+  /**
+   * Delete a session from the gateway entirely. Used by the
+   * "Hard stop matching" → Delete affordance on the agents page;
+   * abort kills the run, delete removes the session row so the
+   * gateway's session list shrinks.
+   */
+  async deleteSession(sessionKey: string): Promise<unknown> {
+    return this.call('sessions.delete', { key: sessionKey });
+  }
+
   // Agent methods
   async listAgents(): Promise<unknown[]> {
     const result = await this.call<{ agents?: unknown[] }>('agents.list');
