@@ -16,6 +16,7 @@ import type { Agent } from '@/lib/types';
 import type { PmProposalTriggerKind } from '@/lib/db/pm-proposals';
 import {
   sendChatAndAwaitReply,
+  type AgentEvent,
   type ChatEvent,
 } from '@/lib/openclaw/send-chat';
 import { buildBriefing, type BriefingRole } from './briefing';
@@ -87,6 +88,13 @@ export interface DispatchScopeInput {
   attempt_strategy?: 'fresh' | 'reuse';
   /** Optional event listener forwarded to sendChatAndAwaitReply. */
   onEvent?: (event: ChatEvent) => void;
+  /**
+   * Optional agent_event listener forwarded to sendChatAndAwaitReply.
+   * Tool calls, tool results, and status transitions ride this
+   * channel; pm-dispatch's PR D taps it to surface tool calls in
+   * the operator's in-flight panel.
+   */
+  onAgentEvent?: (event: AgentEvent) => void;
   /**
    * Test seam: when set, returns the briefing without dispatching.
    * Used by unit tests that don't want to mock the gateway.
@@ -179,6 +187,7 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
     timeoutMs: input.timeoutMs,
     sessionSuffix: input.session_suffix,
     onEvent: input.onEvent,
+    onAgentEvent: input.onAgentEvent,
   });
 
   return {

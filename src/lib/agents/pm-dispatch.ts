@@ -48,6 +48,7 @@ import { getOpenClawClient } from '@/lib/openclaw/client';
 import {
   sendChatAndAwaitReply,
   __setSendChatClientForTests,
+  type AgentEvent,
   type ChatEvent,
   type SendChatClient,
 } from '@/lib/openclaw/send-chat';
@@ -377,6 +378,34 @@ async function runDisruptionDispatchInBackground(
     let lastDeltaBroadcastAt = 0;
     let accumulatedText = '';
     const DELTA_BROADCAST_INTERVAL_MS = 250;
+    // Tool-call surfacing (PR D). agent_event payloads carry tool
+    // calls / tool results / status transitions. Broadcast each
+    // matching event as a `pm_dispatch_in_flight` event with
+    // `kind: 'tool_call'` plus a best-effort summary so /pm can
+    // render "PM is calling X…" / "PM noted: Y…" lines next to the
+    // streaming preview. Payload shape varies; we extract what we
+    // can and ship the raw object for the UI to render flexibly.
+    const onAgentEvent = (event: AgentEvent): void => {
+      try {
+        const summary = summariseAgentEvent(event);
+        if (!summary) return;
+        broadcast({
+          type: 'pm_dispatch_in_flight',
+          payload: {
+            workspace_id: input.workspace_id,
+            correlation_id: correlationId,
+            placeholder_id: placeholder.id,
+            kind: 'tool_call',
+            tool: summary.tool,
+            phase: summary.phase,
+            note: summary.note,
+          },
+        });
+      } catch {
+        // Diagnostics-only; never let it break dispatch.
+      }
+    };
+
     const onEvent = (event: ChatEvent): void => {
       try {
         const msgText = readChatEventMessage(event);
@@ -429,6 +458,7 @@ async function runDisruptionDispatchInBackground(
       idempotencyKey: `pm-dispatch-${correlationId}`,
       timeoutMs: namedAgentTimeoutMs(),
       onEvent,
+      onAgentEvent,
     });
     result = dispatch.reply;
   } catch (err) {
@@ -577,6 +607,46 @@ function extractAgentReplyText(
   const fromDone = readMessage(result.doneEvent?.message).trim();
   if (fromDone) return fromDone;
   return (result.reply ?? []).map(e => readMessage(e.message)).join('').trim();
+}
+
+/**
+ * Defensive heuristic for extracting "what is the PM doing right
+ * now?" out of an agent_event payload. The OpenClaw protocol
+ * doesn't pin the payload shape to a single schema — different
+ * event kinds carry different fields. We try the names we've
+ * observed in practice (`tool`, `name`, `function`, `event`,
+ * `kind`, `phase`, `step`) and fall back to null when nothing
+ * useful surfaces — caller suppresses null-summary events.
+ *
+ * Returns:
+ *   - tool: the tool / event name to render ("propose_changes",
+ *     "take_note", "get_roadmap_snapshot", etc.)
+ *   - phase: optional — 'started' | 'completed' | 'failed' (or
+ *     whatever the gateway tags) if we can find it.
+ *   - note: optional one-line excerpt of any human-readable text
+ *     in the payload (note bodies, error messages).
+ */
+function summariseAgentEvent(
+  event: AgentEvent,
+): { tool: string; phase?: string; note?: string } | null {
+  const pickStr = (...keys: string[]): string | undefined => {
+    for (const k of keys) {
+      const v = event[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return undefined;
+  };
+  const tool = pickStr('tool', 'name', 'function', 'event', 'kind');
+  if (!tool) return null;
+
+  const phase = pickStr('phase', 'step', 'state', 'status');
+
+  // Pull a short note from anything resembling a body / message /
+  // text field. Capped so we never broadcast a huge payload.
+  const noteRaw = pickStr('note', 'message', 'text', 'body', 'summary', 'description');
+  const note = noteRaw ? noteRaw.slice(0, 200) : undefined;
+
+  return { tool, phase, note };
 }
 
 /**
