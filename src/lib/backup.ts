@@ -573,11 +573,15 @@ export function registerBackupSchedule(getLiveDb: () => Database.Database): void
     }
   };
 
-  g.__mcBackupBoot = setTimeout(() => { void tick('boot'); }, 30_000);
-  g.__mcBackupTimer = setInterval(
+  const boot = setTimeout(() => { void tick('boot'); }, 30_000);
+  const scheduled = setInterval(
     () => { void tick('scheduled'); },
     cfg.intervalHours * 60 * 60 * 1000,
   );
+  if (typeof boot.unref === 'function') boot.unref();
+  if (typeof scheduled.unref === 'function') scheduled.unref();
+  g.__mcBackupBoot = boot;
+  g.__mcBackupTimer = scheduled;
 
   console.log(
     `[Backup] scheduled: dir=${cfg.backupDir}, every ${cfg.intervalHours}h, retain=${cfg.retain}`,

@@ -29,8 +29,6 @@ import type { BriefingRole } from './briefing';
 const SWEEP_INTERVAL_MS = 60_000;
 const PAUSE_THRESHOLD = 3;
 
-let timer: NodeJS.Timeout | null = null;
-
 function isBriefingRole(role: string): role is BriefingRole {
   return (
     role === 'pm' ||
@@ -265,14 +263,12 @@ async function sweep(): Promise<void> {
  */
 export function ensureRecurringSchedulerStarted(): void {
   const g = globalThis as unknown as { __mcRecurringSchedulerTimer?: NodeJS.Timeout };
-  if (g.__mcRecurringSchedulerTimer || timer) return;
-  timer = setInterval(() => {
+  if (g.__mcRecurringSchedulerTimer) return;
+  const t = setInterval(() => {
     void sweep().catch((err) => console.error('[recurring] sweep error:', err));
   }, SWEEP_INTERVAL_MS);
-  g.__mcRecurringSchedulerTimer = timer;
-  // Don't fire immediately on startup — give the gateway a chance to
-  // connect first. Workspaces with `next_run_at` already in the past
-  // will still pick up on the first interval tick.
+  if (typeof t.unref === 'function') t.unref();
+  g.__mcRecurringSchedulerTimer = t;
 }
 
 /** Test seam — stop the scheduler so tests don't leak timers. */
@@ -281,9 +277,5 @@ export function __stopRecurringSchedulerForTests(): void {
   if (g.__mcRecurringSchedulerTimer) {
     clearInterval(g.__mcRecurringSchedulerTimer);
     g.__mcRecurringSchedulerTimer = undefined;
-  }
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
   }
 }
