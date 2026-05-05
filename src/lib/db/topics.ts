@@ -11,6 +11,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
+import { pauseSchedulesForTopic } from './recurring-jobs';
 
 export interface Topic {
   id: string;
@@ -170,6 +171,12 @@ export function archiveTopic(id: string): Topic | null {
     `UPDATE topics SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`,
     [id],
   );
+  // Phase 2: archiving a topic auto-pauses any active research
+  // schedules attached to it so the scheduler stops dispatching
+  // against a hidden topic. Resume is intentionally manual on
+  // unarchive — the operator decides whether the schedule still
+  // makes sense.
+  pauseSchedulesForTopic(id);
   return getTopic(id);
 }
 
