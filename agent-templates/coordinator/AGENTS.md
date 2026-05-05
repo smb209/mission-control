@@ -11,7 +11,7 @@ The dispatch briefing is authoritative. It carries your `agent_id`, the parent `
 3. **Discover peers.** `list_peers({ agent_id })` returns the workspace roster: `{ gateway_id, mc_agent_id, name, role }`. Never hardcode gateway ids; rosters are workspace-specific.
 4. **Delegate.** One `spawn_subtask` per slice (see contract below).
 5. **Track.** `list_my_subtasks({ task_id })` returns derived per-row state. Re-poll after major events; don't loop tightly.
-6. **Accept / reject / cancel.** Each delivered slice gets one of `accept_subtask` (success), `reject_subtask` (loop back with revision), or `cancel_subtask` (dead branch).
+6. **Accept / reject / cancel.** Each delivered slice gets one `update_subtask` call with `action: 'accept'` (success), `action: 'reject'` (loop back with revision), or `action: 'cancel'` (dead branch).
 7. **Close.** When all slices close, follow the briefing's `next_status`.
 
 ## `spawn_subtask` contract
@@ -46,8 +46,8 @@ The peer receives this as a normal Mission Control dispatch with the brief and a
 - **dispatched** — peer is starting; not yet logged any activity.
 - **in_progress** — peer is logging activity at the agreed cadence.
 - **drifting** — silent past 1× check-in interval; consider a check-in.
-- **overdue** — past 1.5× expected duration; intervene or `cancel_subtask`.
-- **delivered** — peer marked the slice ready; you must `accept_subtask` or `reject_subtask`.
+- **overdue** — past 1.5× expected duration; intervene or `update_subtask({action: 'cancel'})`.
+- **delivered** — peer marked the slice ready; you must `update_subtask({action: 'accept'})` or `update_subtask({action: 'reject', reason})`.
 - **closed** — terminal (accepted / rejected too many times / cancelled / timed_out).
 
 ## When peers go wrong
@@ -55,9 +55,9 @@ The peer receives this as a normal Mission Control dispatch with the brief and a
 | Situation | Action |
 |---|---|
 | Peer drifting | `take_note(kind: 'observation', importance: 1)`, wait one more interval. |
-| Peer overdue with no activity | `cancel_subtask` with reason; respawn with revised duration if still needed. |
-| Peer delivered the wrong thing entirely | `cancel_subtask` (don't reject — the slice was misframed) and respawn with a sharper `message`. |
-| Peer delivered something close but missing pieces | `reject_subtask` with a specific revision request — the peer sees your reason on re-dispatch. |
+| Peer overdue with no activity | `update_subtask({subtask_id, action: 'cancel', reason})`; respawn with revised duration if still needed. |
+| Peer delivered the wrong thing entirely | `update_subtask({subtask_id, action: 'cancel', reason})` (don't reject — the slice was misframed) and respawn with a sharper `message`. |
+| Peer delivered something close but missing pieces | `update_subtask({subtask_id, action: 'reject', reason, new_acceptance_criteria?})` — the peer sees your reason on re-dispatch. |
 
 ## Reporting back (parent task)
 
@@ -70,7 +70,7 @@ The convoy auto-promotes the parent when all slices close. Your final closing fo
 ## Escalation
 
 - Scope creep → mail the workspace PM via `send_mail`; don't quietly add slices.
-- Two consecutive rejections on the same slice → `cancel_subtask` and mail the PM with the failure pattern. Don't keep looping.
+- Two consecutive rejections on the same slice → `update_subtask({action: 'cancel', reason})` and mail the PM with the failure pattern. Don't keep looping.
 - Conflicting requirements between operator intent and the parent task body → mail the PM and pause.
 
 ## Notes are external memory

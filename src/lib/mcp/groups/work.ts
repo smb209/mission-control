@@ -44,6 +44,180 @@ import {
   noteToPayload,
 } from '../shared';
 
+// ── update_subtask action handlers ──────────────────────────────────
+// Helpers extracted from the legacy accept_subtask / reject_subtask /
+// cancel_subtask MCP tools (PR 4 of the MCP surface v2 stack). Behavior
+// is intentionally byte-equivalent to those handlers; the tool layer
+// just dispatches to whichever helper matches `args.action`.
+
+async function acceptSubtaskImpl(args: { agent_id: string; subtask_id: string }) {
+  const row = queryOne<{ task_id: string; parent_task_id: string; task_status: string }>(
+    `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, t.status AS task_status
+       FROM convoy_subtasks cs
+       JOIN convoys c ON c.id = cs.convoy_id
+       JOIN tasks t ON t.id = cs.task_id
+      WHERE cs.id = ?`,
+    [args.subtask_id],
+  );
+  if (!row) {
+    return { isError: true, content: [{ type: 'text' as const, text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
+  }
+  const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
+  assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
+
+  if (row.task_status === 'done') {
+    return textResult(`Subtask ${args.subtask_id} was already done. No-op.`, { subtask_id: args.subtask_id, already_done: true });
+  }
+
+  const result = transitionTaskStatus({
+    taskId: row.task_id,
+    actingAgentId: args.agent_id,
+    newStatus: 'done',
+  });
+  if (!result.ok) {
+    return {
+      isError: true,
+      content: [{ type: 'text' as const, text: `Cannot accept subtask: ${result.error}` }],
+      structuredContent: {
+        error: result.code,
+        message: result.error,
+        ...(result.missingDeliverableIds ? { missing_deliverable_ids: result.missingDeliverableIds } : {}),
+      },
+    };
+  }
+
+  logActivity({
+    taskId: row.parent_task_id,
+    actingAgentId: args.agent_id,
+    activityType: 'updated',
+    message: `[delegation_accepted] subtask=${args.subtask_id} child_task=${row.task_id}`,
+  });
+
+  // checkConvoyCompletion may promote the parent task.
+  const { checkConvoyCompletion } = await import('@/lib/convoy');
+  const convoyId = queryOne<{ convoy_id: string }>(
+    'SELECT convoy_id FROM convoy_subtasks WHERE id = ?', [args.subtask_id],
+  )?.convoy_id;
+  if (convoyId) checkConvoyCompletion(convoyId);
+
+  return textResult(`Accepted subtask ${args.subtask_id}.`, {
+    subtask_id: args.subtask_id,
+    child_task_id: row.task_id,
+    parent_task_id: row.parent_task_id,
+  });
+}
+
+async function rejectSubtaskImpl(args: {
+  agent_id: string;
+  subtask_id: string;
+  reason: string;
+  new_acceptance_criteria?: string[];
+}) {
+  const row = queryOne<{ task_id: string; parent_task_id: string; task_status: string }>(
+    `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, t.status AS task_status
+       FROM convoy_subtasks cs
+       JOIN convoys c ON c.id = cs.convoy_id
+       JOIN tasks t ON t.id = cs.task_id
+      WHERE cs.id = ?`,
+    [args.subtask_id],
+  );
+  if (!row) {
+    return { isError: true, content: [{ type: 'text' as const, text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
+  }
+  const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
+  assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
+
+  const now = new Date().toISOString();
+  run(
+    `UPDATE tasks SET status = 'in_progress', status_reason = ?, updated_at = ? WHERE id = ?`,
+    [`rejected: ${args.reason}`, now, row.task_id],
+  );
+  if (args.new_acceptance_criteria && args.new_acceptance_criteria.length > 0) {
+    run(
+      `UPDATE convoy_subtasks SET acceptance_criteria = ? WHERE id = ?`,
+      [JSON.stringify(args.new_acceptance_criteria), args.subtask_id],
+    );
+  }
+
+  logActivity({
+    taskId: row.parent_task_id,
+    actingAgentId: args.agent_id,
+    activityType: 'updated',
+    message: `[delegation_rejected] subtask=${args.subtask_id} reason="${args.reason.replace(/"/g, "'")}"`,
+  });
+
+  // Notify the peer through their chat session so they see the
+  // rejection inline. Best-effort — if the openclaw client is down,
+  // the mailbox fallback still carries the message.
+  const peer = queryOne<{ id: string; gateway_agent_id: string | null; name: string; session_key_prefix: string | null }>(
+    'SELECT a.id, a.gateway_agent_id, a.name, a.session_key_prefix FROM tasks t JOIN agents a ON a.id = t.assigned_agent_id WHERE t.id = ?',
+    [row.task_id],
+  );
+  if (peer?.gateway_agent_id) {
+    try {
+      const client = getOpenClawClient();
+      if (!client.isConnected()) await client.connect();
+      const { sendChatToAgent } = await import('@/lib/openclaw/send-chat');
+      const result = await sendChatToAgent({
+        agent: {
+          id: peer.id,
+          name: peer.name,
+          gateway_agent_id: peer.gateway_agent_id,
+          session_key_prefix: peer.session_key_prefix ?? undefined,
+        },
+        message: `🔁 **Subtask rejected by coordinator.**\n\n**Reason:** ${args.reason}\n\n${args.new_acceptance_criteria?.length ? `**Updated acceptance criteria:**\n${args.new_acceptance_criteria.map(c => `- ${c}`).join('\n')}\n\n` : ''}Please address the issues and re-register deliverables, then move status back to review.`,
+        idempotencyKey: `reject-${args.subtask_id}-${Date.now()}`,
+        sessionSuffix: `task-${row.task_id}`,
+      });
+      if (!result.sent && result.error) {
+        console.warn('[update_subtask:reject] chat.send notification failed:', result.error.message);
+      }
+    } catch (err) {
+      console.warn('[update_subtask:reject] chat.send notification failed:', (err as Error).message);
+    }
+  }
+
+  return textResult(`Rejected subtask ${args.subtask_id}. Peer task ${row.task_id} moved back to in_progress.`, {
+    subtask_id: args.subtask_id,
+    child_task_id: row.task_id,
+  });
+}
+
+async function cancelSubtaskImpl(args: { agent_id: string; subtask_id: string; reason: string }) {
+  const row = queryOne<{ task_id: string; parent_task_id: string; convoy_id: string }>(
+    `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, cs.convoy_id AS convoy_id
+       FROM convoy_subtasks cs JOIN convoys c ON c.id = cs.convoy_id WHERE cs.id = ?`,
+    [args.subtask_id],
+  );
+  if (!row) {
+    return { isError: true, content: [{ type: 'text' as const, text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
+  }
+  const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
+  assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
+
+  const now = new Date().toISOString();
+  run(
+    `UPDATE tasks SET status = 'cancelled', status_reason = ?, updated_at = ? WHERE id = ?`,
+    [`cancelled_by_coordinator: ${args.reason}`, now, row.task_id],
+  );
+  run(
+    `UPDATE convoys SET failed_subtasks = failed_subtasks + 1, updated_at = ? WHERE id = ?`,
+    [now, row.convoy_id],
+  );
+
+  logActivity({
+    taskId: row.parent_task_id,
+    actingAgentId: args.agent_id,
+    activityType: 'updated',
+    message: `[delegation_cancelled] subtask=${args.subtask_id} reason="${args.reason.replace(/"/g, "'")}"`,
+  });
+
+  return textResult(`Cancelled subtask ${args.subtask_id}.`, {
+    subtask_id: args.subtask_id,
+    child_task_id: row.task_id,
+  });
+}
+
 export function registerWorkTools(server: McpServer): void {
   // get_task ──────────────────────────────────────────────────────
   server.registerTool(
@@ -455,7 +629,7 @@ export function registerWorkTools(server: McpServer): void {
 
         // If the task just moved to a delivery state (review/testing/
         // verification) AND it's a delegation subtask, mail the
-        // coordinator so they can call accept_subtask / reject_subtask
+        // coordinator so they can call update_subtask({action:'accept'|'reject'})
         // without polling list_my_subtasks. Silent if the task isn't in
         // a convoy or the coordinator assignment is missing.
         if (['review', 'testing', 'verification'].includes(args.status)) {
@@ -476,7 +650,7 @@ export function registerWorkTools(server: McpServer): void {
               fromAgentId: args.agent_id,
               toAgentId: ctx.coordinator_id,
               subject: `DELEGATION: ready_for_review — ${ctx.slice ?? ctx.parent_title}`,
-              body: `Subtask ${ctx.subtask_id} is ready for review (status=${args.status}).\n\nCall accept_subtask({subtask_id: "${ctx.subtask_id}"}) if it meets the acceptance criteria, or reject_subtask with a reason to bounce it back.`,
+              body: `Subtask ${ctx.subtask_id} is ready for review (status=${args.status}).\n\nCall update_subtask({subtask_id: "${ctx.subtask_id}", action: "accept"}) if it meets the acceptance criteria, or update_subtask({subtask_id: "${ctx.subtask_id}", action: "reject", reason: "..."}) to bounce it back.`,
               taskId: ctx.parent_task_id,
               convoyId: ctx.convoy_id,
               push: true,
@@ -564,8 +738,8 @@ export function registerWorkTools(server: McpServer): void {
             ? `DELEGATION: redecompose_requested — ${ctx.slice ?? 'subtask'}`
             : `DELEGATION: blocked — ${ctx.slice ?? 'subtask'}`,
           body: `Subtask ${ctx.subtask_id} failed.\n\n**Reason:** ${args.reason}\n\n${redecompose
-            ? 'The peer is asking you to re-decompose this slice. Call cancel_subtask on this row and issue fresh spawn_subtask calls with a better-scoped brief.'
-            : 'Peer declared itself blocked. Inspect the reason and decide: reject_subtask (redo), cancel_subtask (drop), or answer and redispatch.'}`,
+            ? 'The peer is asking you to re-decompose this slice. Call update_subtask({action: "cancel", reason: "..."}) on this row and issue fresh spawn_subtask calls with a better-scoped brief.'
+            : 'Peer declared itself blocked. Inspect the reason and decide: update_subtask({action: "reject", ...}) (redo), update_subtask({action: "cancel", ...}) (drop), or answer and redispatch.'}`,
           taskId: ctx.parent_task_id,
           convoyId: ctx.convoy_id,
           push: true,
@@ -842,7 +1016,7 @@ export function registerWorkTools(server: McpServer): void {
         acceptance_criteria: z
           .array(z.string().min(10).max(500))
           .min(1)
-          .describe('Each criterion ≥10 chars. The peer must satisfy all of them for the coordinator to accept_subtask.'),
+          .describe('Each criterion ≥10 chars. The peer must satisfy all of them for the coordinator to update_subtask({action: "accept"}).'),
         expected_duration_minutes: z
           .number()
           .int()
@@ -981,14 +1155,14 @@ export function registerWorkTools(server: McpServer): void {
 
       if (dispatchError) {
         // The subtask row exists but dispatch failed — the coordinator
-        // should see this explicitly and can call cancel_subtask +
+        // should see this explicitly and can call update_subtask({action:'cancel'}) +
         // retry. We do NOT auto-rollback: the convoy row is real,
         // half-done is visible, no silent data loss.
         return {
           isError: true,
           content: [{
             type: 'text',
-            text: `Subtask ${spawn.subtaskId} created but dispatch failed: ${dispatchError}. The subtask row exists — call cancel_subtask to release it, or retry.`,
+            text: `Subtask ${spawn.subtaskId} created but dispatch failed: ${dispatchError}. The subtask row exists — call update_subtask({action: "cancel", reason: "..."}) to release it, or retry.`,
           }],
           structuredContent: {
             error: 'dispatch_failed',
@@ -1138,214 +1312,72 @@ export function registerWorkTools(server: McpServer): void {
     }),
   );
 
-  // accept_subtask ────────────────────────────────────────────────
+  // update_subtask ────────────────────────────────────────────────
+  // Single entry-point for the subtask lifecycle. The action handler
+  // helpers below preserve the exact behavior of the previous
+  // accept_subtask / reject_subtask / cancel_subtask tools.
   server.registerTool(
-    'accept_subtask',
+    'update_subtask',
     {
-      title: 'Accept a peer\'s delivered delegation (coordinator-only)',
+      title: 'Accept, reject, or cancel a delegated subtask (coordinator-only)',
       description:
-        "Promote a delivered child task (status=review/verification/testing) to done. Bumps the convoy's completed_subtasks counter and may promote the parent via checkConvoyCompletion. Call this after verifying the peer's deliverables meet the acceptance criteria you declared in spawn_subtask.",
+        "Single entry-point for the subtask lifecycle. Pick one of three actions:\n" +
+        "- `accept` — the peer's deliverables meet your acceptance criteria. Promotes the child task to done. No extra fields needed.\n" +
+        "- `reject` — bounce the subtask back to in_progress with a reason the peer reads. Use when deliverables exist but don't meet criteria. Requires `reason` (≥10 chars). Optional `new_acceptance_criteria` replaces the convoy_subtasks.acceptance_criteria for the next round.\n" +
+        "- `cancel` — release the subtask entirely (scope change, dead branch, demonstrably stuck). The child task moves to cancelled and the convoy's failed_subtasks counter bumps so the subtask no longer blocks completion. Requires `reason` (≥5 chars).",
       inputSchema: {
         agent_id: agentIdArg,
         subtask_id: z.string().min(1).describe('The convoy_subtasks row id from spawn_subtask.'),
-      },
-      annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false },
-    },
-    trace('accept_subtask', async (args) => {
-      const row = queryOne<{ task_id: string; parent_task_id: string; task_status: string }>(
-        `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, t.status AS task_status
-           FROM convoy_subtasks cs
-           JOIN convoys c ON c.id = cs.convoy_id
-           JOIN tasks t ON t.id = cs.task_id
-          WHERE cs.id = ?`,
-        [args.subtask_id],
-      );
-      if (!row) {
-        return { isError: true, content: [{ type: 'text', text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
-      }
-      const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
-      assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
-
-      if (row.task_status === 'done') {
-        return textResult(`Subtask ${args.subtask_id} was already done. No-op.`, { subtask_id: args.subtask_id, already_done: true });
-      }
-
-      const result = transitionTaskStatus({
-        taskId: row.task_id,
-        actingAgentId: args.agent_id,
-        newStatus: 'done',
-      });
-      if (!result.ok) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `Cannot accept subtask: ${result.error}` }],
-          structuredContent: {
-            error: result.code,
-            message: result.error,
-            ...(result.missingDeliverableIds ? { missing_deliverable_ids: result.missingDeliverableIds } : {}),
-          },
-        };
-      }
-
-      logActivity({
-        taskId: row.parent_task_id,
-        actingAgentId: args.agent_id,
-        activityType: 'updated',
-        message: `[delegation_accepted] subtask=${args.subtask_id} child_task=${row.task_id}`,
-      });
-
-      // checkConvoyCompletion may promote the parent task.
-      const { checkConvoyCompletion } = await import('@/lib/convoy');
-      const convoyId = queryOne<{ convoy_id: string }>(
-        'SELECT convoy_id FROM convoy_subtasks WHERE id = ?', [args.subtask_id],
-      )?.convoy_id;
-      if (convoyId) checkConvoyCompletion(convoyId);
-
-      return textResult(`Accepted subtask ${args.subtask_id}.`, {
-        subtask_id: args.subtask_id,
-        child_task_id: row.task_id,
-        parent_task_id: row.parent_task_id,
-      });
-    }),
-  );
-
-  // reject_subtask ────────────────────────────────────────────────
-  server.registerTool(
-    'reject_subtask',
-    {
-      title: 'Reject a peer\'s delivered delegation with a reason (coordinator-only)',
-      description:
-        "Bounce a delivered child task back to in_progress with a reason the peer sees on re-dispatch. Use when deliverables don't meet the acceptance criteria. For slice mismatch (peer built the wrong thing entirely), prefer cancel_subtask + a fresh spawn_subtask instead.",
-      inputSchema: {
-        agent_id: agentIdArg,
-        subtask_id: z.string().min(1),
-        reason: z.string().min(10).max(2000).describe('Specific, actionable — shown to the peer on re-dispatch.'),
+        action: z.enum(['accept', 'reject', 'cancel']).describe('Which lifecycle transition to apply.'),
+        reason: z
+          .string()
+          .min(5)
+          .max(2000)
+          .optional()
+          .describe(
+            'Required for action=reject (≥10 chars) and action=cancel (≥5 chars). Shown to the peer on re-dispatch (reject) or recorded as status_reason (cancel).',
+          ),
         new_acceptance_criteria: z
           .array(z.string().min(10).max(500))
           .optional()
-          .describe('Optional updated criteria. When provided, replaces the convoy_subtasks.acceptance_criteria for the next round.'),
+          .describe(
+            'action=reject only — when provided, replaces convoy_subtasks.acceptance_criteria for the next round.',
+          ),
       },
       annotations: { destructiveHint: true, openWorldHint: false },
     },
-    trace('reject_subtask', async (args) => {
-      const row = queryOne<{ task_id: string; parent_task_id: string; task_status: string }>(
-        `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, t.status AS task_status
-           FROM convoy_subtasks cs
-           JOIN convoys c ON c.id = cs.convoy_id
-           JOIN tasks t ON t.id = cs.task_id
-          WHERE cs.id = ?`,
-        [args.subtask_id],
-      );
-      if (!row) {
-        return { isError: true, content: [{ type: 'text', text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
-      }
-      const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
-      assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
-
-      const now = new Date().toISOString();
-      run(
-        `UPDATE tasks SET status = 'in_progress', status_reason = ?, updated_at = ? WHERE id = ?`,
-        [`rejected: ${args.reason}`, now, row.task_id],
-      );
-      if (args.new_acceptance_criteria && args.new_acceptance_criteria.length > 0) {
-        run(
-          `UPDATE convoy_subtasks SET acceptance_criteria = ? WHERE id = ?`,
-          [JSON.stringify(args.new_acceptance_criteria), args.subtask_id],
-        );
-      }
-
-      logActivity({
-        taskId: row.parent_task_id,
-        actingAgentId: args.agent_id,
-        activityType: 'updated',
-        message: `[delegation_rejected] subtask=${args.subtask_id} reason="${args.reason.replace(/"/g, "'")}"`,
-      });
-
-      // Notify the peer through their chat session so they see the
-      // rejection inline. Best-effort — if the openclaw client is down,
-      // the mailbox fallback still carries the message.
-      const peer = queryOne<{ id: string; gateway_agent_id: string | null; name: string; session_key_prefix: string | null }>(
-        'SELECT a.id, a.gateway_agent_id, a.name, a.session_key_prefix FROM tasks t JOIN agents a ON a.id = t.assigned_agent_id WHERE t.id = ?',
-        [row.task_id],
-      );
-      if (peer?.gateway_agent_id) {
-        try {
-          const client = getOpenClawClient();
-          if (!client.isConnected()) await client.connect();
-          const { sendChatToAgent } = await import('@/lib/openclaw/send-chat');
-          const result = await sendChatToAgent({
-            agent: {
-              id: peer.id,
-              name: peer.name,
-              gateway_agent_id: peer.gateway_agent_id,
-              session_key_prefix: peer.session_key_prefix ?? undefined,
-            },
-            message: `🔁 **Subtask rejected by coordinator.**\n\n**Reason:** ${args.reason}\n\n${args.new_acceptance_criteria?.length ? `**Updated acceptance criteria:**\n${args.new_acceptance_criteria.map(c => `- ${c}`).join('\n')}\n\n` : ''}Please address the issues and re-register deliverables, then move status back to review.`,
-            idempotencyKey: `reject-${args.subtask_id}-${Date.now()}`,
-            sessionSuffix: `task-${row.task_id}`,
-          });
-          if (!result.sent && result.error) {
-            console.warn('[reject_subtask] chat.send notification failed:', result.error.message);
+    trace('update_subtask', async (args) => {
+      switch (args.action) {
+        case 'accept':
+          return acceptSubtaskImpl({ agent_id: args.agent_id, subtask_id: args.subtask_id });
+        case 'reject':
+          if (!args.reason || args.reason.length < 10) {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: 'action=reject requires reason (≥10 chars)' }],
+              structuredContent: { error: 'reason_required' },
+            };
           }
-        } catch (err) {
-          console.warn('[reject_subtask] chat.send notification failed:', (err as Error).message);
-        }
+          return rejectSubtaskImpl({
+            agent_id: args.agent_id,
+            subtask_id: args.subtask_id,
+            reason: args.reason,
+            new_acceptance_criteria: args.new_acceptance_criteria,
+          });
+        case 'cancel':
+          if (!args.reason || args.reason.length < 5) {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: 'action=cancel requires reason (≥5 chars)' }],
+              structuredContent: { error: 'reason_required' },
+            };
+          }
+          return cancelSubtaskImpl({
+            agent_id: args.agent_id,
+            subtask_id: args.subtask_id,
+            reason: args.reason,
+          });
       }
-
-      return textResult(`Rejected subtask ${args.subtask_id}. Peer task ${row.task_id} moved back to in_progress.`, {
-        subtask_id: args.subtask_id,
-        child_task_id: row.task_id,
-      });
-    }),
-  );
-
-  // cancel_subtask ────────────────────────────────────────────────
-  server.registerTool(
-    'cancel_subtask',
-    {
-      title: 'Cancel a delegated subtask (coordinator-only)',
-      description:
-        "Release a subtask that's no longer needed or is demonstrably stuck. The child task moves to cancelled; the convoy's failed_subtasks counter bumps so the subtask no longer blocks convoy completion. Use for scope changes and dead branches; for rejecting delivered work that needs a redo, use reject_subtask.",
-      inputSchema: {
-        agent_id: agentIdArg,
-        subtask_id: z.string().min(1),
-        reason: z.string().min(5).max(2000),
-      },
-      annotations: { destructiveHint: true, openWorldHint: false },
-    },
-    trace('cancel_subtask', async (args) => {
-      const row = queryOne<{ task_id: string; parent_task_id: string; convoy_id: string }>(
-        `SELECT cs.task_id AS task_id, c.parent_task_id AS parent_task_id, cs.convoy_id AS convoy_id
-           FROM convoy_subtasks cs JOIN convoys c ON c.id = cs.convoy_id WHERE cs.id = ?`,
-        [args.subtask_id],
-      );
-      if (!row) {
-        return { isError: true, content: [{ type: 'text', text: `subtask ${args.subtask_id} not found` }], structuredContent: { error: 'subtask_not_found' } };
-      }
-      const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
-      assertAgentCanActOnTask(args.agent_id, row.parent_task_id, 'delegate');
-
-      const now = new Date().toISOString();
-      run(
-        `UPDATE tasks SET status = 'cancelled', status_reason = ?, updated_at = ? WHERE id = ?`,
-        [`cancelled_by_coordinator: ${args.reason}`, now, row.task_id],
-      );
-      run(
-        `UPDATE convoys SET failed_subtasks = failed_subtasks + 1, updated_at = ? WHERE id = ?`,
-        [now, row.convoy_id],
-      );
-
-      logActivity({
-        taskId: row.parent_task_id,
-        actingAgentId: args.agent_id,
-        activityType: 'updated',
-        message: `[delegation_cancelled] subtask=${args.subtask_id} reason="${args.reason.replace(/"/g, "'")}"`,
-      });
-
-      return textResult(`Cancelled subtask ${args.subtask_id}.`, {
-        subtask_id: args.subtask_id,
-        child_task_id: row.task_id,
-      });
     }),
   );
 
