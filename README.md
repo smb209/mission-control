@@ -1,297 +1,224 @@
-<h1 align="center">Autensa</h1>
+<h1 align="center">Sextant</h1>
 
 <p align="center">
-  <em>The World's First Autonomous Product Engine</em><br>
-  <a href="https://autensa.com">autensa.com</a>
+  <em>An autonomous systems-engineering team for software products</em>
 </p>
 
 <p align="center">
-  <strong>Your products improve themselves — 24/7 — while you sleep.</strong><br>
-  Research → Ideation → Swipe → Build → Test → Review → Pull Request — fully automated.
+  <strong>Plan, decompose, dispatch, verify — with humans in the loop where it matters.</strong><br>
+  Initiatives → Tasks → Build → Test → Review → PR, with a PM agent on the bridge.
 </p>
 
 <p align="center">
-I highly recommend getting Hetzner VPS to run this. <a href="https://hetzner.cloud/?ref=WYxriOUHyTil">You can sign up here.</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/github/stars/crshdn/mission-control?style=flat-square" alt="GitHub Stars" />
-  <img src="https://img.shields.io/github/issues/crshdn/mission-control?style=flat-square" alt="GitHub Issues" />
-  <img src="https://img.shields.io/github/license/crshdn/mission-control?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome" />
-  <img src="https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=next.js" alt="Next.js" />
-  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js" alt="Next.js 16" />
+  <img src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react" alt="React 19" />
+  <img src="https://img.shields.io/badge/TypeScript-6-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 6" />
+  <img src="https://img.shields.io/badge/Tailwind-4-38B2AC?style=flat-square&logo=tailwindcss&logoColor=white" alt="Tailwind 4" />
   <img src="https://img.shields.io/badge/SQLite-3-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite" />
+  <img src="https://img.shields.io/badge/MCP-sc--mission--control-orange?style=flat-square" alt="MCP" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT" />
 </p>
 
 <p align="center">
-  <a href="https://missioncontrol.ghray.com"><strong>🎮 Live Demo</strong></a> •
+  <a href="#-what-sextant-is">What Sextant is</a> •
+  <a href="#-the-loop-today">The loop today</a> •
+  <a href="#-capabilities-today">Capabilities</a> •
+  <a href="#-architecture">Architecture</a> •
+  <a href="#-where-sextant-is-going">Roadmap</a> •
   <a href="#-quick-start">Quick Start</a> •
   <a href="#-docker">Docker</a> •
-  <a href="#-whats-new-in-v250">What's New</a> •
-  <a href="#-features">Features</a> •
-  <a href="#-how-it-works">How It Works</a> •
-  <a href="#-configuration">Configuration</a> •
-  <a href="#-contributors">Contributors</a>
-</p>
-
-<p align="center">
-  <a href="https://ghray.com/Autensa_v2.mp4"><strong>▶️ Watch the Autensa v2 Introduction</strong></a>
+  <a href="#-configuration">Configuration</a>
 </p>
 
 ---
 
-## 🚀 What's New in v2.5.0
+## 🛰 What Sextant is
 
-### Per-Task Agent Sessions ([#99](https://github.com/crshdn/mission-control/issues/99))
-Each dispatched task now gets its own OpenClaw conversation session. Previously, all tasks assigned to the same agent shared one session, causing context to accumulate across tasks until the model's context window was exhausted and the agent stalled. The `openclaw_sessions` table already had a `task_id` column — dispatch now uses it for session lookup, session ID generation, and insert. Parallel tasks on the same agent work independently.
+Sextant is a self-hosted control surface for an AI-driven engineering team. A **PM agent** sits between you and the build/test/review agents on an OpenClaw gateway: you talk to it about initiatives, it helps decompose them into tasks, dispatches the work, and watches whether the results still match what you asked for. Cost and agent health are tracked as you go.
 
-### Flexible Agent ID Validation ([#100](https://github.com/crshdn/mission-control/issues/100))
-Agent ID fields now accept both standard UUID format (`8-4-4-4-12`) and 32-character hex identifiers from the OpenClaw gateway. Previously, Zod's strict `.uuid()` validation rejected gateway-format agent IDs, causing "Invalid UUID" errors when assigning imported agents to tasks.
+This project is a fork of [crshdn/mission-control](https://github.com/crshdn/mission-control) (Autensa). Where upstream optimizes for autonomous *shipping* — research → swipe → PR while you sleep — Sextant is shifting the focus toward autonomous *engineering*: structured planning, an explicit roadmap layer, an MCP tool surface for agents, and a PM agent that actually plans with you. Same gateway underneath, different control plane on top.
 
-### Task Delete Button Fix ([#111](https://github.com/crshdn/mission-control/issues/111))
-The task delete button now shows a loading state ("Deleting..."), disables during the request, and displays inline error messages when deletion fails. Previously, the button had no feedback — if the API request failed or was slow, users saw no response and assumed the button was broken.
+Where it's heading is the more interesting story: a real systems-engineering discipline on top of the agent runtime — requirements artifacts with traceability, a risk register, program-level monitoring, V&V plans tied to verification methods. Most of that doesn't exist yet. The current capabilities are described below as they are, and the [roadmap](#-where-sextant-is-going) section is honest about the gap.
 
-### Product Pause & Archive ([#98](https://github.com/crshdn/mission-control/issues/98))
-The Autopilot product settings modal now includes a **Status** dropdown (Active / Paused) and a **Danger Zone** section with an Archive button. Paused products stop automated research and ideation cycles. Archived products are hidden from the dashboard but data is preserved. The main product listing now filters out archived products.
+Three things distinguish this fork from upstream today:
 
-### Previous Releases
-
-<details>
-<summary>v2.4.1 — Community Bug Fixes</summary>
-
-- **Autopilot model routing** — Provider models now route through `openclaw/default` with the original model in `x-openclaw-model`, fixing 404 errors on OpenClaw deployments. ([@Ahmedkasmi-dev](https://github.com/Ahmedkasmi-dev), [#109](https://github.com/crshdn/mission-control/pull/109))
-- **AUTOPILOT_MODEL env var** — Removed hardcoded model override in description generation so the shared `AUTOPILOT_MODEL` config is respected. ([@aaronmeza](https://github.com/aaronmeza), [#116](https://github.com/crshdn/mission-control/pull/116))
-- **Gateway catalog sync** — Local agent role assignments are now preserved during gateway sync instead of being overwritten every 60 seconds. ([@cgluttrell](https://github.com/cgluttrell), [#119](https://github.com/crshdn/mission-control/pull/119))
-- **Task chat reliability** — Agent replies are now captured even without an active SSE connection, and the "waiting" indicator no longer shows stale state. ([@heliokeplert-ctrl](https://github.com/heliokeplert-ctrl), [#126](https://github.com/crshdn/mission-control/pull/126))
-</details>
-
-<details>
-<summary>v2.4.0 — Agent Skill Creation Loop</summary>
-
-- Agents learn reusable procedures from completed tasks
-- Bayesian confidence scoring promotes proven skills
-- Matched skills injected at dispatch as primary instructions
-</details>
-
-<details>
-<summary>v2.0–v2.3 — Full changelog in <a href="https://github.com/crshdn/mission-control/releases">Releases</a></summary>
-
-- v2.3.x — Idea dedup, operator chat, swipe undo, A/B testing, auto-rollback
-- v2.2.x — Preference learning, token tracking, health check endpoints, backup API
-- v2.1.x — Server-side pipeline, error reporting, idea badges
-- v2.0.x — Session key prefix, dispatch stability, community contributions
-</details>
-
-### v2.0 Highlights
-
-Autensa v2 is a ground-up expansion from task orchestration dashboard to **the world's first autonomous product improvement engine**. It researches your market, generates feature ideas, lets you decide with a swipe, and builds them — automatically.
-
-### 🔬 Product Autopilot — The Full Pipeline
-
-The headline feature. Point Autensa at any product (repo + live URL) and it runs a continuous improvement loop:
-
-1. **Autonomous Research** — AI agents analyze your codebase, scan your live site, and research your market: competitors, user intent, conversion patterns, SEO gaps, technical opportunities. Runs on configurable schedules — daily, weekly, or on-demand.
-
-2. **AI-Powered Ideation** — Research feeds into ideation agents that generate concrete, scored feature ideas. Each idea includes an impact score, feasibility score, size estimate, technical approach, and a direct link to the research that inspired it.
-
-3. **Swipe to Decide** — Ideas appear as cards in a Tinder-style interface. Four actions:
-   - **Pass** — Rejected. The preference model learns from it.
-   - **Maybe** — Saved to the Maybe Pool. Resurfaces in 1 week with fresh context.
-   - **Yes** — Task created. Build agent starts coding.
-   - **Now!** — Urgent dispatch. Priority queue, immediate execution.
-
-4. **Automated Build → PR** — Approved ideas flow through the full agent pipeline: Build agent implements the feature → Test agent runs the suite → Review agent inspects the diff → Pull request created on GitHub with full context.
-
-**Your only job is the swipe.** Everything else is automated.
-
-### 📄 Product Program (Karpathy AutoResearch Pattern)
-
-Inspired by Andrej Karpathy's [AutoResearch](https://github.com/karpathy/autoresearch) architecture. Each product has a **Product Program** — a living document that instructs research and ideation agents on what to look for, what matters, and what to ignore. The program evolves as swipe data accumulates: the system learns your taste, not just patterns.
-
-### 🚛 Convoy Mode — Parallel Multi-Agent Execution
-
-Large features get decomposed into subtasks with a visual dependency graph (DAG). Multiple agents (3–5) work simultaneously with dependency-aware scheduling:
-
-- **Parallel subtask execution** — Independent pieces run concurrently
-- **Dependency graph visualization** — See what depends on what
-- **Health monitoring** — Detects stalled, stuck, or zombie agents automatically
-- **Auto-nudge** — Reassigns or restarts agents that go dark
-- **Crash recovery** — Checkpoints save agent progress; work resumes from last checkpoint, not from scratch
-
-### 💬 Operator Chat — Talk to Agents Mid-Build
-
-Don't wait for a PR to give feedback. Two communication modes:
-
-- **Queued Notes** — Add context ("use the existing auth middleware") that gets delivered at the agent's next checkpoint
-- **Direct Messages** — Delivered immediately to the agent's active session for real-time course correction
-
-Full chat history preserved per task — every message, note, and response.
-
-### 💰 Cost Tracking & Budget Caps
-
-Granular spend visibility across every dimension:
-
-- **Per-task cost tracking** — See exactly what each feature costs to build
-- **Per-product aggregation** — Total spend across all tasks for a product
-- **Daily and monthly caps** — Set budget limits that auto-pause dispatch when exceeded
-- **Cost breakdown API** — Detailed reports by agent, model, and time period
-
-### 🧠 Knowledge Base & Learner Agent
-
-A dedicated Learner agent captures lessons from every build cycle — what worked, what failed, what patterns emerged. Knowledge entries are injected into future dispatches so agents don't repeat mistakes.
-
-### 📋 Enhanced Planning Phase
-
-Before any build starts, agents run a structured planning phase:
-
-- AI asks clarifying questions about requirements and constraints
-- Generates a detailed spec from your answers
-- Multi-agent planning specs with sub-agent definitions and execution steps
-- Approval gate — you review the plan before any code is written
-
-### 🔄 Checkpoint & Crash Recovery
-
-Agent progress is saved at configurable checkpoints:
-
-- If a session crashes, work resumes from the last checkpoint — not from scratch
-- Checkpoint restore API for manual recovery
-- Checkpoint history visible per task
-
-### 🎯 Preference Learning
-
-Every swipe trains a per-product preference model:
-
-- Category weights (growth, SEO, UX, etc.) adjust based on approvals/rejections
-- Complexity preferences calibrate over time
-- Tag pattern recognition refines idea generation
-- Ideas get sharper with every iteration
-
-### 🔁 Maybe Pool
-
-Ideas you're not sure about don't disappear:
-
-- Swiped "Maybe" ideas enter a holding pool
-- Automatically resurface after a configurable period with new market context
-- Batch re-evaluation mode to review accumulated maybes
-- Can be promoted to Yes at any time
-
-### 📡 Live Activity Feed
-
-Real-time SSE stream of everything happening across all products:
-
-- Research progress, ideation cycles, swipe events
-- Build progress, test results, review outcomes
-- Agent health events, cost updates, PR creation
-- Filterable by product, agent, and event type
-
-### 🛡️ Automation Tiers
-
-Choose your comfort level per product:
-
-| Tier | Behavior | Best For |
-|:-----|:---------|:---------|
-| **Supervised** | PRs created automatically. You review and merge manually. | Production apps |
-| **Semi-Auto** | PRs auto-merge when CI passes and review agent approves. | Staging & trusted repos |
-| **Full Auto** | Everything automated end-to-end. Idea → deployed feature. | Side projects & MVPs |
-
-### 🔀 Workspace Isolation
-
-Each build task gets an isolated workspace:
-
-- **Git Worktrees** for repo-backed projects — isolated branch, no conflicts with other agents
-- **Task Sandboxes** for local/no-repo projects — dedicated directory under `.workspaces/task-{id}/`
-- **Port allocation** (4200–4299 range) for dev servers — no port conflicts between concurrent builds
-- **Serialized merge queue** — completed tasks merge one at a time with conflict detection
-- **Product-scoped locking** — concurrent completions for the same product queue automatically
-
-### 📊 Product Scheduling
-
-Configure autonomous cycles per product:
-
-- Research frequency (daily, weekly, custom cron)
-- Ideation frequency (after each research cycle, or independent schedule)
-- Auto-dispatch rules (immediate on "Yes" swipe, or batch)
-- Schedule management UI with enable/disable per schedule
+1. **Initiatives layer above tasks.** A roadmap with parent/child relationships, target windows, and a drift scan that flags when tasks stop laddering to their parent. It's a goal/scope tree — *not* a requirements baseline (yet).
+2. **MCP-native dispatch.** Gateway agents call `sc-mission-control` as a typed tool surface (`spawn_subtask`, `propose_changes`, `propose_from_notes`, `save_knowledge`, `send_mail`, `create_child_initiative`, …) instead of bespoke HTTP. Exercisable via an end-to-end harness.
+3. **A PM agent you actually plan with.** Lives at `/pm`, persists drafts per initiative, gets a fresh gateway session per conversation, and converts freeform notes into structured proposals via a defer-and-replay queue.
 
 ---
 
-## ✨ Features
+## 🔁 The loop today
 
-**Product Autopilot**
-- 🔬 Autonomous market research (competitors, SEO, user intent, technical gaps)
-- 💡 AI-powered ideation with impact/feasibility scoring
-- 👆 Swipe interface for instant approve/reject/maybe decisions
-- 📄 Product Program (Karpathy AutoResearch pattern)
-- 🎯 Preference learning from swipe history
-- 🔁 Maybe Pool with auto-resurface
-- 📊 Configurable research & ideation schedules
+```
+        ┌─────────────────── you ───────────────────┐
+        ▼                                           │
+    INITIATIVES ─► DECOMPOSE ─► DISPATCH ─► BUILD ─► TEST ─► REVIEW ─► PR
+    (roadmap +     (PM agent    (MCP +     (build   (test   (review
+     drift scan)    + tasks)     gateway)   agent)   agent)  agent)
+        ▲                                                       │
+        └─────────────── drift scan / proposals ◄────────────────┘
+```
 
-**Agent Orchestration**
-- 🤖 Multi-agent pipeline (Builder → Tester → Reviewer → Learner)
-- 🚛 Convoy Mode for parallel multi-agent execution
-- 💬 Operator Chat (queued notes + direct messages)
-- 💚 Agent health monitoring with auto-nudge
-- 🔄 Checkpoint & crash recovery
-- 🧠 Knowledge base with cross-task learning
-- 🔀 Workspace isolation (git worktrees + task sandboxes)
-
-**Task Management**
-- 🎯 Kanban board with drag-and-drop across 7 status columns
-- 🧠 AI planning phase with clarifying Q&A
-- 📋 Multi-agent planning specs
-- 🖼️ Task image attachments (UI mockups, screenshots)
-- 📡 Live real-time activity feed (SSE)
-- 💰 Per-task, per-product, daily/monthly cost tracking & caps
-
-**Infrastructure**
-- 🔌 OpenClaw Gateway integration (WebSocket)
-- 🔗 Gateway agent discovery & import
-- 🐳 Docker ready (production-optimized)
-- 🔒 Bearer token auth, HMAC webhooks, Zod validation
-- 🛡️ Privacy first — no trackers, no centralized data collection
-- 🌐 Multi-machine support (Tailscale compatible)
-- 🛡️ Automation tiers (Supervised / Semi-Auto / Full Auto)
+Each leg is implemented (see [Capabilities](#-capabilities-today)). The drift scan and PM agent close the loop by flagging when work no longer matches the parent initiative and proposing changes — but this is goal-level, not requirement-level. There's no shall-statement, no allocation table, and no formal V&V plan tying tests back to specific requirements. The [roadmap](#-where-sextant-is-going) section calls out what would have to exist for that.
 
 ---
 
-## 🛡️ Privacy
+## 🧭 Capabilities today
 
-Autensa is open-source and self-hosted. The project does **not** include ad trackers, third-party analytics beacons, or a centralized data collector.
+Plain feature description — no SE-discipline overlay. Where a feature *resembles* a systems-engineering practice but doesn't actually implement it, the [roadmap](#-where-sextant-is-going) section calls out the gap.
 
-Your task data, research results, ideas, swipe history, and product programs stay in your own deployment (SQLite + workspace). If you connect external services (AI providers or remote gateways), only the data you explicitly send to those services leaves your environment.
+### Initiatives & roadmap
+- Initiatives have parent/child relationships, target windows, owners, descriptions, and an inline-edit detail page.
+- A roadmap timeline view spans the tree.
+- Promotion endpoints turn approved ideas or PM-captured notes into initiatives.
+- Tasks are initiative-aware; the PM can spawn `create_child_initiative` proposals to add structure under a parent.
+- A drift scan flags when tasks no longer ladder cleanly to their parent initiative.
+
+> Initiatives are goal/scope objects. They are *not* requirements — there are no shall-statements, no allocation tables, and nothing tying a downstream test to a specific clause. The drift scan compares task content to initiative content; it doesn't check coverage.
+
+### PM agent
+- Lives at `/pm`, backed by the named openclaw agent `mc-project-manager`.
+- Drafts persist per-initiative and resume on re-open; rejected on dismiss so stale drafts don't leak forward.
+- Fresh gateway session per plan/decompose conversation and per disruption dispatch — no context bleed across initiatives.
+- Structured `plan_suggestions` stored in their own column; chat carries the suggestions sidecar without leaking JSON into the readable summary.
+- Async dispatch with a reconciler that recovers when the gateway mislabels `trigger_kind` on returned proposals.
+- `propose_from_notes`: paste raw notes, the PM converts them into structured proposals; a defer-and-replay queue holds input when the agent is busy.
+- Context-window indicator + "New chat" controls on `/pm` so you can see when to recycle.
+
+### Decomposition & convoy execution
+- `spawn_subtask` is the single fan-out primitive — every fan-out is a tracked convoy subtask, not a fire-and-forget call.
+- The PM-driven decompose flow has resume, dedup, and crash guards on partial decomposes.
+- Convoy mode runs subtasks against a dependency DAG: independents in parallel, dependents wait, the graph is visible in the UI.
+
+> This is task decomposition. There is no requirements decomposition because there are no requirements artifacts to decompose *from* or allocate *to*.
+
+### Planning flow
+- A validation-first phased planner with explicit Lock & Dispatch — no implicit "the agent decided to start" steps.
+- Per-option clarifier inputs on plan choices, plus a freetext clarify shape for anything that doesn't fit multiple-choice.
+- A "With guidance" split-button on AI helper actions captures human steering at the moment a choice is made.
+
+> The clarify flow records the chosen option but doesn't store alternatives-considered, weighted criteria, or rationale in a structured way. It's planning, not a trade study.
+
+### MCP tool surface
+- `sc-mission-control` is the MCP server inside this app; gateway agents call it as typed tools (`spawn_subtask`, `propose_changes`, `propose_from_notes`, `save_knowledge`, `send_mail`, `create_child_initiative`, …). The plugin name is stable.
+- An adapter dashboard at `/debug/mcp` shows tool calls.
+- An end-to-end harness (`yarn mcp:integration`, `yarn mcp:e2e:next`) spawns `next dev` and exercises `/api/mcp` so contracts are tested, not just type-checked.
+- A shared service layer means MCP and HTTP routes execute the same business logic.
+
+> These are typed tool definitions, not versioned interface control documents. There's no compatibility matrix, no formal change-control on the tool surface, and no consumer registry.
+
+### Build / test / review pipeline
+- The pipeline is Build agent → Test agent → Review agent → PR.
+- A spec-reconciling evidence gate checks that coordinator delegations actually fired and that outputs match the locked spec before review passes.
+- A preview-test flow exercises UI- and MCP-touching changes against a real `next dev` server and captures telemetry on the task.
+
+> The review agent compares output to the spec it was handed. There is no formal verification plan, no test-to-requirement mapping, and no validation step distinct from review.
+
+### Deliverables
+- First-class artifacts on the task with friendly folder names.
+- Markdown deliverables render in-browser; a dedicated `/deliverables` page lists everything; archives are downloadable.
+
+### Monitoring & resilience
+- Per-agent health: stall detection, auto-nudge, send/receive ping indicator that fades in the sidebar.
+- Stalled-task scanner + admin endpoint for manual release.
+- Checkpoint save/restore — work resumes from the last checkpoint after a crash.
+- `/debug` console with opt-in capture of MC↔agent traffic and JSON/JSONL event export.
+- Live activity feed (SSE) at the shell level: dispatch, build, test, review, cost, PR creation.
+- Actionable diagnostics when an MCP launcher connect fails.
+
+> Monitoring is per-agent today. There are no program-level KPIs (schedule variance, cost variance, V&V coverage, requirements churn) and no anomaly detection on the telemetry stream.
+
+### Workspace & session isolation
+- Per-task workspace isolation: git worktrees for repo-backed projects, sandboxes for everything else.
+- Per-task agent sessions: each dispatch gets its own `openclaw_sessions` row keyed by `task_id`, so parallel tasks on the same agent don't share a context window.
+- Migrations run on startup with timestamped pre-migration backups; cascade-FK behavior has guardrail tests.
+- Workspace switcher with global vs per-workspace settings, including a Danger Zone.
+
+### Cost tracking & automation tiers
+- Per-task, per-product, and daily/monthly cost aggregates.
+- Cost caps auto-pause dispatch when exceeded.
+- Per-product automation tier:
+
+  | Tier | Behavior | Best for |
+  |:--|:--|:--|
+  | **Supervised** | PRs created automatically. You review and merge manually. | Production apps |
+  | **Semi-Auto** | PRs auto-merge when CI passes and review agent approves. | Staging & trusted repos |
+  | **Full Auto** | End-to-end: idea → deployed feature, no human gate. | Side projects & MVPs |
+
+### Knowledge base
+- A `Learner` agent captures lessons from completed build cycles.
+- The `save_knowledge` MCP tool lets agents write entries directly; knowledge is opt-in per dispatch and mail flooding is capped.
+
+### Autopilot (inherited from upstream)
+- Tinder-style swipe deck, Maybe Pool, preference learning, Product Program (Karpathy AutoResearch pattern), product schedules, autonomous research and ideation. All still functional; treated as one input source feeding the initiative tree alongside `propose_from_notes` and direct `/pm` planning.
 
 ---
 
 ## 🏗 Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          YOUR MACHINE                                │
-│                                                                      │
-│  ┌──────────────────┐          ┌──────────────────────────────────┐  │
-│  │ Autensa           │◄────────►│    OpenClaw Gateway              │  │
-│  │  (Next.js)        │   WS     │  (AI Agent Runtime)              │  │
-│  │  Port 4000        │          │  Port 18789                      │  │
-│  └────────┬──────────┘          └───────────┬────────────────────┘  │
-│           │                                  │                       │
-│           ▼                                  ▼                       │
-│  ┌──────────────────┐          ┌──────────────────────────────────┐  │
-│  │    SQLite DB       │          │     AI Providers                │  │
-│  │  (tasks, products, │          │  (Anthropic / OpenAI / etc.)    │  │
-│  │   ideas, costs)    │          └──────────────────────────────────┘  │
-│  └──────────────────┘                                                │
-│           │                                                          │
-│           ▼                                                          │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │              Autopilot Engine                                  │   │
-│  │  Research → Ideation → Swipe → Build → Test → Review → PR     │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────── YOUR MACHINE ────────────────────────────────┐
+│                                                                             │
+│  ┌──────────────────────────┐       ┌─────────────────────────────────┐     │
+│  │  Sextant (Next.js, :4000) │◄────►│  OpenClaw Gateway (:18789)       │     │
+│  │                          │  WS   │                                 │     │
+│  │  ┌───────────────────┐   │       │  ┌───────────────────────────┐  │     │
+│  │  │ /pm — PM agent UI │   │       │  │ build / test / review /   │  │     │
+│  │  │ /roadmap          │   │       │  │ learner / mc-project-mgr  │  │     │
+│  │  │ /agents /debug    │   │       │  └───────────────────────────┘  │     │
+│  │  └───────────────────┘   │       │             ▲                   │     │
+│  │           │              │       │             │ MCP tools         │     │
+│  │           ▼              │       │             ▼                   │     │
+│  │  ┌──────────────────────┐ │      │  ┌───────────────────────────┐  │     │
+│  │  │ /api/mcp             │◄┼──────┼──┤ sc-mission-control client │  │     │
+│  │  │ (sc-mission-control) │ │      │  └───────────────────────────┘  │     │
+│  │  └──────────┬───────────┘ │      └─────────────────────────────────┘     │
+│  │             ▼              │                  │                          │
+│  │  ┌──────────────────────┐ │                  ▼                          │
+│  │  │ SQLite               │ │      ┌─────────────────────────────────┐    │
+│  │  │ (initiatives, tasks, │ │      │ AI Providers                    │    │
+│  │  │  pm_proposals, costs,│ │      │ (Anthropic / OpenAI / via       │    │
+│  │  │  convoys, deliverbls)│ │      │  OpenRouter)                    │    │
+│  │  └──────────────────────┘ │      └─────────────────────────────────┘    │
+│  └───────────────────────────┘                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Autensa** = The dashboard + autopilot engine (this project)
-**OpenClaw Gateway** = The AI runtime that executes tasks ([separate project](https://github.com/openclaw/openclaw))
+**Sextant** = control plane (this project). **OpenClaw Gateway** = agent runtime ([separate project](https://github.com/openclaw/openclaw)). **`sc-mission-control`** = MCP server inside Sextant that gateway agents call as tools. The MCP plugin name is stable — use it exactly when wiring openclaw configs.
+
+---
+
+## 🚧 Where Sextant is going
+
+This is where the systems-engineering framing actually lives. None of the items below ship today — they're aspirations. Each one names what the current code does, the gap to the SE-grade version, and what would have to be built.
+
+### 1. Real requirements & traceability
+
+- **Today.** Initiatives are goal/scope objects with a parent/child tree. The drift scan compares task content to initiative content and flags divergence. There are no requirement records, no allocations, no formal trace.
+- **Gap.** No shall-statements. No requirement IDs. No allocation table mapping requirements to initiatives, tasks, components, or tests. No bidirectional traceability (requirement → design → implementation → verification → result). No orphan detection at the requirement level. Stakeholders can't answer "where is requirement R-042 implemented and how was it verified?"
+- **What it would take.** A `requirements` artifact (separate from initiatives), allocation tables, requirement-to-test linkage in the V&V pipeline, an audit-trail view, and a "review mode" decomposition pass that flags coverage gaps as missing-child proposals. Sizable feature; nothing in the codebase resembles it today beyond the drift scan as a distant cousin.
+
+### 2. Risk management
+
+- **Today.** Nothing structured. The PM agent surfaces ambiguity and dependency conflicts in chat; the dispatch reconciler recovers from gateway errors. Both are anomaly handling, not risk management.
+- **Gap.** No risk register. No likelihood × impact scoring. No mitigation owners or due dates. No rollup of risks per initiative or program. Ambiguities the PM detects vanish into chat history.
+- **What it would take.** A risk record type tied to initiatives and tasks, scoring, mitigation tracking, an MCP tool for the PM to open structured risks during planning, and a dashboard view. The PM's existing ambiguity detection is the natural source.
+
+### 3. Program-level monitoring
+
+- **Today.** Per-agent monitoring (stall, ping, checkpoint) and cost aggregates. Live activity feed via SSE. Useful for "is the agent stuck?" — not for "is this initiative in trouble?"
+- **Gap.** No schedule variance against initiative target windows. No cost variance against caps as a trend. No V&V coverage metric. No orphan-task or requirements-churn signal. No anomaly detection on the telemetry stream.
+- **What it would take.** A rollup layer over the existing data sources, threshold definitions, and a program dashboard. The data is mostly already collected; what's missing is aggregation, anomaly thresholds, and a UI.
+
+### Other systems-engineering practices we'd grow into
+
+Smaller items where the gap is real but the lift is more contained:
+
+- **V&V plan vs review.** Today the review agent compares output to the locked spec. A real V&V pipeline would have a verification plan with verification methods (test, inspection, analysis, demonstration) per requirement, a separate validation step against the originating need, and stored evidence linked back to specific requirement IDs. Builds on the existing review agent + evidence gate but requires the requirements artifact above.
+- **Interface control on the MCP surface.** Today the MCP tools are typed function definitions. SE-grade interface control would version each tool, track which gateway agents consume which version, and require change-control sign-off on breaking changes. Would build on the existing MCP harness.
+- **Trade studies & decision records.** Today the clarify flow records which option was chosen. A trade study would store alternatives considered, criteria with weights, scores per alternative, rationale, and a decision record linked to the resulting initiative or task. Builds on the existing per-option clarifier inputs.
+- **Configuration management beyond workspaces.** Today workspaces and sessions are isolated and migrations are backed up. CM in the SE sense would add a configuration item registry, baseline freezes per release, change requests against frozen baselines, and an audit log. The schema-cascade tests are a tiny seed.
 
 ---
 
@@ -299,21 +226,17 @@ Your task data, research results, ideas, swipe history, and product programs sta
 
 ### Prerequisites
 
-- **Node.js** v18+ ([download](https://nodejs.org/))
-- **OpenClaw Gateway** — `npm install -g openclaw`
-- **AI API Key** — Anthropic (recommended), OpenAI, Google, or others via OpenRouter
+- **Node.js** v18+
+- **OpenClaw Gateway** — see [openclaw/openclaw](https://github.com/openclaw/openclaw)
+- **Yarn** — this project uses yarn (lockfile is `yarn.lock`)
+- **AI API key** — Anthropic (recommended), OpenAI, or anything reachable through OpenRouter
 
 ### Install
 
 ```bash
-# Clone
-git clone https://github.com/crshdn/mission-control.git
-cd mission-control
-
-# Install dependencies
-npm install
-
-# Setup
+git clone https://github.com/smb209/mission-control.git sextant
+cd sextant
+yarn install
 cp .env.example .env.local
 ```
 
@@ -324,56 +247,47 @@ OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_GATEWAY_TOKEN=your-token-here
 ```
 
-> **Where to find the token:** Check `~/.openclaw/openclaw.json` under `gateway.token`
+> **Where to find the token:** check `~/.openclaw/openclaw.json` under `gateway.token`.
 
 ### Run
 
 ```bash
-# Start OpenClaw (separate terminal)
+# Terminal 1 — agent runtime
 openclaw gateway start
 
-# Start Autensa
-npm run dev
+# Terminal 2 — Sextant
+yarn dev
 ```
 
-Open **http://localhost:4000** — you're in! 🎉
+Open **http://localhost:4000**.
 
 ### Production
 
 ```bash
-npm run build
-npx next start -p 4000
+yarn build
+yarn start
 ```
 
 ---
 
 ## 🐳 Docker
 
-You can run Autensa in a container using the included `Dockerfile` and `docker-compose.yml`.
+The repo ships a single canonical compose file at the root.
 
-### Prerequisites
-
-- Docker Desktop (or Docker Engine + Compose plugin)
-- OpenClaw Gateway running locally or remotely
-
-### 1. Configure environment
-
-Create a `.env` file for Compose:
+### 1. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Then set at least:
+Set at least:
 
 ```env
 OPENCLAW_GATEWAY_URL=ws://host.docker.internal:18789
 OPENCLAW_GATEWAY_TOKEN=your-token-here
 ```
 
-Notes:
-- Use `host.docker.internal` when OpenClaw runs on your host machine.
-- If OpenClaw is on another machine, set its reachable `ws://` or `wss://` URL instead.
+Use `host.docker.internal` when OpenClaw runs on the same host. For a remote gateway, point `OPENCLAW_GATEWAY_URL` at its reachable `ws://` or `wss://` address.
 
 ### 2. Build and start
 
@@ -386,117 +300,55 @@ Open **http://localhost:4000**.
 ### 3. Useful commands
 
 ```bash
-# View logs
-docker compose logs -f mission-control
-
-# Stop containers
-docker compose down
-
-# Stop and remove volumes (deletes SQLite/workspace data)
-docker compose down -v
+docker compose logs -f mission-control   # tail logs
+docker compose ps                        # what's up
+docker compose down                      # stop
+docker compose down -v                   # stop + delete SQLite/workspace volumes
 ```
 
 ### Data persistence
 
-Compose uses named volumes:
-- `mission-control-data` for SQLite (`/app/data`)
-- `mission-control-workspace` for workspace files (`/app/workspace`)
-
----
-
-## 🎯 How It Works
-
-### The Autopilot Pipeline
-
-```
-RESEARCH → IDEATION → SWIPE → PLAN → BUILD → TEST → REVIEW → PR
-   AI          AI      You      AI     Agent   Agent   Agent   Auto
-```
-
-1. **Research** — AI analyzes your product's market: competitors, SEO, user intent, technical gaps
-2. **Ideation** — Research feeds ideation agents that generate scored feature ideas
-3. **Swipe** — You review ideas as cards. Pass / Maybe / Yes / Now!
-4. **Plan** — AI asks clarifying questions, generates a detailed spec
-5. **Build** — Agent clones repo, creates branch, implements the feature
-6. **Test** — Agent runs the test suite. Failures bounce back for auto-fix
-7. **Review** — Agent inspects the diff for quality, security, best practices
-8. **PR** — Pull request created on GitHub with full context and research backing
-
-### Task Flow (Manual Tasks)
-
-```
-PLANNING → INBOX → ASSIGNED → IN PROGRESS → TESTING → REVIEW → DONE
-```
-
-Drag tasks between columns or let the system auto-advance them.
-
-### Convoy Mode (Large Features)
-
-```
-                    ┌─ Subtask A (Agent 1) ──┐
-PARENT TASK ────────┤                        ├──── MERGE & PR
-                    ├─ Subtask B (Agent 2) ──┤
-                    └─ Subtask C (Agent 3) ──┘
-                         (depends on A)
-```
-
-Subtasks run in parallel with dependency-aware scheduling. Health monitoring detects stalls. Crash recovery via checkpoints.
+- `mission-control-data` — SQLite at `/app/data`
+- `mission-control-workspace` — workspace files at `/app/workspace`
+- Bind-mount: `${MC_DELIVERABLES_HOST_DIR:-$HOME/mission-control/deliverables}` → `/app/deliverables` (so finished deliverables are downloadable from the host)
+- Bind-mount: `${OPENCLAW_WORKSPACES_HOST_DIR:-$HOME/.openclaw/workspaces}` → `/app/openclaw-workspaces` (so MC can drop `MC-CONTEXT.json` into each agent's workspace)
 
 ---
 
 ## ⚙️ Configuration
 
-### Environment Variables
+### Environment variables
 
 | Variable | Required | Default | Description |
-|:---------|:--------:|:--------|:------------|
-| `OPENCLAW_GATEWAY_URL` | ✅ | `ws://127.0.0.1:18789` | WebSocket URL to OpenClaw Gateway |
-| `OPENCLAW_GATEWAY_TOKEN` | ✅ | — | Authentication token for OpenClaw |
-| `MC_API_TOKEN` | — | — | API auth token (enables auth middleware) |
-| `WEBHOOK_SECRET` | — | — | HMAC secret for webhook validation |
-| `DATABASE_PATH` | — | `./mission-control.db` | SQLite database location |
+|:--|:--:|:--|:--|
+| `OPENCLAW_GATEWAY_URL` | ✅ | `ws://127.0.0.1:18789` | WebSocket URL to the OpenClaw Gateway |
+| `OPENCLAW_GATEWAY_TOKEN` | ✅ | — | Auth token for the gateway |
+| `MODEL_DISCOVERY` | — | `auto` | `remote` (RPC), `local` (config file), or `auto` |
+| `PORT` | — | `4000` | HTTP port |
+| `DATABASE_PATH` | — | `./mission-control.db` | SQLite location |
 | `WORKSPACE_BASE_PATH` | — | `~/Documents/Shared` | Base directory for workspace files |
-| `PROJECTS_PATH` | — | `~/Documents/Shared/projects` | Directory for project folders |
+| `PROJECTS_PATH` | — | `~/Documents/Shared/projects` | Per-project subdirectories |
+| `MC_DELIVERABLES_HOST_DIR` | — | `~/mission-control/deliverables` | Host path bind-mounted into the container as `/app/deliverables` |
+| `OPENCLAW_WORKSPACES_HOST_DIR` | — | `~/.openclaw/workspaces` | Host path to openclaw's agent workspaces (for `MC-CONTEXT.json` drops) |
+| `PLANNING_TIMEOUT_MS` | — | `30000` | Wait time for planner responses |
+| `PLANNING_POLL_INTERVAL_MS` | — | `2000` | Poll cadence during planning |
+| `MC_API_TOKEN` | — | — | Enables bearer auth on the HTTP API |
+| `WEBHOOK_SECRET` | — | — | HMAC secret for webhook validation |
+| `MISSION_CONTROL_URL` | — | auto | Override for remote/custom deployments |
 
-### Security (Production)
-
-Generate secure tokens:
+### Security (production)
 
 ```bash
-# API authentication token
-openssl rand -hex 32
-
-# Webhook signature secret
-openssl rand -hex 32
-```
-
-Add to `.env.local`:
-
-```env
-MC_API_TOKEN=your-64-char-hex-token
-WEBHOOK_SECRET=your-64-char-hex-token
+openssl rand -hex 32   # use for MC_API_TOKEN
+openssl rand -hex 32   # use for WEBHOOK_SECRET
 ```
 
 When `MC_API_TOKEN` is set:
-- External API calls require `Authorization: Bearer <token>`
-- Browser UI works automatically (same-origin requests are allowed)
-- SSE streams accept token as query param
+- External API calls require `Authorization: Bearer <token>`.
+- The browser UI works automatically (same-origin requests are allowed).
+- SSE streams accept the token as a query param.
 
-See [PRODUCTION_SETUP.md](PRODUCTION_SETUP.md) for the full production guide.
-
----
-
-## 🌐 Multi-Machine Setup
-
-Run Autensa on one machine and OpenClaw on another:
-
-```env
-# Point to the remote machine
-OPENCLAW_GATEWAY_URL=ws://YOUR_SERVER_IP:18789
-OPENCLAW_GATEWAY_TOKEN=your-shared-token
-```
-
-### With Tailscale (Recommended)
+### Multi-machine (Tailscale recommended)
 
 ```env
 OPENCLAW_GATEWAY_URL=wss://your-machine.tailnet-name.ts.net
@@ -507,388 +359,192 @@ OPENCLAW_GATEWAY_TOKEN=your-shared-token
 
 ## 🗄 Database
 
-SQLite database auto-created at `./mission-control.db`. Migrations run automatically on startup (21 migrations). As of v2.0.1, a timestamped backup is created before any pending migration runs.
+SQLite, auto-created at `./mission-control.db`. Migrations run on startup; a timestamped backup is taken before any pending migration runs.
 
 ```bash
-# Reset (start fresh)
-rm mission-control.db
-
-# Inspect
-sqlite3 mission-control.db ".tables"
+yarn db:seed              # seed a fresh DB
+yarn db:backup            # checkpoint + copy
+yarn db:restore           # restore from latest backup
+yarn db:reset             # blow it away and reseed
+yarn db:checkpoint        # named checkpoint
+yarn db:checkpoint:list   # list checkpoints
 ```
 
-Key tables added in v2: `products`, `research_cycles`, `ideas`, `swipe_history`, `preference_models`, `maybe_pool`, `product_feedback`, `cost_events`, `cost_caps`, `product_schedules`, `operations_log`, `convoys`, `convoy_subtasks`, `agent_health`, `work_checkpoints`, `agent_mailbox`, `workspace_ports`, `workspace_merges`.
+Key tables (post-fork additions): `initiatives`, `initiative_dependencies`, `pm_proposals`, `pm_pending_notes`, `roadmap_*`, `owner_availability`, `convoys`, `convoy_subtasks`, `agent_health`, `work_checkpoints`, `agent_mailbox`, `agent_pings`, `cost_events`, `cost_caps`, `deliverables`, `openclaw_sessions`, plus the upstream `products`, `research_cycles`, `ideas`, `swipe_history`, `preference_models`, `maybe_pool`, `product_feedback`, `product_schedules`.
 
 ---
 
-## 📁 Project Structure
+## 📁 Project structure
 
 ```
-autensa/
+mission-control/
 ├── src/
-│   ├── app/                    # Next.js pages & API routes
+│   ├── app/
 │   │   ├── api/
-│   │   │   ├── tasks/          # Task CRUD, planning, dispatch, convoy, chat, workspace
-│   │   │   ├── products/       # Product CRUD, research, ideation, swipe, schedules
-│   │   │   ├── agents/         # Agent management, health, mail, discovery
-│   │   │   ├── costs/          # Cost tracking, caps, breakdowns
-│   │   │   ├── convoy/         # Convoy mail endpoints
-│   │   │   ├── openclaw/       # Gateway proxy endpoints
-│   │   │   └── webhooks/       # Agent completion webhooks
-│   │   ├── settings/           # Settings page
-│   │   └── workspace/[slug]/   # Workspace dashboard
-│   ├── components/
-│   │   ├── MissionQueue.tsx    # Kanban board
-│   │   ├── PlanningTab.tsx     # AI planning interface
-│   │   ├── AgentsSidebar.tsx   # Agent panel
-│   │   ├── LiveFeed.tsx        # Real-time events
-│   │   ├── TaskModal.tsx       # Task create/edit
-│   │   ├── TaskChatTab.tsx     # Operator chat
-│   │   ├── ConvoyTab.tsx       # Convoy visualization
-│   │   ├── DependencyGraph.tsx # DAG visualization
-│   │   ├── HealthIndicator.tsx # Agent health badges
-│   │   ├── WorkspaceTab.tsx    # Workspace isolation UI
-│   │   ├── autopilot/          # SwipeDeck, IdeaCard, ResearchReport, etc.
-│   │   └── costs/              # Cost dashboard components
+│   │   │   ├── pm/                # PM agent endpoints (proposals, plan, decompose, dispatch)
+│   │   │   ├── initiatives/       # Roadmap layer CRUD + promotion
+│   │   │   ├── initiative-dependencies/
+│   │   │   ├── roadmap/           # Timeline + drift scan
+│   │   │   ├── mcp/               # sc-mission-control MCP server
+│   │   │   ├── tasks/             # Task CRUD, planning, dispatch, convoy, chat
+│   │   │   ├── convoy/            # Convoy mail
+│   │   │   ├── agents/            # Agents, health, mailbox, discovery
+│   │   │   ├── autopilot/         # Research, ideation, swipe, scheduling
+│   │   │   ├── products/          # Products + autopilot config
+│   │   │   ├── ideas/             # Idea CRUD + Maybe Pool
+│   │   │   ├── deliverables/      # Deliverables
+│   │   │   ├── costs/             # Tracking + caps
+│   │   │   ├── debug/             # Event capture + export
+│   │   │   ├── webhooks/          # Agent completion webhooks
+│   │   │   ├── owner-availability/
+│   │   │   └── openclaw/          # Gateway proxy
+│   │   └── (app)/                 # Route group for the authed UI shell
+│   │       ├── pm/                # /pm — PM agent UI (+ /pm/proposals/[id])
+│   │       ├── initiatives/       # /initiatives + detail page
+│   │       ├── agents/            # /agents
+│   │       ├── autopilot/         # /autopilot — research/ideation/swipe
+│   │       ├── debug/mcp/         # /debug/mcp adapter dashboard
+│   │       ├── settings/          # Global settings
+│   │       └── workspace/[slug]/  # Per-workspace dashboard
+│   ├── components/                # Kanban, planning, agents, debug, costs UI
 │   └── lib/
-│       ├── autopilot/          # Research, ideation, swipe, maybe-pool, scheduling
-│       ├── costs/              # Cost tracker, caps, reporting
-│       ├── db/                 # SQLite + 21 migrations
-│       ├── openclaw/           # Gateway client + device identity
-│       ├── convoy.ts           # Convoy orchestration
-│       ├── agent-health.ts     # Health monitoring + auto-nudge
-│       ├── checkpoint.ts       # Checkpoint save/restore
-│       ├── workspace-isolation.ts # Git worktrees + task sandboxes
-│       ├── mailbox.ts          # Inter-agent messaging
-│       ├── chat-listener.ts    # Operator chat relay
-│       ├── learner.ts          # Knowledge base management
-│       └── types.ts            # TypeScript types
-├── presentation/               # v2 pitch deck + narration script
-├── specs/                      # Feature specs
-├── scripts/                    # Bridge & hook scripts
-└── CHANGELOG.md                # Full version history
+│       ├── agents/
+│       │   ├── pm-agent.ts        # mc-project-manager link
+│       │   ├── pm-dispatch.ts     # async dispatch + reconciler
+│       │   ├── pm-pending-drain.ts
+│       │   ├── pm-standup.ts      # proactive standup + drift scan
+│       │   ├── pm-prompts/        # PM agent prompts
+│       │   └── pm-soul.md         # PM agent persona/charter
+│       ├── mcp/                   # MCP server + tool surface
+│       ├── db/                    # Migrations + initiative/proposal/roadmap repos
+│       ├── openclaw/              # Gateway client + sendChatToAgent helper
+│       ├── autopilot/             # Research, ideation, swipe, maybe-pool, scheduling
+│       ├── costs/                 # Tracker, caps, reporting
+│       ├── deliverables/          # Artifact handling
+│       ├── convoy.ts              # Convoy orchestration
+│       ├── agent-health.ts        # Health monitoring + auto-nudge
+│       ├── checkpoint.ts          # Save/restore
+│       ├── master-orchestrator.ts # Cross-cutting dispatch coordination
+│       ├── learner.ts             # Knowledge base / learner
+│       └── …
+├── docs/
+│   ├── AGENT_PROTOCOL.md
+│   ├── HOW-THE-PIPELINE-WORKS.md
+│   ├── MCP-QUICKSTART.md
+│   ├── ORCHESTRATION_WORKFLOW.md
+│   ├── PREVIEW_TEST_FLOW.md
+│   └── PREVIEW_TEST_FINDINGS.md
+├── mcp-launcher/                  # MCP smoke-test launcher
+├── scripts/                       # Test harnesses, db checkpoints, integration runners
+└── specs/                         # Feature specs
 ```
+
+---
+
+## ✅ Verification
+
+Sextant ships several test slices. Use them in this order before opening a PR:
+
+```bash
+yarn test              # full TS test suite (parallel-safe per-process DBs)
+yarn mcp:smoke         # MCP launcher smoke test
+yarn mcp:integration   # MCP integration harness
+yarn mcp:e2e:next      # spawns `next dev` and exercises /api/mcp end-to-end
+```
+
+For UI- or MCP-tool-touching changes, run a preview-verify pass per [`docs/PREVIEW_TEST_FLOW.md`](docs/PREVIEW_TEST_FLOW.md):
+
+1. Start a preview server.
+2. Drive the change with the MCP preview tools.
+3. Treat preview logs as ground-truth — paste the relevant excerpt into the PR description.
+
+If a change can't be exercised by the preview (different runtime, types-only, etc.), say so explicitly in the PR rather than running an irrelevant smoke test.
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Can't connect to OpenClaw Gateway
+**Can't connect to OpenClaw Gateway**
 
-1. Check OpenClaw is running: `openclaw gateway status`
-2. Verify URL and token in `.env.local`
-3. Check firewall isn't blocking port 18789
+1. `openclaw gateway status` to confirm it's running.
+2. Verify URL and token in `.env.local`.
+3. Check that nothing is blocking port `18789`.
 
-### Planning questions not loading
+**Planning questions never load**
 
-1. Check OpenClaw logs: `openclaw gateway logs`
-2. Verify your AI API key is valid
-3. Refresh and click the task again
+1. Check OpenClaw logs: `openclaw gateway logs`.
+2. Verify your AI API key is valid.
+3. Refresh and retry.
 
-### Port 4000 already in use
+**Port 4000 already in use**
 
 ```bash
 lsof -i :4000
 kill -9 <PID>
 ```
 
-### Agent callbacks failing behind a proxy (502 errors)
+**Agent callbacks failing behind a proxy (502 errors)**
 
-If you're behind an HTTP proxy (corporate VPN, Hiddify, etc.), agent callbacks to `localhost` may fail because the proxy intercepts local requests.
-
-**Fix:** Set `NO_PROXY` so localhost bypasses the proxy:
+If you're behind an HTTP proxy (corporate VPN, Hiddify, etc.), agent callbacks to `localhost` may be intercepted. Bypass localhost:
 
 ```bash
-# Linux / macOS
 export NO_PROXY=localhost,127.0.0.1
-
-# Windows (cmd)
-set NO_PROXY=localhost,127.0.0.1
-
-# Docker
-docker run -e NO_PROXY=localhost,127.0.0.1 ...
+# Docker: pass -e NO_PROXY=localhost,127.0.0.1
 ```
 
-See [Issue #30](https://github.com/crshdn/mission-control/issues/30) for details.
+See [Issue #30](https://github.com/crshdn/mission-control/issues/30) on upstream.
+
+**HMR / fonts return 403 from another machine on the LAN**
+
+Next 15+ requires explicit `allowedDevOrigins` in `next.config.mjs`. Add the LAN host or `*.local` entry rather than chasing browser-cache theories.
+
+---
+
+## 🛡 Privacy
+
+Sextant is open source and self-hosted. The project does **not** include ad trackers, third-party analytics beacons, or a centralized data collector. Your initiatives, tasks, research, ideas, swipe history, deliverables, and PM transcripts stay in your own deployment (SQLite + workspace). If you connect external services (AI providers, remote gateways), only what you explicitly send leaves your environment.
 
 ---
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit your changes: `git commit -m 'feat: add amazing feature'`
-4. Push: `git push origin feature/amazing-feature`
-5. Open a Pull Request
+1. Fork this repo.
+2. Branch: `git checkout -b feat/your-thing`.
+3. Commit. Use conventional prefixes (`feat:`, `fix:`, `refactor:`, `docs:`, …).
+4. Push and open a PR against `main` on this fork.
+
+Before opening a PR:
+
+- `yarn test` (full suite — list any pre-existing failures explicitly rather than ignoring them).
+- For UI/MCP changes, run the preview-verify pass and paste the excerpt into the PR body.
+- Use `## Summary` / `## Changes` / `## Test plan` sections.
+
+See [CLAUDE.md](CLAUDE.md) for the full project conventions used by AI assistants and humans alike.
 
 ---
 
-## 👏 Contributors
+## 👏 Contributors & Lineage
 
-Autensa is built by a growing community. Thank you to everyone who has contributed!
+Sextant builds on the work of the upstream [crshdn/mission-control](https://github.com/crshdn/mission-control) (Autensa) community. Credit to everyone listed in the upstream README for the original autopilot pipeline, convoy mode, swipe loop, cost tracking, gateway integration, Docker support, and dozens of bug fixes along the way.
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/superlowburn">
-        <img src="https://github.com/superlowburn.png?size=80" width="80" height="80" style="border-radius:50%" alt="Steve" /><br />
-        <sub><b>Steve</b></sub>
-      </a><br />
-      <sub>Device Identity</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/rchristman89">
-        <img src="https://github.com/rchristman89.png?size=80" width="80" height="80" style="border-radius:50%" alt="Ryan Christman" /><br />
-        <sub><b>Ryan Christman</b></sub>
-      </a><br />
-      <sub>Port Configuration</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/nicozefrench">
-        <img src="https://github.com/nicozefrench.png?size=80" width="80" height="80" style="border-radius:50%" alt="nicozefrench" /><br />
-        <sub><b>nicozefrench</b></sub>
-      </a><br />
-      <sub>ARIA Hooks</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/misterdas">
-        <img src="https://github.com/misterdas.png?size=80" width="80" height="80" style="border-radius:50%" alt="GOPAL" /><br />
-        <sub><b>GOPAL</b></sub>
-      </a><br />
-      <sub>Node v25 Support</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/joralemarti">
-        <img src="https://github.com/joralemarti.png?size=80" width="80" height="80" style="border-radius:50%" alt="Jorge Martinez" /><br />
-        <sub><b>Jorge Martinez</b></sub>
-      </a><br />
-      <sub>Orchestration</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/niks918">
-        <img src="https://github.com/niks918.png?size=80" width="80" height="80" style="border-radius:50%" alt="Nik" /><br />
-        <sub><b>Nik</b></sub>
-      </a><br />
-      <sub>Planning & Dispatch</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/gmb9000">
-        <img src="https://github.com/gmb9000.png?size=80" width="80" height="80" style="border-radius:50%" alt="Michael G" /><br />
-        <sub><b>Michael G</b></sub>
-      </a><br />
-      <sub>Usage Dashboard</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/Z8Medina">
-        <img src="https://github.com/Z8Medina.png?size=80" width="80" height="80" style="border-radius:50%" alt="Z8Medina" /><br />
-        <sub><b>Z8Medina</b></sub>
-      </a><br />
-      <sub>Metabase Integration</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/markphelps">
-        <img src="https://github.com/markphelps.png?size=80" width="80" height="80" style="border-radius:50%" alt="Mark Phelps" /><br />
-        <sub><b>Mark Phelps</b></sub>
-      </a><br />
-      <sub>Gateway Agent Discovery 💡</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/muneale">
-        <img src="https://github.com/muneale.png?size=80" width="80" height="80" style="border-radius:50%" alt="Alessio" /><br />
-        <sub><b>Alessio</b></sub>
-      </a><br />
-      <sub>Docker Support</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/JamesTsetsekas">
-        <img src="https://github.com/JamesTsetsekas.png?size=80" width="80" height="80" style="border-radius:50%" alt="James Tsetsekas" /><br />
-        <sub><b>James Tsetsekas</b></sub>
-      </a><br />
-      <sub>Planning Flow Fixes</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/nice-and-precise">
-        <img src="https://github.com/nice-and-precise.png?size=80" width="80" height="80" style="border-radius:50%" alt="nice-and-precise" /><br />
-        <sub><b>nice-and-precise</b></sub>
-      </a><br />
-      <sub>Agent Protocol Docs</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/JamesCao2048">
-        <img src="https://github.com/JamesCao2048.png?size=80" width="80" height="80" style="border-radius:50%" alt="JamesCao2048" /><br />
-        <sub><b>JamesCao2048</b></sub>
-      </a><br />
-      <sub>Task Creation Fix</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/davetha">
-        <img src="https://github.com/davetha.png?size=80" width="80" height="80" style="border-radius:50%" alt="davetha" /><br />
-        <sub><b>davetha</b></sub>
-      </a><br />
-      <sub>Force-Dynamic & Model Discovery</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/pkgaiassistant-droid">
-        <img src="https://github.com/pkgaiassistant-droid.png?size=80" width="80" height="80" style="border-radius:50%" alt="pkgaiassistant-droid" /><br />
-        <sub><b>pkgaiassistant-droid</b></sub>
-      </a><br />
-      <sub>Activity Dashboard & Mobile UX</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/Coder-maxer">
-        <img src="https://github.com/Coder-maxer.png?size=80" width="80" height="80" style="border-radius:50%" alt="Coder-maxer" /><br />
-        <sub><b>Coder-maxer</b></sub>
-      </a><br />
-      <sub>Static Route Fix</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/grunya-openclaw">
-        <img src="https://github.com/grunya-openclaw.png?size=80" width="80" height="80" style="border-radius:50%" alt="grunya-openclaw" /><br />
-        <sub><b>grunya-openclaw</b></sub>
-      </a><br />
-      <sub>Dispatch & Proxy Bug Reports</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/ilakskill">
-        <img src="https://github.com/ilakskill.png?size=80" width="80" height="80" style="border-radius:50%" alt="ilakskill" /><br />
-        <sub><b>ilakskill</b></sub>
-      </a><br />
-      <sub>Dispatch Recovery Design</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/plutusaisystem-cmyk">
-        <img src="https://github.com/plutusaisystem-cmyk.png?size=80" width="80" height="80" style="border-radius:50%" alt="plutusaisystem-cmyk" /><br />
-        <sub><b>plutusaisystem-cmyk</b></sub>
-      </a><br />
-      <sub>Agent Daemon & Fleet View</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/nithis4th">
-        <img src="https://github.com/nithis4th.png?size=80" width="80" height="80" style="border-radius:50%" alt="nithis4th" /><br />
-        <sub><b>nithis4th</b></sub>
-      </a><br />
-      <sub>2nd Brain Knowledge Base</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/davidpellerin">
-        <img src="https://github.com/davidpellerin.png?size=80" width="80" height="80" style="border-radius:50%" alt="davidpellerin" /><br />
-        <sub><b>davidpellerin</b></sub>
-      </a><br />
-      <sub>Dynamic Agent Config</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/tmchow">
-        <img src="https://github.com/tmchow.png?size=80" width="80" height="80" style="border-radius:50%" alt="tmchow" /><br />
-        <sub><b>tmchow</b></sub>
-      </a><br />
-      <sub>Agent Import Improvements</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/xiaomiusa87">
-        <img src="https://github.com/xiaomiusa87.png?size=80" width="80" height="80" style="border-radius:50%" alt="xiaomiusa87" /><br />
-        <sub><b>xiaomiusa87</b></sub>
-      </a><br />
-      <sub>Session Key Bug Report</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/lutherbot-ai">
-        <img src="https://github.com/lutherbot-ai.png?size=80" width="80" height="80" style="border-radius:50%" alt="lutherbot-ai" /><br />
-        <sub><b>lutherbot-ai</b></sub>
-      </a><br />
-      <sub>Security Audit</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/YitingOU">
-        <img src="https://github.com/YitingOU.png?size=80" width="80" height="80" style="border-radius:50%" alt="YITING OU" /><br />
-        <sub><b>YITING OU</b></sub>
-      </a><br />
-      <sub>Cascade Delete Fix</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/brandonros">
-        <img src="https://github.com/brandonros.png?size=80" width="80" height="80" style="border-radius:50%" alt="Brandon Ros" /><br />
-        <sub><b>Brandon Ros</b></sub>
-      </a><br />
-      <sub>Docker CI Workflow</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/nano-lgtm">
-        <img src="https://github.com/nano-lgtm.png?size=80" width="80" height="80" style="border-radius:50%" alt="nano-lgtm" /><br />
-        <sub><b>nano-lgtm</b></sub>
-      </a><br />
-      <sub>Kanban UX Improvements</sub>
-    </td>
-    <td align="center">
-      <a href="https://github.com/cammybot1313-collab">
-        <img src="https://github.com/cammybot1313-collab.png?size=80" width="80" height="80" style="border-radius:50%" alt="cammybot1313-collab" /><br />
-        <sub><b>cammybot1313-collab</b></sub>
-      </a><br />
-      <sub>Docs Typo Fix</sub>
-    </td>
-  </tr>
-</table>
-
----
-
-## ⭐ Star History
-
-<a href="https://www.star-history.com/#crshdn/mission-control&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=crshdn/mission-control&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=crshdn/mission-control&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=crshdn/mission-control&type=Date" width="600" />
-  </picture>
-</a>
+Fork-specific work (initiative tree, MCP cutover, PM agent, spec-reconciling evidence gate, async dispatch, preview-test flow) lives entirely in this repo's git history — see [merged PRs on the fork](https://github.com/smb209/mission-control/pulls?q=is%3Apr+is%3Amerged).
 
 ---
 
 ## 📜 License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
 ## 🙏 Acknowledgments
 
-- **[Andrej Karpathy](https://github.com/karpathy/autoresearch)** — AutoResearch architecture that inspired the Product Program pattern
-- **[Mike De'Shazer](https://github.com/mikedeshazer)** — Operator Chat concept
-
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-Gateway-blue?style=for-the-badge)](https://github.com/open-claw/open-claw-gateway)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-[![Anthropic](https://img.shields.io/badge/Anthropic-Claude-orange?style=for-the-badge)](https://www.anthropic.com/)
-
----
-
-## ☕ Support
-
-If Autensa has been useful to you, consider buying me a coffee!
-
-<a href="https://buymeacoffee.com/crshdn" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" />
-</a>
+- The upstream **Autensa** project (crshdn/mission-control) for the agent runtime, autopilot loop, and the architectural bones this fork builds on.
+- **[Andrej Karpathy's AutoResearch](https://github.com/karpathy/autoresearch)** — pattern that inspired the Product Program concept.
+- **[OpenClaw Gateway](https://github.com/openclaw/openclaw)** — the AI agent runtime Sextant dispatches to.
 
 ---
 
 <p align="center">
-  <a href="https://discord.gg/3u62kySzM">
-    <img src="https://img.shields.io/badge/Join_Our_Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Our Discord" />
-  </a>
-</p>
-
-<p align="center">
-  <strong>Stop managing a backlog. Start shipping on autopilot.</strong> 🚀
+  <strong>Stop juggling a backlog. Start running a program.</strong>
 </p>
