@@ -579,13 +579,13 @@ export default function AgentsPage() {
                   <tr className="text-left text-xs uppercase tracking-wide text-mc-text-secondary">
                     <Th width="w-12" />
                     <Th onSort={() => toggleSort('name')} sortDir={sort.key === 'name' ? sort.dir : null}>Name</Th>
+                    <Th>Activity</Th>
+                    <Th>Actions</Th>
                     <Th onSort={() => toggleSort('role')} sortDir={sort.key === 'role' ? sort.dir : null}>Role</Th>
                     <Th onSort={() => toggleSort('model')} sortDir={sort.key === 'model' ? sort.dir : null}>Model</Th>
                     <Th onSort={() => toggleSort('gateway')} sortDir={sort.key === 'gateway' ? sort.dir : null}>Gateway</Th>
                     <Th onSort={() => toggleSort('status')} sortDir={sort.key === 'status' ? sort.dir : null}>Status</Th>
-                    <Th>Activity</Th>
                     <Th>Health</Th>
-                    <Th>Actions</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -817,6 +817,61 @@ function AgentRow({
         </button>
       </td>
 
+      {/* Activity ping (moved up so the operator can scan recent
+          activity right next to the agent name). */}
+      <td className="px-3 py-2">
+        <AgentPingIndicator sentAt={ping?.sentAt} receivedAt={ping?.receivedAt} />
+      </td>
+
+      {/* Actions (moved up — the operator hits these most often;
+          having them near the name avoids a horizontal scan). */}
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-1">
+          <IconButton
+            icon={<Power className={`w-3.5 h-3.5 ${isActive ? '' : 'text-amber-400'}`} />}
+            onClick={onTogglePower}
+            disabled={isToggling}
+            title={isActive ? 'Pause (excludes from routing + roll-call)' : 'Activate'}
+          />
+          {agent.gateway_agent_id && (
+            <IconButton
+              icon={
+                isResetting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3.5 h-3.5" />
+                )
+              }
+              onClick={onResetSession}
+              disabled={isResetting}
+              title="Reset session — clears MC rows + sends /reset to the gateway"
+            />
+          )}
+          <IconButton icon={<Pencil className="w-3.5 h-3.5" />} onClick={onEdit} title="Edit (full settings)" />
+          {!!agent.is_master && (
+            <button
+              onClick={onToggleOpenClaw}
+              disabled={isConnecting}
+              title={openclawSession ? 'OpenClaw connected' : 'Connect to OpenClaw'}
+              className={`inline-flex items-center gap-1 px-2 py-1.5 rounded text-[10px] border transition-colors ${
+                openclawSession
+                  ? 'bg-green-500/15 border-green-500/30 text-green-400 hover:bg-green-500/25'
+                  : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40'
+              }`}
+            >
+              {isConnecting ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : openclawSession ? (
+                <Zap className="w-3 h-3" />
+              ) : (
+                <ZapOff className="w-3 h-3" />
+              )}
+              <span className="hidden xl:inline">{openclawSession ? 'OpenClaw' : 'Connect'}</span>
+            </button>
+          )}
+        </div>
+      </td>
+
       {/* Role — inline editable text. Free-text in the DB so we don't
           constrain to a select. Commits on blur or Enter. */}
       <td className="px-3 py-2">
@@ -870,11 +925,6 @@ function AgentRow({
         </span>
       </td>
 
-      {/* Activity ping */}
-      <td className="px-3 py-2">
-        <AgentPingIndicator sentAt={ping?.sentAt} receivedAt={ping?.receivedAt} />
-      </td>
-
       {/* Health */}
       <td className="px-3 py-2">
         {health && health !== 'idle' ? (
@@ -882,54 +932,6 @@ function AgentRow({
         ) : (
           <span className="text-xs text-mc-text-secondary/40">—</span>
         )}
-      </td>
-
-      {/* Actions */}
-      <td className="px-3 py-2">
-        <div className="flex items-center gap-1">
-          <IconButton
-            icon={<Power className={`w-3.5 h-3.5 ${isActive ? '' : 'text-amber-400'}`} />}
-            onClick={onTogglePower}
-            disabled={isToggling}
-            title={isActive ? 'Pause (excludes from routing + roll-call)' : 'Activate'}
-          />
-          {agent.gateway_agent_id && (
-            <IconButton
-              icon={
-                isResetting ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="w-3.5 h-3.5" />
-                )
-              }
-              onClick={onResetSession}
-              disabled={isResetting}
-              title="Reset session — clears MC rows + sends /reset to the gateway"
-            />
-          )}
-          <IconButton icon={<Pencil className="w-3.5 h-3.5" />} onClick={onEdit} title="Edit (full settings)" />
-          {!!agent.is_master && (
-            <button
-              onClick={onToggleOpenClaw}
-              disabled={isConnecting}
-              title={openclawSession ? 'OpenClaw connected' : 'Connect to OpenClaw'}
-              className={`inline-flex items-center gap-1 px-2 py-1.5 rounded text-[10px] border transition-colors ${
-                openclawSession
-                  ? 'bg-green-500/15 border-green-500/30 text-green-400 hover:bg-green-500/25'
-                  : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40'
-              }`}
-            >
-              {isConnecting ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : openclawSession ? (
-                <Zap className="w-3 h-3" />
-              ) : (
-                <ZapOff className="w-3 h-3" />
-              )}
-              <span className="hidden xl:inline">{openclawSession ? 'OpenClaw' : 'Connect'}</span>
-            </button>
-          )}
-        </div>
       </td>
     </tr>
   );
