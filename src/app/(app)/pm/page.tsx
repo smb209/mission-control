@@ -328,14 +328,23 @@ function PmChatPageInner() {
 
   const startFreshChat = useCallback(async () => {
     if (!pmAgent) return;
-    if (!confirm('Start a fresh PM chat? This wipes the visible thread AND resets the PM agent\'s gateway session, so it forgets every prior message. In-progress proposal drafts are kept; only the chat history is cleared.')) return;
+    if (!confirm('Start a fresh PM chat? This wipes the visible thread AND resets the PM\'s dispatch session, so it forgets every prior /pm message. In-progress proposal drafts are kept; only the chat history is cleared.')) return;
     setNewChatBusy('reset');
     setNewChatMenuOpen(false);
     try {
       // Order matters: reset the gateway session first, then clear the
       // local thread. If the reset fails we leave the thread intact so
       // the operator can try again rather than losing visibility.
-      const resetRes = await fetch(`/api/agents/${pmAgent.id}/reset`, { method: 'POST' });
+      //
+      // Target `dispatch-main` specifically — that's the session the
+      // /pm chat actually uses (via dispatchScope). Resetting the
+      // agent's `main` session here would do nothing for /pm (different
+      // session) and waste an init on the agent-detail-page chat
+      // session that wasn't even involved.
+      const resetRes = await fetch(
+        `/api/agents/${pmAgent.id}/reset?session_suffix=dispatch-main`,
+        { method: 'POST' },
+      );
       if (!resetRes.ok) {
         const data = await resetRes.json().catch(() => ({}));
         throw new Error(data.error || `Reset failed (${resetRes.status})`);
