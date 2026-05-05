@@ -217,15 +217,24 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
     parent_proposal_id: input.parent_proposal_id ?? null,
     dispatch_state: gatewayUp ? 'pending_agent' : 'synth_only',
   });
-  try {
-    postPmChatMessage({
-      workspace_id: input.workspace_id,
-      content: synth.impact_md,
-      proposal_id: placeholder.id,
-      role: 'assistant',
-    });
-  } catch (err) {
-    console.warn('[pm-dispatch] chat insert failed:', (err as Error).message);
+  // Echo the synth proposal into chat ONLY when we know the agent
+  // can't respond (gateway down). When the gateway is up the synth
+  // is a placeholder — posting it as chat now produced a misleading
+  // "Proposal — 0 changes" card BEFORE the PM agent had a chance to
+  // reply. The agent's actual reply (and any structured proposal) is
+  // posted later by the background dispatch via supersede or via the
+  // synth-only fallback below.
+  if (!gatewayUp) {
+    try {
+      postPmChatMessage({
+        workspace_id: input.workspace_id,
+        content: synth.impact_md,
+        proposal_id: placeholder.id,
+        role: 'assistant',
+      });
+    } catch (err) {
+      console.warn('[pm-dispatch] chat insert failed:', (err as Error).message);
+    }
   }
 
   if (!gatewayUp) {
@@ -361,6 +370,25 @@ async function runDisruptionDispatchInBackground(
     `[pm-dispatch] disruption reconciler timed out for placeholder ${placeholder.id} (workspace=${input.workspace_id}); marking synth_only`,
   );
   setDispatchState(placeholder.id, 'synth_only');
+
+  // Surface what the agent ACTUALLY said. The structured-proposal
+  // path didn't fire (no propose_changes call landed), but the agent
+  // typically still replied with text — that's the most useful thing
+  // to show in chat. If we have nothing usable, fall back to the
+  // synth content so the operator at least sees that.
+  const replyText = extractAgentReplyText(result);
+  const chatBody = replyText.trim() || placeholder.impact_md;
+  try {
+    postPmChatMessage({
+      workspace_id: input.workspace_id,
+      content: chatBody,
+      proposal_id: replyText ? undefined : placeholder.id,
+      role: 'assistant',
+    });
+  } catch (err) {
+    console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
+  }
+
   broadcast({
     type: 'pm_proposal_dispatch_state_changed',
     payload: {
@@ -374,6 +402,42 @@ async function runDisruptionDispatchInBackground(
     used_named_agent: false,
     used_synthesize_fallback: true,
   };
+}
+
+/**
+ * Pull readable assistant text out of a sendChatAndAwaitReply result.
+ * Prefers `doneEvent` (the model's final message) and falls back to
+ * the streamed `reply` events. Empty string when the dispatch
+ * produced no usable text (transport failure / nothing emitted).
+ */
+function extractAgentReplyText(
+  result: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null,
+): string {
+  if (!result || !result.sent) return '';
+  const readMessage = (m: unknown): string => {
+    if (!m) return '';
+    if (typeof m === 'string') return m;
+    if (typeof m === 'object' && 'content' in m) {
+      const c = (m as { content: unknown }).content;
+      if (typeof c === 'string') return c;
+      if (Array.isArray(c)) {
+        return c
+          .map(part =>
+            typeof part === 'string'
+              ? part
+              : typeof part === 'object' && part && 'text' in part && typeof (part as { text: unknown }).text === 'string'
+                ? (part as { text: string }).text
+                : '',
+          )
+          .filter(Boolean)
+          .join('');
+      }
+    }
+    return '';
+  };
+  const fromDone = readMessage(result.doneEvent?.message).trim();
+  if (fromDone) return fromDone;
+  return (result.reply ?? []).map(e => readMessage(e.message)).join('').trim();
 }
 
 // ─── Named-agent dispatch ───────────────────────────────────────────
