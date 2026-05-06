@@ -28,11 +28,25 @@ Before you commit to an approach, check:
 
 After you make progress, scan for any `kind: question` you can now answer.
 
-## Closing a note
+## Acting on notes you read
 
-When a `blocker` is resolved or an `uncertainty` clarified, call
-`archive_note(note_id, reason: '<one line>')`. Don't leave stale
-worries in the feed.
+The note lifecycle has two terminal calls, both via `update_note`:
+
+- **You acted on a note from a prior stage.** Call
+  `update_note({ note_id, action: 'consume', stage_slug: '<your role>' })`.
+  This records that *your* stage processed it, so the next dispatch for
+  your stage doesn't re-show the same breadcrumb. Idempotent.
+  Critical: do this whenever you act on a note — without it, your
+  briefings keep growing as old notes pile up.
+
+- **A note has gone stale for everyone.** Call
+  `update_note({ note_id, action: 'archive', reason: '<one line>' })`.
+  Use when a `blocker` is resolved, an `uncertainty` clarified, or an
+  observation no longer reflects reality. The row stays for audit but
+  drops out of every future briefing and the live feed.
+
+Don't leave stale worries in the feed; don't let prior-stage notes
+keep appearing on your briefings after you've acted on them.
 
 ## Why this matters
 

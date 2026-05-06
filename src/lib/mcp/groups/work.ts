@@ -1,7 +1,7 @@
 /**
  * Work MCP tools — task execution, mail, deliverables, evidence,
  * subtask delegation, knowledge, subagent dispatch registration, and the
- * note-lifecycle tools (mark_note_consumed / archive_note).
+ * note-lifecycle tool (update_note — consume + archive actions).
  *
  * Behavior is unchanged from the legacy `tools.ts` consolidation; this is
  * a pure relocation as part of the MCP surface refactor (PR 1).
@@ -447,61 +447,68 @@ export function registerWorkTools(server: McpServer): void {
     }),
   );
 
-  // mark_note_consumed ─────────────────────────────────────────────
+  // update_note ────────────────────────────────────────────────────
+  // Consolidated lifecycle tool. Replaces mark_note_consumed and
+  // archive_note (PR 5 of the MCP surface v2 stack). Action enum keeps
+  // the agent's mental model concrete (consume vs archive are
+  // semantically distinct: consume = "I read it"; archive = "kill it
+  // for everyone").
   server.registerTool(
-    'mark_note_consumed',
+    'update_note',
     {
-      title: 'Record that this stage has read a note',
+      title: 'Update a note (mark consumed by your stage, or archive it)',
       description:
-        "Idempotent. Call this when you've actually processed a note from a prior stage so the next briefing for this stage doesn't re-show it. Pass your stage slug (your current role) — e.g., 'tester' if you're the tester reading a builder breadcrumb.",
+        "Two actions:\n" +
+        "- `consume` — record that your stage has read this note so the next briefing for your stage doesn't re-show it. Idempotent. Requires `stage_slug` (typically your current role, e.g. 'tester' if you're the tester reading a builder breadcrumb).\n" +
+        "- `archive` — soft-hide the note from future briefings and the live feed. The row stays for audit. Use when a blocker is resolved, an uncertainty clarified, or an observation has gone stale. Idempotent. Optional `reason` (max 500 chars).",
       inputSchema: {
         agent_id: agentIdArg,
         note_id: z.string().min(1),
+        action: z.enum(['consume', 'archive']).describe('Which lifecycle transition to apply.'),
         stage_slug: z
           .string()
           .min(1)
-          .describe("Your stage slug (typically your current role). Idempotent — duplicate calls are no-ops."),
+          .optional()
+          .describe("Required for action=consume. Your stage slug (typically your current role). Idempotent — duplicate calls are no-ops."),
+        reason: z
+          .string()
+          .max(500)
+          .optional()
+          .describe('action=archive only. Optional reason recorded with the archive event.'),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
-    trace('mark_note_consumed', async (args) => {
-      const note = markNoteConsumedDb(args.note_id, args.stage_slug);
-      if (!note) {
-        return {
-          isError: true,
-          content: [{ type: 'text', text: `note ${args.note_id} not found` }],
-          structuredContent: { error: 'not_found', note_id: args.note_id },
-        };
+    trace('update_note', async (args) => {
+      if (args.action === 'consume') {
+        if (!args.stage_slug) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: 'action=consume requires stage_slug' }],
+            structuredContent: { error: 'stage_slug_required' },
+          };
+        }
+        const note = markNoteConsumedDb(args.note_id, args.stage_slug);
+        if (!note) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `note ${args.note_id} not found` }],
+            structuredContent: { error: 'not_found', note_id: args.note_id },
+          };
+        }
+        const payload = noteToPayload(note);
+        broadcast({
+          type: 'agent_note_consumed',
+          payload: {
+            note_id: note.id,
+            workspace_id: note.workspace_id,
+            stage_slug: args.stage_slug,
+            consumed_by_stages: parseConsumedStages(note),
+          },
+        });
+        return textResult(JSON.stringify(payload, null, 2), payload);
       }
-      const payload = noteToPayload(note);
-      broadcast({
-        type: 'agent_note_consumed',
-        payload: {
-          note_id: note.id,
-          workspace_id: note.workspace_id,
-          stage_slug: args.stage_slug,
-          consumed_by_stages: parseConsumedStages(note),
-        },
-      });
-      return textResult(JSON.stringify(payload, null, 2), payload);
-    }),
-  );
 
-  // archive_note ───────────────────────────────────────────────────
-  server.registerTool(
-    'archive_note',
-    {
-      title: 'Soft-archive a note',
-      description:
-        "Hide a note from future briefings and the live feed. The row stays for audit. Use when a blocker is resolved, an uncertainty clarified, or an observation has gone stale. Idempotent — already-archived notes are no-ops.",
-      inputSchema: {
-        agent_id: agentIdArg,
-        note_id: z.string().min(1),
-        reason: z.string().max(500).optional(),
-      },
-      annotations: { destructiveHint: false, openWorldHint: false },
-    },
-    trace('archive_note', async (args) => {
+      // action === 'archive'
       const existing = getNote(args.note_id);
       if (!existing) {
         return {
