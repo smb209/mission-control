@@ -263,17 +263,39 @@ function applyAgentChanges(config, { dryRun }) {
         });
       }
     } else if (RUNNER_AGENT_RE.test(agent.id)) {
-      // Runner deny rewrite only.
+      // Runner agents host every persona (coordinator, builder, tester,
+      // reviewer, researcher, writer, learner) via scope-keyed sessions.
+      // Two mutations:
+      //
+      //   (a) Extend tools.deny[] with the cross-env / same-env scoped
+      //       MCP servers + the static RUNNER_ALWAYS_DENY list.
+      //
+      //   (b) Force `memorySearch.enabled = false` so openclaw's memory
+      //       layer doesn't bleed context between personas hosted on
+      //       the same runner gateway agent. Per-agent override of
+      //       agents.defaults.memorySearch.enabled. Note: a known QMD
+      //       backend regression (openclaw/openclaw#20581) may ignore
+      //       this flag — combined with the memory_search/memory_get
+      //       deny in RUNNER_ALWAYS_DENY, the agent-loop side is still
+      //       insulated from cross-persona leakage. Stamping the flag
+      //       lands the documented intent in config so the disable
+      //       takes effect when the regression is fixed (or when the
+      //       operator switches memory.backend to "builtin").
       const tools = agent.tools && typeof agent.tools === 'object' ? agent.tools : {};
       const newDeny = rewriteRunnerDeny(tools.deny, agent.id);
       const nextTools = { ...tools, deny: newDeny };
-      const candidate = { ...agent, tools: nextTools };
+
+      const existingMemorySearch =
+        agent.memorySearch && typeof agent.memorySearch === 'object' ? agent.memorySearch : {};
+      const nextMemorySearch = { ...existingMemorySearch, enabled: false };
+
+      const candidate = { ...agent, tools: nextTools, memorySearch: nextMemorySearch };
       if (JSON.stringify(candidate) !== JSON.stringify(agent)) {
         updated = candidate;
         changes.push({
           id: agent.id,
           index: i,
-          kind: 'runner-deny',
+          kind: 'runner-rewrite',
           block: candidate,
         });
       }
