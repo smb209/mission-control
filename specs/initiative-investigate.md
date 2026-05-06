@@ -205,13 +205,23 @@ Five PRs, stackable:
 | 4 | `feat(initiatives): subtree mode with MC-driven layered fan-out` | The roll-up orchestration. Per-level await, child-findings injection. |
 | 5 | `feat(pm): read recent audit notes during Plan dispatch` | Tiny SOUL edit + maybe a pre-fetch in pm-dispatch's plan trigger_body. |
 
-## Open questions
+## Decisions
 
-1. **Per-node timeout**: 15 min default per researcher dispatch, soft-overrunable? Or hard-cap?
-2. **Concurrency cap**: subtree mode could fan out 10+ leaves at once; do we cap at e.g. 4 in parallel to avoid rate-limit / runner saturation?
-3. **Re-audit policy**: if the operator re-runs an audit on the same node, do we keep prior notes (audit trail) or supersede the latest? Default: keep — the importance=2 filter shows them all.
-4. **Guidance scope on subtree**: should the operator's guidance flow only to the root researcher, or to every layer? Default: every layer; cheap to inline.
-5. **Failure handling**: if Layer 1 leaf #3 fails, do we proceed to Layer 2 with `(failed)` placeholder findings, or block the whole tree? Default: proceed with placeholder; the root researcher can flag the gap explicitly.
+1. **Per-node timeout + subtree concurrency cap**: stored as **workspace settings**, configurable per workspace. Defaults from the spec apply when unset (15 min timeout, 4 parallel). New columns / fields:
+   - `audit_per_node_timeout_ms` (integer, default 900000)
+   - `audit_subtree_concurrency` (integer, default 4, min 1, max 8)
+   Reachable from the workspace settings page; surfaced as a small "Audit defaults" subsection. Operator can dial up timeout for slow-codebase audits or up concurrency on machines that can hose the LLM.
+
+2. **Re-audit policy**: operator picks per dispatch via a radio in the modal:
+   - **Fresh context** (default): new run, new scope_key suffix attempt — `:audit:1` → `:audit:2` → ... — the researcher sees the initiative state but no prior audit findings.
+   - **Build on priors**: same scope_key (resume semantics), and the brief inlines the prior audit's note(s) so the researcher refines instead of re-deriving.
+   Both create new note rows tagged `importance=2` so the audit trail accumulates either way.
+
+3. **MC-driven fan-out** (vs agent-driven): confirmed. The runner-hosted researcher stays simple; orchestration lives in MC TS.
+
+4. **Guidance on subtree**: flows to **every layer**. Cheap to inline.
+
+5. **Failure handling on subtree**: if a Layer-N node fails or times out, MC proceeds to Layer-N+1 with a `(audit failed)` placeholder for that branch. The roll-up researcher reads the placeholder verbatim and flags the gap explicitly in its synthesis.
 
 ## Verification pipeline (iteration loop)
 
