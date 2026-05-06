@@ -200,7 +200,21 @@ function rewritePmDeny(deny, agentId) {
  *   - x_search — Twitter / X search. Not a useful research surface for
  *     this org's workloads.
  */
-const RUNNER_ALWAYS_DENY = ['memory_search', 'memory_get', 'x_search'];
+const RUNNER_ALWAYS_DENY = [
+  // Memory layer — runner hosts every persona; openclaw memory is
+  // persona-agnostic and would bleed context across persona switches.
+  // Belt-and-suspenders to memorySearch.enabled = false stamped below.
+  'memory_search',
+  'memory_get',
+  // Twitter / X search — not useful for any of the worker personas
+  // the runner hosts.
+  'x_search',
+  // Cron — scheduling is a PM / operator concern, not a runner-hosted
+  // persona concern. A coordinator subagent shouldn't be able to
+  // schedule wake events on the runner gateway. MC's own
+  // recurring-scheduler covers the runner-side scheduling needs.
+  'cron',
+];
 
 /**
  * Canonical openclaw skills list for runner-hosted personas. Same
@@ -316,12 +330,33 @@ function applyAgentChanges(config, { dryRun }) {
         agent.memorySearch && typeof agent.memorySearch === 'object' ? agent.memorySearch : {};
       const nextMemorySearch = { ...existingMemorySearch, enabled: false };
 
+      // (b2) Force `startupContext.enabled = false` so openclaw doesn't
+      // inject the "Recent daily memory" prelude (memory/<date>-*.md
+      // files) into the runner's session-init context. This is a SEPARATE
+      // config from memorySearch — memorySearch controls the runtime
+      // memory_search/memory_get tools (already denied above), while
+      // startupContext controls the one-shot bootstrap that auto-loads
+      // daily memory files at /new and /reset boundaries. Without this,
+      // the runner cold-starts with yesterday's persona context bleeding
+      // into today's session — the exact failure mode the rest of this
+      // block is designed to prevent.
+      // Per agents.defaults.startupContext.{enabled,applyOn,dailyMemoryDays,...}.
+      const existingStartupContext =
+        agent.startupContext && typeof agent.startupContext === 'object' ? agent.startupContext : {};
+      const nextStartupContext = { ...existingStartupContext, enabled: false };
+
       // (c) Pin skills to the canonical RUNNER_SKILLS list. Hard
       // overwrite — operator-validated working set; anything else just
       // burns context for personas that won't use it.
       const nextSkills = arraysEqual(agent.skills, RUNNER_SKILLS) ? agent.skills : [...RUNNER_SKILLS];
 
-      const candidate = { ...agent, tools: nextTools, memorySearch: nextMemorySearch, skills: nextSkills };
+      const candidate = {
+        ...agent,
+        tools: nextTools,
+        memorySearch: nextMemorySearch,
+        startupContext: nextStartupContext,
+        skills: nextSkills,
+      };
       if (JSON.stringify(candidate) !== JSON.stringify(agent)) {
         updated = candidate;
         changes.push({
