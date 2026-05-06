@@ -89,6 +89,70 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
   assert.ok(!names.has('delegate'), 'delegate tool should be removed');
 });
 
+// ─── per-group routing ──────────────────────────────────────────────
+
+async function listToolsForGroups(groups: Parameters<typeof buildServer>[0]) {
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  const s = buildServer(groups);
+  await s.connect(serverT);
+  const c = new Client({ name: 'test', version: '0.0.1' });
+  await c.connect(clientT);
+  const list = await c.listTools();
+  return new Set(list.tools.map((t) => t.name));
+}
+
+test('PM-scoped server (core+read+pm) excludes worker + crud tools', async () => {
+  const names = await listToolsForGroups(['core', 'read', 'pm']);
+
+  // Core present
+  for (const t of ['whoami', 'list_peers', 'log_activity', 'take_note', 'read_notes']) {
+    assert.ok(names.has(t), `expected core tool ${t}`);
+  }
+  // Read present
+  for (const t of ['list_initiatives', 'get_initiative_tree', 'get_roadmap_snapshot', 'list_proposals']) {
+    assert.ok(names.has(t), `expected read tool ${t}`);
+  }
+  // PM present
+  for (const t of ['propose_changes', 'propose_from_notes', 'refine_proposal', 'preview_derivation', 'add_owner_availability']) {
+    assert.ok(names.has(t), `expected pm tool ${t}`);
+  }
+  // Worker absent
+  for (const t of ['register_deliverable', 'submit_evidence', 'update_task_status', 'fail_task',
+                   'spawn_subtask', 'accept_subtask', 'reject_subtask', 'cancel_subtask',
+                   'register_subagent_dispatch', 'mark_note_consumed', 'archive_note']) {
+    assert.ok(!names.has(t), `pm mount must not expose worker tool ${t}`);
+  }
+  // CRUD absent
+  for (const t of ['create_initiative', 'update_initiative', 'move_initiative', 'convert_initiative']) {
+    assert.ok(!names.has(t), `pm mount must not expose crud tool ${t}`);
+  }
+});
+
+test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () => {
+  const names = await listToolsForGroups(['core', 'read', 'crud']);
+
+  // CRUD present
+  for (const t of ['create_initiative', 'update_initiative', 'move_initiative', 'convert_initiative',
+                   'add_initiative_dependency', 'remove_initiative_dependency',
+                   'move_task_to_initiative', 'promote_initiative_to_task', 'promote_task_to_inbox']) {
+    assert.ok(names.has(t), `expected crud tool ${t}`);
+  }
+  // PM absent
+  for (const t of ['propose_changes', 'propose_from_notes', 'refine_proposal']) {
+    assert.ok(!names.has(t), `crud mount must not expose pm tool ${t}`);
+  }
+  // Worker absent
+  for (const t of ['register_deliverable', 'spawn_subtask']) {
+    assert.ok(!names.has(t), `crud mount must not expose worker tool ${t}`);
+  }
+});
+
+test('default server (no groups arg) keeps full union of 47 tools', async () => {
+  const names = await listToolsForGroups(undefined);
+  // 47 tools in total post-PR1 / pre-PR4&5.
+  assert.equal(names.size, 47, `expected 47 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+});
+
 // ─── whoami ─────────────────────────────────────────────────────────
 
 test('whoami returns identity, assigned tasks, and peer roster', async () => {
