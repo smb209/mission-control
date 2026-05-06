@@ -135,6 +135,12 @@ This is the audit trail. The note surfaces on the initiative detail page and fee
 
 Don't call propose_changes; you don't have it on your mount. The PM will pick up your note when the operator decides to act.
 
+**Strict output discipline for this dispatch:**
+
+- Make **exactly ONE** \`take_note\` call — the summary observation defined above. No \`breadcrumb\`/\`discovery\`/\`question\` notes during the audit, even if you'd normally drop them while researching. Build all observations into the single summary instead.
+- This applies to BOTH fresh runs and re-audits where prior findings are inlined above. On a re-audit, your single \`take_note\` is a fresh standalone summary that supersedes the priors — not an incremental update or set of follow-up breadcrumbs. Read the priors, factor them in, but emit ONE consolidated summary.
+- The audit-trail accumulates by virtue of each summary being its own row; the operator reads them newest-first. Multiple breadcrumbs per dispatch fragment that trail and make it harder to compare audit passes.
+
 If the initiative has no associated code yet (planned-only, no tasks, nothing in the repo to point at), early-exit with a short verdict ("never built — planned-only, no audit work to do"). Don't burn ten minutes of exec on greenfield.
 `;
 }
