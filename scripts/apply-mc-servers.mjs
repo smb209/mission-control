@@ -330,22 +330,25 @@ function applyAgentChanges(config, { dryRun }) {
         agent.memorySearch && typeof agent.memorySearch === 'object' ? agent.memorySearch : {};
       const nextMemorySearch = { ...existingMemorySearch, enabled: false };
 
-      // (b2) NOTE: we previously stamped `startupContext.enabled = false`
-      // here to disable the daily-memory bootstrap on /new and /reset.
-      // Confirmed via live trial that openclaw's reload validator
-      // rejects `agents.list[].startupContext` as an Unrecognized key —
-      // per-agent override isn't supported in the current schema (only
-      // agents.defaults.startupContext.* is recognized). Openclaw
-      // atomically reverts to last-good on any schema failure, taking
-      // out the rest of our changes (cron deny etc.) as collateral.
-      // Until openclaw lands per-agent override support, the daily-
-      // memory bootstrap must be disabled globally via
-      // agents.defaults.startupContext.enabled = false (affects every
-      // agent including the PM), or via openclaw's own admin tooling.
-      // Tracking gap: the agent-loop side is still insulated from
-      // cross-persona memory leakage by the memory_search/memory_get
-      // tool deny in RUNNER_ALWAYS_DENY — the bootstrap context just
-      // arrives in the prompt as untrusted text the agent cannot query.
+      // (b2) Force `startupContext.enabled = false` so openclaw doesn't
+      // inject the "Recent daily memory" prelude (memory/<date>-*.md
+      // files) into the runner's session-init context. SEPARATE config
+      // from memorySearch — memorySearch governs the runtime
+      // memory_search/memory_get tools (already denied above);
+      // startupContext governs the one-shot bootstrap that auto-loads
+      // daily memory files at /new and /reset boundaries. Without this
+      // the runner cold-starts with yesterday's persona context bleeding
+      // into today's session.
+      //
+      // Per-agent override added in OpenClaw 2026.427. A previous
+      // attempt was rejected by the reload validator on ≤ 2026.426
+      // (openclaw atomically reverted the whole config to last-known-
+      // good when an Unrecognized key was present); restored here now
+      // that the schema accepts agents.list[].startupContext.
+      // Per agents.defaults.startupContext.{enabled,applyOn,dailyMemoryDays,...}.
+      const existingStartupContext =
+        agent.startupContext && typeof agent.startupContext === 'object' ? agent.startupContext : {};
+      const nextStartupContext = { ...existingStartupContext, enabled: false };
 
       // (c) Pin skills to the canonical RUNNER_SKILLS list. Hard
       // overwrite — operator-validated working set; anything else just
@@ -356,6 +359,7 @@ function applyAgentChanges(config, { dryRun }) {
         ...agent,
         tools: nextTools,
         memorySearch: nextMemorySearch,
+        startupContext: nextStartupContext,
         skills: nextSkills,
       };
       if (JSON.stringify(candidate) !== JSON.stringify(agent)) {
