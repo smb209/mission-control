@@ -203,6 +203,33 @@ function rewritePmDeny(deny, agentId) {
 const RUNNER_ALWAYS_DENY = ['memory_search', 'memory_get', 'x_search'];
 
 /**
+ * Canonical openclaw skills list for runner-hosted personas. Same
+ * surface-pruning rationale as RUNNER_ALWAYS_DENY: skills that aren't
+ * useful for any of the worker personas the runner hosts (coordinator,
+ * builder, tester, reviewer, researcher, writer, learner) just burn
+ * context and confuse the agent's decision tree. Kept in lock-step
+ * with whatever the operator validates as the working set.
+ */
+const RUNNER_SKILLS = [
+  'acp-router',
+  'github',
+  'healthcheck',
+  'node-connect',
+  'peekaboo',
+  'tmux',
+  'video-frames',
+  'native-data-fetching',
+  'taskflow',
+];
+
+function arraysEqual(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
  * Runner agents keep the full-surface allowlist. They still need their
  * deny[] extended so they can't see the new PM/CRUD-scoped catalogs
  * from the OTHER environment (and to keep CRUD off their plate even in
@@ -289,7 +316,12 @@ function applyAgentChanges(config, { dryRun }) {
         agent.memorySearch && typeof agent.memorySearch === 'object' ? agent.memorySearch : {};
       const nextMemorySearch = { ...existingMemorySearch, enabled: false };
 
-      const candidate = { ...agent, tools: nextTools, memorySearch: nextMemorySearch };
+      // (c) Pin skills to the canonical RUNNER_SKILLS list. Hard
+      // overwrite — operator-validated working set; anything else just
+      // burns context for personas that won't use it.
+      const nextSkills = arraysEqual(agent.skills, RUNNER_SKILLS) ? agent.skills : [...RUNNER_SKILLS];
+
+      const candidate = { ...agent, tools: nextTools, memorySearch: nextMemorySearch, skills: nextSkills };
       if (JSON.stringify(candidate) !== JSON.stringify(agent)) {
         updated = candidate;
         changes.push({

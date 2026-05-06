@@ -41,11 +41,13 @@ const baseConfig = () => ({
       {
         id: 'mc-runner',
         name: 'MC Runner',
+        skills: ['acp-router', 'old-skill-to-be-pruned'],
         tools: { alsoAllow: ['sc-mission-control__*', 'browser'], deny: ['image_generate'] },
       },
       {
         id: 'mc-runner-dev',
         name: 'MC Runner Dev',
+        skills: ['acp-router', 'old-skill-to-be-pruned'],
         tools: { alsoAllow: ['sc-mission-control-dev__*', 'browser'], deny: ['image_generate'] },
       },
       {
@@ -153,6 +155,10 @@ test('apply-mc-servers: write mode rewrites PM and adds scoped servers', () => {
     assert.deepEqual(runnerStable.memorySearch, { enabled: false }, 'runner must have memorySearch.enabled=false');
     const runnerDev = after.agents.list.find((a: { id: string }) => a.id === 'mc-runner-dev');
     assert.deepEqual(runnerDev.memorySearch, { enabled: false }, 'dev runner must have memorySearch.enabled=false too');
+    // Skills pinned to the canonical RUNNER_SKILLS list — old-skill-to-be-pruned dropped.
+    const expectedSkills = ['acp-router', 'github', 'healthcheck', 'node-connect', 'peekaboo', 'tmux', 'video-frames', 'native-data-fetching', 'taskflow'];
+    assert.deepEqual(runnerStable.skills, expectedSkills, 'runner skills must match canonical list');
+    assert.deepEqual(runnerDev.skills, expectedSkills, 'dev runner skills must match canonical list');
 
     // Unrelated agent untouched.
     const random = after.agents.list.find((a: { id: string }) => a.id === 'random-agent');
