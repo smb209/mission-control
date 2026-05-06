@@ -16,8 +16,10 @@
  *   - `shift_initiative_target` — UPDATE initiatives SET target_*
  *   - `add_availability` — INSERT INTO owner_availability
  *   - `set_initiative_status` — UPDATE initiatives SET status
- *       (planned | in_progress | at_risk | blocked only — done/cancelled
- *       are off-limits for the PM)
+ *       (any of planned | in_progress | at_risk | blocked | done | cancelled;
+ *       operator approves at the proposal level — see
+ *       specs/initiative-investigate.md §"Schema gap" for why the prior
+ *       PM-side `done`/`cancelled` block was lifted)
  *   - `add_dependency` — INSERT INTO initiative_dependencies
  *   - `remove_dependency` — DELETE by id
  *   - `reorder_initiatives` — UPDATE sort_order across siblings
