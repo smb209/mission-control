@@ -194,10 +194,20 @@ export default function InitiativesPage() {
   // right pane always re-renders on click. URL is a synced side-effect for
   // deep links / back-forward (initial value seeds local state once on
   // mount; subsequent clicks push to the URL via window.history).
-  const [selectedId, setSelectedId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return new URL(window.location.href).searchParams.get('selected');
-  });
+  //
+  // IMPORTANT: initial state must be `null` on both server and client to
+  // avoid a hydration mismatch — the server has no access to
+  // window.location.search, so a lazy initializer that reads it would
+  // make the first paint diverge (server renders empty-state copy while
+  // client renders the InitiativeDetailView loading state). We hydrate
+  // the URL-based selection from a useEffect below on first mount.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    const fromUrl = new URL(window.location.href).searchParams.get('selected');
+    if (fromUrl) setSelectedId(fromUrl);
+    // Run once on mount; subsequent URL changes flow through selectInitiative.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const selectInitiative = useCallback(
     (id: string | null) => {
       setSelectedId(id);
