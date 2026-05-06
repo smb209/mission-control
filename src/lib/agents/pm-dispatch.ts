@@ -367,6 +367,9 @@ async function runDisruptionDispatchInBackground(
 
   // eslint-disable-next-line @typescript-eslint/no-shadow
   async function runDispatchBody(): Promise<{ final: PmProposal; used_named_agent: boolean; used_synthesize_fallback: boolean }> {
+  // Hoisted out of the inner try-block so the post-resolve poll site
+  // can read it. See onAgentEvent below for where it's set.
+  let proposeChangesAttempted = false;
   try {
     // In-flight visibility (PR C): tap chat_event deltas + final
     // markers and broadcast as `pm_dispatch_in_flight` so /pm can
@@ -380,6 +383,15 @@ async function runDisruptionDispatchInBackground(
     let lastDeltaBroadcastAt = 0;
     let accumulatedText = '';
     const DELTA_BROADCAST_INTERVAL_MS = 250;
+    // Note: proposeChangesAttempted is declared on the outer
+    // runDispatchBody scope so the post-resolve poll-site (below)
+    // can read it. We flip it in onAgentEvent below when we see a
+    // tool-call event for propose_changes (raw or MCP-namespaced);
+    // used to gate the reconciler tail. In Mode B (no tool call)
+    // there's no pm_proposals row to wait for, so the reconciler
+    // tail (up to 60s) is pure dead air — operator sees the reply
+    // in openclaw's webui immediately but nothing in MC's PM chat
+    // until the timer expires.
     // Tool-call surfacing (PR D). agent_event payloads carry tool
     // calls / tool results / status transitions. Broadcast each
     // matching event as a `pm_dispatch_in_flight` event with
@@ -391,6 +403,16 @@ async function runDisruptionDispatchInBackground(
       try {
         const summary = summariseAgentEvent(event);
         if (!summary) return;
+        // Tool name may be raw ("propose_changes") or MCP-namespaced
+        // by openclaw ("sc-mission-control[-dev]__propose_changes").
+        // Match either shape — the dispatcher's namespacing is gateway-
+        // version-dependent and our heuristic shouldn't care.
+        if (
+          summary.tool === 'propose_changes' ||
+          summary.tool.endsWith('__propose_changes')
+        ) {
+          proposeChangesAttempted = true;
+        }
         broadcast({
           type: 'pm_dispatch_in_flight',
           payload: {
@@ -470,7 +492,12 @@ async function runDisruptionDispatchInBackground(
     );
   }
 
-  const tailMs = result?.sent ? RECONCILER_TAIL_MS : 0;
+  // Gate the reconciler tail on whether the agent actually attempted
+  // propose_changes during the dispatch. If it didn't (Mode B
+  // conversational reply), there's no pm_proposals row to wait for —
+  // skip the wait entirely so MC's chat surfaces the reply at the
+  // same wall-clock moment openclaw's webui shows it.
+  const tailMs = result?.sent && proposeChangesAttempted ? RECONCILER_TAIL_MS : 0;
   const found = await pollForAgentProposal(input.workspace_id, sinceIso, placeholder.id, tailMs);
 
   if (found) {
