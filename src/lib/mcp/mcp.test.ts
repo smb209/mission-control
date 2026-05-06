@@ -6,7 +6,7 @@
  * tools, state-changing tools (happy path + authz violation), evidence-gate
  * integration with update_task_status.
  *
- * The coordinator-delegation tools (`spawn_subtask`, `reject_subtask`) that
+ * The coordinator-delegation tools (`spawn_subtask`, `update_subtask`) that
  * call openclaw's WebSocket gateway are not exercised end-to-end here —
  * the gateway client can't be mocked cleanly in this harness. A pilot-
  * environment smoke exercises the live flow.
@@ -80,13 +80,16 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     // See specs/coordinator-delegation-via-convoy-spec.md §3.
     'spawn_subtask',
     'list_my_subtasks',
-    'accept_subtask',
-    'reject_subtask',
-    'cancel_subtask',
+    'update_subtask',
   ]) {
     assert.ok(names.has(expected), `missing tool: ${expected}`);
   }
   assert.ok(!names.has('delegate'), 'delegate tool should be removed');
+  // The pre-PR4 trio collapsed into update_subtask — none of the old
+  // names should remain.
+  for (const removed of ['accept_subtask', 'reject_subtask', 'cancel_subtask']) {
+    assert.ok(!names.has(removed), `${removed} should be removed (consolidated into update_subtask)`);
+  }
 });
 
 // ─── per-group routing ──────────────────────────────────────────────
@@ -118,7 +121,7 @@ test('PM-scoped server (core+read+pm) excludes worker + crud tools', async () =>
   }
   // Worker absent
   for (const t of ['register_deliverable', 'submit_evidence', 'update_task_status', 'fail_task',
-                   'spawn_subtask', 'accept_subtask', 'reject_subtask', 'cancel_subtask',
+                   'spawn_subtask', 'update_subtask',
                    'register_subagent_dispatch', 'mark_note_consumed', 'archive_note']) {
     assert.ok(!names.has(t), `pm mount must not expose worker tool ${t}`);
   }
@@ -147,10 +150,11 @@ test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () 
   }
 });
 
-test('default server (no groups arg) keeps full union of 47 tools', async () => {
+test('default server (no groups arg) keeps full union of 45 tools', async () => {
   const names = await listToolsForGroups(undefined);
-  // 47 tools in total post-PR1 / pre-PR4&5.
-  assert.equal(names.size, 47, `expected 47 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  // 45 tools post-PR4: accept/reject/cancel_subtask collapsed into the
+  // single update_subtask discriminator (47 - 3 + 1).
+  assert.equal(names.size, 45, `expected 45 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
 });
 
 // ─── whoami ─────────────────────────────────────────────────────────
