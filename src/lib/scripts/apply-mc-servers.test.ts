@@ -94,8 +94,8 @@ test('apply-mc-servers: dry-run on fresh config reports drift and exits 2', () =
     assert.match(r.stdout, /add mcp.servers.sc-mission-control-crud-dev /);
     assert.match(r.stdout, /pm-rewrite mc-pm-default(?!-dev)/);
     assert.match(r.stdout, /pm-rewrite mc-pm-default-dev/);
-    assert.match(r.stdout, /runner-deny mc-runner(?!-dev)/);
-    assert.match(r.stdout, /runner-deny mc-runner-dev/);
+    assert.match(r.stdout, /runner-rewrite mc-runner(?!-dev)/);
+    assert.match(r.stdout, /runner-rewrite mc-runner-dev/);
 
     // Confirm fixture wasn't mutated.
     const after = JSON.parse(readFileSync(path, 'utf8'));
@@ -147,6 +147,12 @@ test('apply-mc-servers: write mode rewrites PM and adds scoped servers', () => {
     assert.ok(runnerStable.tools.deny.includes('memory_search'), 'runner must deny memory_search');
     assert.ok(runnerStable.tools.deny.includes('memory_get'), 'runner must deny memory_get');
     assert.ok(runnerStable.tools.deny.includes('x_search'), 'runner must deny x_search');
+    // Per-agent memorySearch override — disables openclaw memory layer
+    // for the runner so persona switches don't bleed context. Belt-and-
+    // suspenders to the memory_search/memory_get deny above.
+    assert.deepEqual(runnerStable.memorySearch, { enabled: false }, 'runner must have memorySearch.enabled=false');
+    const runnerDev = after.agents.list.find((a: { id: string }) => a.id === 'mc-runner-dev');
+    assert.deepEqual(runnerDev.memorySearch, { enabled: false }, 'dev runner must have memorySearch.enabled=false too');
 
     // Unrelated agent untouched.
     const random = after.agents.list.find((a: { id: string }) => a.id === 'random-agent');
