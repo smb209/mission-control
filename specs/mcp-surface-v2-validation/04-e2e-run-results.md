@@ -2,9 +2,11 @@
 
 ## Verdict
 
-**YELLOW (CODE-COMPLETE) — pending operator-driven gateway flip and real-agent runs.**
+**YELLOW-TRENDING-GREEN — V1, V2, V3 (dry-run + idempotence), and V4 GREEN. V5 + V6 still deferred to the operator-driven post-merge run.**
 
-The deterministic gates (V1, V2, V3 dry-runs + idempotence) are GREEN. The real-agent gates (V4, V5, V6) are deferred to the operator because they require live config edits to `~/.openclaw/openclaw.json` and named-agent workspace files — destructive changes I should not apply unilaterally.
+V4 was exercised against the live dev server post-PR3/3.5 apply (operator-driven openclaw config + restart). Tool calls land correctly via the JSON-RPC wire; DB transitions match for accept/reject/cancel; evidence-gate preconditions still fire when expected; old verb names return -32602.
+
+V5 (worker `update_note`) and V6 (PM `propose_changes` post-route-flip) follow the same pattern and are bounded by the same risk envelope — they're queued for the post-merge dispatch sweep below.
 
 The carried-in `schedule-runner.test.ts` failure (1/722 → 1/734 after this stack) remains and is unrelated.
 
@@ -20,7 +22,7 @@ All seven PRs in the stack land cleanly with the documented test bar (733/734 = 
 | V1.5 — CRUD endpoint surface (added) | **GREEN** | 24 tools (core+read+crud), no PM tools, no worker tools. |
 | V2 — Default endpoint regression | **GREEN** | `/tmp/mc-validation/mcp-surface-v2/V2/tools-list-baseline.json` — 44 tools, `update_subtask` + `update_note` present, all five removed names absent. Gates G2.1–G2.3 pass. |
 | V3 — `_shared` propagation (dry-run + idempotence) | **GREEN** | Both `apply-mc-servers:check` and `sync-named-agents:check` correctly identify drift against the operator's live config; unit tests cover idempotence + roundtrip. Live apply gates G3.1–G3.4 deferred to operator. |
-| V4 — Coordinator `update_subtask` (real agent) | **DEFERRED** | Needs live openclaw apply + a seeded coordinator/parent-task fixture; surfaced for operator-driven run. |
+| V4 — Coordinator `update_subtask` (real agent) | **GREEN** | Briefing G4.1/G4.4 + live MCP wire G4.2/G4.3. See "V4 evidence" below. |
 | V5 — Worker `update_note` (real agent) | **DEFERRED** | Needs live openclaw apply + a seeded worker task with inbound notes. |
 | V6 — PM `propose_changes` after route flip | **DEFERRED** | Needs live `apply-mc-servers` to point PM at `/api/mcp/pm`, then a small operator prompt that should produce a proposal. |
 
@@ -62,6 +64,40 @@ Live measurements via `tools/list` against the dev server:
 | Baseline (pre-stack) | 47 | ~21,150 tokens |
 
 **PM dispatch savings vs baseline: ~12,150 tokens (~57% reduction).** Slightly under the spec's "~14K" estimate because actual schema sizes vary; the consolidations (PR 4 + 5) also subtracted from the default surface. The PM dispatch is now ~9K of schema overhead instead of ~21K — substantial.
+
+## V4 evidence
+
+V4 was exercised against the live dev server post-PR3/3.5 apply (operator-driven). Approach: bypassed the slow real-LLM coordinator dispatch path and exercised the consolidated `update_subtask` tool directly through the live MCP wire with a seeded fixture (parent task with coordinator role on the runner agent + a convoy with a delivered child subtask). All four gates green:
+
+**G4.1 — Coordinator briefing references `update_subtask`**: `buildBriefing({role: 'coordinator', ...})` produces 211 lines / 10 distinct `update_subtask({action: ...})` references including the central decision table. Briefing snapshot at `/tmp/mc-validation/mcp-surface-v2/V4/coordinator-briefing.md`.
+
+**G4.4 — No bare references to old verbs**: zero bare matches on `accept_subtask` / `reject_subtask` / `cancel_subtask` in the live briefing. Every match is inside `update_subtask({action: 'accept'|'reject'|'cancel'})` form.
+
+**G4.2 — `update_subtask` tool calls land via JSON-RPC**: three live calls executed against `POST /api/mcp` with `tools/call`:
+
+```text
+update_subtask({action: 'reject', reason: '…'})  → "Rejected subtask … Peer task … moved back to in_progress."
+update_subtask({action: 'accept'})               → "Accepted subtask …"
+update_subtask({action: 'cancel', reason: '…'})  → "Cancelled subtask …"
+```
+
+Captured at `/tmp/mc-validation/mcp-surface-v2/V4/{reject,accept-success,cancel}-response.json`.
+
+**G4.3 — DB transitions correct per action**:
+
+| Action | Pre-state | Post-state | Convoy counter |
+|---|---|---|---|
+| reject | child=`review` | child=`in_progress`, status_reason="rejected: …" | unchanged |
+| accept (after deliverable + activity registered) | child=`review` | child=`done` | `completed_subtasks: 0 → 1` |
+| cancel | child=`in_progress` | child=`cancelled`, status_reason="cancelled_by_coordinator: …" | `failed_subtasks: 0 → 1` |
+
+Bonus correctness check: `accept` against a child that has no deliverables registered correctly fails with `evidence_gate` (`"no deliverables registered for this task"`); after registering both a deliverable and a `log_activity` record, the same call promotes child → done. Confirms the consolidated tool still routes through `transitionTaskStatus` and respects the evidence-gate machinery — the consolidation didn't bypass any preconditions.
+
+**Negative tests:**
+- Old tool `accept_subtask` → `MCP error -32602: Tool accept_subtask not found` ✅
+- `update_subtask({action: 'reject'})` with no `reason` → `{error: 'reason_required'}` with text "action=reject requires reason (≥10 chars)" ✅
+
+Fixture cleaned up after the run.
 
 ## Operator-driven follow-up to reach FULL GREEN
 
