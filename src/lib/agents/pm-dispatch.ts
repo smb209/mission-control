@@ -38,6 +38,7 @@ import {
   createProposal,
   listProposals,
   setDispatchState,
+  deleteProposal,
   supersedeWithAgentProposal,
   type PmDiff,
   type PmProposal,
@@ -540,13 +541,54 @@ async function runDisruptionDispatchInBackground(
     }
   }
 
+  // Mode B path: agent didn't attempt propose_changes (we know via the
+  // proposeChangesAttempted flag). If the synth also had nothing to
+  // contribute, the placeholder is pure noise — delete it so the
+  // recents list / activity feed doesn't get polluted with empty
+  // "0 changes" cards. The chat reply (if any) is the only artifact.
+  //
+  // Restricted to interactive-chat trigger kinds. notes_intake
+  // dispatches are programmatic — callers (e.g. propose_from_notes)
+  // await completion and inspect placeholder.dispatch_state to decide
+  // queueing/replay; deleting the row would break that contract.
+  const interactiveTrigger = input.trigger_kind !== 'notes_intake';
+  if (interactiveTrigger && !proposeChangesAttempted && placeholder.proposed_changes.length === 0) {
+    console.log(
+      `[pm-dispatch] disruption resolved as Mode B with 0 synth changes — deleting placeholder ${placeholder.id}`,
+    );
+    try {
+      deleteProposal(placeholder.id);
+    } catch (err) {
+      console.warn('[pm-dispatch] placeholder cleanup failed:', (err as Error).message);
+      // Fall through; not worth blocking the chat post.
+    }
+    const replyTextEarly = extractAgentReplyText(result).trim();
+    if (replyTextEarly) {
+      try {
+        postPmChatMessage({
+          workspace_id: input.workspace_id,
+          content: replyTextEarly,
+          role: 'assistant',
+        });
+      } catch (err) {
+        console.warn('[pm-dispatch] mode-b chat insert failed:', (err as Error).message);
+      }
+    }
+    // Match the synth_only semantics on these flags: no structured
+    // agent proposal landed, so used_named_agent=false; used_synthesize_fallback
+    // mirrors the legacy "agent didn't write" → fallback shape.
+    return { final: placeholder, used_named_agent: false, used_synthesize_fallback: true };
+  }
+
   console.log(
     `[pm-dispatch] disruption reconciler timed out for placeholder ${placeholder.id} (workspace=${input.workspace_id}); marking synth_only`,
   );
   setDispatchState(placeholder.id, 'synth_only');
 
   // Surface what the agent ACTUALLY said. The structured-proposal
-  // path didn't fire (no propose_changes call landed). Three sub-cases:
+  // path didn't fire (no propose_changes call landed). Two remaining
+  // sub-cases (the third — Mode B + 0 synth changes — handled above
+  // by deleting the placeholder):
   //
   //   - Agent replied with usable text → post that. Most useful path
   //     for chatty prompts ("Test", "What about X?") that don't merit
@@ -554,11 +596,6 @@ async function runDisruptionDispatchInBackground(
   //   - Agent replied empty AND the synth produced ≥1 structured
   //     change → post the synth content (it's at least factual about
   //     workspace state).
-  //   - Agent replied empty AND synth has 0 changes → post NOTHING.
-  //     The misleading "Proposal — 0 changes / disruption acknowledged"
-  //     card was the worst of all worlds: implied a proposal where
-  //     none exists. Better to leave the chat clean; the placeholder
-  //     row still exists in pm_proposals for /pm/activity.
   const replyText = extractAgentReplyText(result).trim();
   if (replyText) {
     try {

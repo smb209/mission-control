@@ -68,7 +68,17 @@ export async function GET(request: NextRequest) {
       limit: limitRaw ? Math.max(1, parseInt(limitRaw, 10) || 50) : undefined,
     };
     const rows = listProposals(filters);
-    return NextResponse.json(rows);
+    // Filter out empty synth_only placeholders. Pre-PR234 every PM
+    // dispatch persisted a synth row even when the agent replied in
+    // Mode B with nothing actionable; those rows shouldn't pollute
+    // the recents sidebar / activity feed. New dispatches delete the
+    // empty placeholder up front; this filter handles legacy rows
+    // already in the DB. Operators can still view them via direct
+    // /pm/proposals/<id> links if needed.
+    const visible = rows.filter(
+      (p) => !(p.dispatch_state === 'synth_only' && p.proposed_changes.length === 0),
+    );
+    return NextResponse.json(visible);
   } catch (error) {
     console.error('Failed to list PM proposals:', error);
     const msg = error instanceof Error ? error.message : 'Failed to list proposals';
