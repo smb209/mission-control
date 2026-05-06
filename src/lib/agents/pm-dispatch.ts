@@ -331,7 +331,8 @@ async function runDisruptionDispatchInBackground(
       ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary: buildSnapshotSummary(snapshot) })
       : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator input:\n> ${input.trigger_text}\n\n` +
-        `Pick Mode A (\`propose_changes\` + \`Proposal {id}.\` reply) for roadmap mutations, or Mode B (concise plain-text reply, no \`propose_changes\`) for everything else. Empty reply = bug.`;
+        `Pick Mode A (\`propose_changes\` + \`Proposal {id}.\` reply) for roadmap mutations, or Mode B (concise plain-text reply, no \`propose_changes\`) for everything else. Empty reply = bug. ` +
+        `When you need a tool, **issue the tool call** — don't print the tool's name as prose.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
   // Compute the FULL gateway sessionKey here so the activePmDispatches

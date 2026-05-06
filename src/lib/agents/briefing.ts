@@ -199,10 +199,16 @@ function buildActiveSubagentManifest(input: BuildBriefingInput): string {
 
 function buildResumeHint(input: BuildBriefingInput): string {
   if (!input.is_resume) return '';
+  // Don't name a specific MCP tool here — the agent has the tool
+  // catalog. Naming a tool by bare name (e.g. `read_notes`) used to
+  // produce "Tool read_notes not found" errors when the agent
+  // literally tried to call the bare name on a scoped MCP mount
+  // (sc-mission-control-pm-dev) where the tool exists only under its
+  // namespaced form.
   return (
     `\n\n_Note: this session has prior trajectory under the same scope key. ` +
-    `Recent turns are above; you may build on them. Call \`read_notes\` to ` +
-    `refresh anything you've forgotten._`
+    `Recent turns are above; build on them. If something earlier feels missing, ` +
+    `look at the available MCP tools in your catalog before guessing._`
   );
 }
 
