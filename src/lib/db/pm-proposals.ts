@@ -595,6 +595,19 @@ export function setDispatchState(id: string, state: PmProposalDispatchState): vo
 }
 
 /**
+ * Hard-delete a proposal row. Used when a synth placeholder was created
+ * speculatively but the dispatch resolved as a Mode B conversational
+ * reply with 0 actionable changes — the placeholder is pure noise on
+ * the recents list, so we drop it rather than leave a dangling
+ * "0 changes / dispatch_state=synth_only" row. Only safe when no
+ * downstream rows reference this proposal_id (no acceptance, no chat
+ * post tied to it). Caller verifies the row's state first.
+ */
+export function deleteProposal(id: string): void {
+  run(`DELETE FROM pm_proposals WHERE id = ?`, [id]);
+}
+
+/**
  * Mark a row as superseded by another. Used when the agent's `propose_changes`
  * lands after a synth placeholder was already persisted: the synth row is
  * superseded, and the agent's row inherits the synth row's
