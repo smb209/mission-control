@@ -320,16 +320,18 @@ async function runDisruptionDispatchInBackground(
   // in front of it. Interactive PM chat (the disruption path below) drops
   // the inline summary and tells the agent to fetch on demand. See
   // specs/pm-chat-prompt.md §"Trigger_body changes".
+  // Per-turn trigger body. Stays terse on purpose — the canonical Mode A/B
+  // contract lives in SOUL.md and is sent in the briefing on first dispatch
+  // (post-PR230, briefing skips static blocks on resume so we save tokens
+  // by NOT re-injecting the SOUL contract every turn). This recap is just
+  // a one-line nudge plus the "empty reply = bug" guardrail that
+  // PR #196/197/199 specifically addressed.
   const trigger_body =
     input.trigger_kind === 'notes_intake'
       ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary: buildSnapshotSummary(snapshot) })
       : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator input:\n> ${input.trigger_text}\n\n` +
-        `Pick mode per your SOUL.md:\n` +
-        `- **Mode A (disruption / planning)** — call \`propose_changes\` with PmDiff[] + impact_md, then reply with the single line \`Proposal {id}.\`.\n` +
-        `- **Mode B (conversational)** — reply with 1–4 plain-text sentences. No \`propose_changes\` (especially not with \`[]\`).\n\n` +
-        `If you need workspace state to answer (status questions, "what's blocked", impact analysis, planning), call \`get_roadmap_snapshot\` via MCP. Skip it for greetings, ambiguous prompts, or "Test"-style inputs.\n\n` +
-        `Hard rule: every response MUST contain a \`propose_changes\` call with a non-empty array OR at least one full sentence of chat text. A fully empty reply is a bug.`;
+        `Pick Mode A (\`propose_changes\` + \`Proposal {id}.\` reply) for roadmap mutations, or Mode B (concise plain-text reply, no \`propose_changes\`) for everything else. Empty reply = bug.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
   // Compute the FULL gateway sessionKey here so the activePmDispatches
