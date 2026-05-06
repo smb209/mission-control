@@ -15,6 +15,7 @@ import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'rea
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   parseSuggestionsFromImpactMd,
   stripSuggestionsSidecar,
@@ -104,6 +105,10 @@ function PmChatPageInner() {
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [proposals, setProposals] = useState<Record<string, PmProposal>>({});
   const [recentProposals, setRecentProposals] = useState<PmProposal[]>([]);
+  // One-slot pending-delete confirmation. Routes through ConfirmDialog
+  // per project convention (no native window.confirm).
+  const [pendingDeleteProposal, setPendingDeleteProposal] = useState<PmProposal | null>(null);
+  const [deletingProposalId, setDeletingProposalId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -347,6 +352,14 @@ function PmChatPageInner() {
       try {
         if (raw.data.startsWith(':')) return;
         const evt = JSON.parse(raw.data) as { type?: string; payload?: Record<string, unknown> };
+        if (evt.type === 'pm_proposal_deleted') {
+          if (evt.payload?.workspace_id !== workspaceId) return;
+          const id = evt.payload.proposal_id;
+          if (typeof id === 'string') {
+            setRecentProposals(prev => prev.filter(p => p.id !== id));
+          }
+          return;
+        }
         if (evt.type !== 'pm_dispatch_in_flight') return;
         if (evt.payload?.workspace_id !== workspaceId) return;
         if (evt.payload?.kind === 'delta') {
@@ -533,6 +546,25 @@ function PmChatPageInner() {
       setError((err as Error).message);
     }
   };
+
+  const performDelete = useCallback(async (proposalId: string) => {
+    setDeletingProposalId(proposalId);
+    try {
+      const res = await fetch(`/api/pm/proposals/${proposalId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      // Optimistic prune so the row vanishes immediately even before
+      // SSE fans out / the next list refresh.
+      setRecentProposals(prev => prev.filter(p => p.id !== proposalId));
+      await loadRecent();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeletingProposalId(null);
+    }
+  }, [loadRecent]);
 
   const onRefineSubmit = async (parentId: string) => {
     if (!refineText.trim()) return;
@@ -967,10 +999,10 @@ function PmChatPageInner() {
               </li>
             )}
             {recentProposals.map(p => (
-              <li key={p.id}>
+              <li key={p.id} className="group relative">
                 <Link
                   href={`/pm/proposals/${p.id}`}
-                  className="block px-4 py-3 hover:bg-mc-bg-secondary transition-colors"
+                  className="block px-4 py-3 pr-9 hover:bg-mc-bg-secondary transition-colors"
                 >
                   <div className="flex items-center gap-2 text-xs mb-1">
                     <span className={`px-2 py-0.5 rounded-sm ${STATUS_BADGE[p.status]}`}>{p.status}</span>
@@ -985,6 +1017,24 @@ function PmChatPageInner() {
                     {p.trigger_text}
                   </p>
                 </Link>
+                {/* Delete affordance — appears on row hover. Disabled
+                    for accepted proposals (server refuses anyway). */}
+                {p.status !== 'accepted' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPendingDeleteProposal(p);
+                    }}
+                    disabled={deletingProposalId === p.id}
+                    className="absolute right-2 top-2 p-1 rounded-sm text-mc-text-secondary/60 opacity-0 group-hover:opacity-100 hover:text-red-400 hover:bg-red-500/10 transition-opacity disabled:opacity-50"
+                    title="Delete proposal"
+                    aria-label="Delete proposal"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -1003,6 +1053,31 @@ function PmChatPageInner() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteProposal !== null}
+        title="Delete proposal?"
+        body={
+          pendingDeleteProposal ? (
+            <div className="space-y-2 text-sm">
+              <p>This permanently removes the proposal from the recents list and the database. The action can&apos;t be undone.</p>
+              <div className="text-xs text-mc-text-secondary border border-mc-border rounded-sm p-2 bg-mc-bg-secondary/30">
+                <div className="font-mono mb-1">{pendingDeleteProposal.status} · {pendingDeleteProposal.proposed_changes.length} change{pendingDeleteProposal.proposed_changes.length === 1 ? '' : 's'}</div>
+                <div className="line-clamp-3 break-words">{pendingDeleteProposal.trigger_text}</div>
+              </div>
+            </div>
+          ) : null
+        }
+        confirmLabel="Delete"
+        destructive
+        onCancel={() => setPendingDeleteProposal(null)}
+        onConfirm={async () => {
+          const target = pendingDeleteProposal;
+          setPendingDeleteProposal(null);
+          if (target) await performDelete(target.id);
+        }}
+      />
+
     </div>
   );
 }
