@@ -156,10 +156,14 @@ test('apply-mc-servers: write mode rewrites PM and adds scoped servers', () => {
     assert.deepEqual(runnerStable.memorySearch, { enabled: false }, 'runner must have memorySearch.enabled=false');
     const runnerDev = after.agents.list.find((a: { id: string }) => a.id === 'mc-runner-dev');
     assert.deepEqual(runnerDev.memorySearch, { enabled: false }, 'dev runner must have memorySearch.enabled=false too');
-    // Per-agent startupContext.enabled=false — supported in OpenClaw
-    // 2026.427+; previously rejected by the reload validator.
-    assert.deepEqual(runnerStable.startupContext, { enabled: false }, 'runner must have startupContext.enabled=false');
-    assert.deepEqual(runnerDev.startupContext, { enabled: false }, 'dev runner must have startupContext.enabled=false too');
+    // Per-agent startupContext is NOT in openclaw's schema (verified
+    // against src/config/types.agents.ts + zod-schema.agent-defaults.ts:
+    // the field lives only under agents.defaults and the schema is
+    // .strict()). Stamping it agent-side gets rejected on reload and
+    // takes out the rest of our changes as collateral. To disable
+    // daily-memory bootstrap, set it globally at agents.defaults.
+    assert.equal(runnerStable.startupContext, undefined, 'runner must NOT have agent-level startupContext (not in openclaw schema)');
+    assert.equal(runnerDev.startupContext, undefined, 'dev runner must NOT have agent-level startupContext (not in openclaw schema)');
     // Skills pinned to the canonical RUNNER_SKILLS list — old-skill-to-be-pruned dropped.
     const expectedSkills = ['acp-router', 'github', 'healthcheck', 'node-connect', 'peekaboo', 'tmux', 'video-frames', 'native-data-fetching', 'taskflow'];
     assert.deepEqual(runnerStable.skills, expectedSkills, 'runner skills must match canonical list');
