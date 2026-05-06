@@ -149,8 +149,9 @@ export async function runScheduleEval(opts: ScheduleEvalOptions = {}): Promise<S
     // without waiting. If we leave that schedule in place, the
     // production recurring scheduler will keep firing it every 60s
     // forever, accumulating gateway sessions for no real benefit.
-    // Delete the schedule + scrub the brief row + drop the workspace
-    // so the eval is hermetic and doesn't pollute MC's running state.
+    // Read counters BEFORE deleting (the schedule row is dropped in
+    // cleanup below, so querying it afterward would return null).
+    const after = getRecurringJob(schedule.id);
     try {
       run(`DELETE FROM recurring_jobs WHERE id = ?`, [schedule.id]);
       run(`DELETE FROM briefs WHERE workspace_id = ?`, [workspaceId]);
