@@ -187,10 +187,27 @@ function rewritePmDeny(deny, agentId) {
 }
 
 /**
+ * Tools we never want a runner-hosted persona to call. Surface area
+ * pruning — every additional tool burns ~450 tokens of schema and adds
+ * noise to the agent's decision tree. These three were called out by
+ * the operator as actively unhelpful for the worker roles the runner
+ * hosts:
+ *   - memory_search / memory_get — openclaw's built-in personal memory
+ *     surface. Runner-hosted personas get their context from MC's
+ *     scope-keyed sessions + the briefing pipeline, not openclaw's
+ *     per-agent memory; the memory tools encourage personas to write
+ *     state that won't survive into the next dispatch.
+ *   - x_search — Twitter / X search. Not a useful research surface for
+ *     this org's workloads.
+ */
+const RUNNER_ALWAYS_DENY = ['memory_search', 'memory_get', 'x_search'];
+
+/**
  * Runner agents keep the full-surface allowlist. They still need their
  * deny[] extended so they can't see the new PM/CRUD-scoped catalogs
  * from the OTHER environment (and to keep CRUD off their plate even in
- * their own env, since they don't use it).
+ * their own env, since they don't use it). Plus the static
+ * RUNNER_ALWAYS_DENY list of tools we never want runner personas to use.
  */
 function rewriteRunnerDeny(deny, agentId) {
   const existing = Array.isArray(deny) ? deny : [];
@@ -206,6 +223,11 @@ function rewriteRunnerDeny(deny, agentId) {
   } else {
     wanted.add('sc-mission-control-pm__*');
     wanted.add('sc-mission-control-crud__*');
+  }
+  // Static deny list — bare tool names (no MCP-server prefix; these
+  // come from openclaw's tool catalog directly).
+  for (const tool of RUNNER_ALWAYS_DENY) {
+    wanted.add(tool);
   }
   return [...wanted];
 }
