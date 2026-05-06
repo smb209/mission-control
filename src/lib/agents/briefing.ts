@@ -209,24 +209,37 @@ function buildResumeHint(input: BuildBriefingInput): string {
 /**
  * Build the dispatch briefing. Synchronous — file reads are fast and
  * the call site is already inside an async dispatch handler.
+ *
+ * Resume optimization: when `is_resume=true`, the gateway session
+ * already absorbed the identity preamble + role section + notetaker
+ * addendum on the first dispatch under this scope key. Re-sending
+ * them on every turn just inflates the input prompt by 3–10K tokens
+ * for a long-lived agent like the PM. We skip the static blocks and
+ * send only dynamic content (active-subagent manifest, trigger body,
+ * resume hint). The agent can re-read its own SOUL/AGENTS via the
+ * read tool if compaction ever drops the early turn.
  */
 export function buildBriefing(input: BuildBriefingInput): string {
   const parts: string[] = [];
-  parts.push(buildIdentityPreamble(input));
 
-  const roleSection = buildRoleSection(input);
-  if (roleSection) {
-    parts.push(`# Role: ${input.role}\n\n${roleSection}`);
-  }
+  if (!input.is_resume) {
+    parts.push(buildIdentityPreamble(input));
 
-  const notetaker = buildNotetakerAddendum(input);
-  if (notetaker) {
-    parts.push(`---\n\n${notetaker}`);
+    const roleSection = buildRoleSection(input);
+    if (roleSection) {
+      parts.push(`# Role: ${input.role}\n\n${roleSection}`);
+    }
+
+    const notetaker = buildNotetakerAddendum(input);
+    if (notetaker) {
+      parts.push(`---\n\n${notetaker}`);
+    }
   }
 
   // Phase J2: active-subagent manifest precedes the trigger body so
   // the PM sees the orchestration state before it reads what MC is
-  // asking it to do next.
+  // asking it to do next. Always included — it's dynamic and
+  // authoritative state the agent shouldn't try to remember.
   const manifest = buildActiveSubagentManifest(input);
   if (manifest) {
     parts.push(`---\n\n${manifest}`);
