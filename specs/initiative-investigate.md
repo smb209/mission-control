@@ -23,7 +23,7 @@ No automatic PM hand-off. The audit produces evidence; the operator chooses the 
 "Audit this whole epic." MC orchestrates a per-level researcher fan-out:
 
 1. Enumerate leaves (descendants with no children of their own that are still `planned` / `in_progress` / `at_risk` / `blocked` — skip `done`/`cancelled`).
-2. **Layer 1**: dispatch N narrow researchers in parallel, one per leaf. Each writes a `take_note` + `register_deliverable` against its own initiative_id.
+2. **Layer 1**: dispatch N narrow researchers in parallel, one per leaf. Each writes a `take_note` against its own initiative_id.
 3. **Wait** for all Layer 1 dispatches to complete (or hit per-node timeout).
 4. **Layer 2**: for each parent of Layer 1 leaves, dispatch a roll-up researcher. Brief includes the parent's own description + a synthesized digest of children's findings (from their notes, fetched by MC and inlined).
 5. Repeat upward until the original target initiative is reached.
@@ -136,10 +136,11 @@ Audit this initiative against reality. Produce a markdown report covering:
 5. **Verdict** — one of: **on track**, **partially done**, **stale (rescope)**, **done in entirety**, **never built**, **cancelled-in-effect**.
 6. **Recommended next action** — concrete suggestion the PM can act on. Phrased as "Suggest: …", not a tool call.
 
-Save the report two ways:
+Save the report by calling:
 
-- `register_deliverable({ task_id: null, title: "Audit: {{initiative.title}}", deliverable_type: "note" })` for the audit trail.
-- `take_note({ initiative_id: "{{initiative.id}}", kind: 'observation', audience: 'pm', importance: 2, body: <full report> })` so it surfaces on the initiative detail page and feeds the PM on a later Plan dispatch.
+- `take_note({ initiative_id: "{{initiative.id}}", kind: 'observation', audience: 'pm', importance: 2, body: <full report> })`
+
+The note is the audit trail for now. **No `register_deliverable` call** — see "Output capture" below for why.
 
 Don't call propose_changes; you don't have it on your mount. The PM will pick up your note when the operator decides to act.
 
@@ -170,10 +171,9 @@ After submit → in-flight tray on the initiative detail page (mirrors the PM in
 
 ### Output capture
 
-Each audit writes:
+Each audit writes a single **`take_note`** with `initiative_id`, `kind: 'observation'`, `audience: 'pm'`, `importance: 2`. Renders on the initiative detail page's notes panel (already wired to show notes filtered by `initiative_id`).
 
-1. **`take_note`** with `initiative_id`, `kind: 'observation'`, `audience: 'pm'`, `importance: 2`. Renders on the initiative detail page's notes panel (already wired to show notes filtered by `initiative_id`).
-2. **`register_deliverable`** with `kind: 'note'` and the full report body. Becomes part of the audit history; can be exported / archived later.
+**No `register_deliverable`.** The original spec called for a parallel deliverable row as the audit trail, but the deliverables system is task-scoped today (no `initiative_id` column on the deliverables table) and won't accept an initiative-only deliverable. The note carries the full report body and serves as the audit trail. Revisit if/when deliverables grow initiative scope. (Decision landed in PR 2; the prompt no longer instructs the researcher to call `register_deliverable`.)
 
 Subtree mode produces N notes (one per audited node), all linked to their respective initiative_ids. The root-level note synthesizes children's findings into a single report; the operator can drill into per-child notes if they want detail.
 
@@ -270,7 +270,6 @@ curl -sS -H "Authorization: Bearer $TOKEN" -X POST \
 ### Pass criteria for narrow mode
 
 - Note lands with `initiative_id = 0c9419ff…`, `kind = 'observation'`, `audience = 'pm'`, `importance = 2`.
-- Deliverable registered with `deliverable_type = 'note'`.
 - Report includes a per-child breakdown that aligns with the operator's ground truth (1 done, several partial, one unused).
 - Verdict is one of the documented enum values (`partially done` is the expected verdict for this fixture).
 - Total dispatch time under the per-node timeout (15 min default).
@@ -287,7 +286,6 @@ curl -sS -H "Authorization: Bearer $TOKEN" -X POST \
 Save to `/tmp/mc-validation/initiative-investigate/iter-<n>/`:
 
 - `note.md` — the take_note body the researcher produced
-- `deliverable.json` — the deliverable row
 - `transcript.txt` — full chat transcript from openclaw's session log (or webui export)
 - `dispatch-log.txt` — MC server logs filtered to `[investigate]` / `[dispatch-scope]` lines
 - `verdict.txt` — one-line operator assessment of how the audit landed against ground truth ("matched", "missed unused child", "false-positive on partial X", etc.)

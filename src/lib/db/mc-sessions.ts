@@ -20,7 +20,8 @@ export type ScopeType =
   | 'task_coord'
   | 'task_role'
   | 'recurring'
-  | 'heartbeat';
+  | 'heartbeat'
+  | 'initiative_audit';
 
 export type SessionStatus = 'active' | 'idle' | 'closed' | 'failed';
 
