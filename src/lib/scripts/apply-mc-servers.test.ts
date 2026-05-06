@@ -143,6 +143,10 @@ test('apply-mc-servers: write mode rewrites PM and adds scoped servers', () => {
     assert.ok(runnerStable.tools.deny.includes('sc-mission-control-pm__*'));
     assert.ok(runnerStable.tools.deny.includes('sc-mission-control-crud__*'));
     assert.ok(runnerStable.tools.deny.includes('sc-mission-control-dev__*'));
+    // Static deny list — bare tool names from openclaw's catalog.
+    assert.ok(runnerStable.tools.deny.includes('memory_search'), 'runner must deny memory_search');
+    assert.ok(runnerStable.tools.deny.includes('memory_get'), 'runner must deny memory_get');
+    assert.ok(runnerStable.tools.deny.includes('x_search'), 'runner must deny x_search');
 
     // Unrelated agent untouched.
     const random = after.agents.list.find((a: { id: string }) => a.id === 'random-agent');
