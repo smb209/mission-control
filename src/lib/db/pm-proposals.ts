@@ -16,8 +16,10 @@
  *   - `shift_initiative_target` — UPDATE initiatives SET target_*
  *   - `add_availability` — INSERT INTO owner_availability
  *   - `set_initiative_status` — UPDATE initiatives SET status
- *       (planned | in_progress | at_risk | blocked only — done/cancelled
- *       are off-limits for the PM)
+ *       (any of planned | in_progress | at_risk | blocked | done | cancelled;
+ *       operator approves at the proposal level — see
+ *       specs/initiative-investigate.md §"Schema gap" for why the prior
+ *       PM-side `done`/`cancelled` block was lifted)
  *   - `add_dependency` — INSERT INTO initiative_dependencies
  *   - `remove_dependency` — DELETE by id
  *   - `reorder_initiatives` — UPDATE sort_order across siblings
@@ -221,8 +223,6 @@ export class PmProposalValidationError extends Error {
   }
 }
 
-const STATUS_ALLOWED_FROM_PM = new Set(['planned', 'in_progress', 'at_risk', 'blocked']);
-
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function isValidDateString(s: unknown): s is string {
@@ -324,20 +324,25 @@ export function validateProposedChanges(
           break;
         }
         assertInitiativeInWorkspace(workspaceId, c.initiative_id, errors, initiativeCache);
-        // Forward proposals are PM-restricted to the four working statuses.
-        // Revert proposals legitimately need to restore done/cancelled when
-        // the captured prev_status was one of those — keep the diff shape
-        // honest here and trust the operator's accept review.
-        const isRevert = options.trigger_kind === 'revert';
-        const allowed = isRevert
-          ? new Set(['planned', 'in_progress', 'at_risk', 'blocked', 'done', 'cancelled'])
-          : STATUS_ALLOWED_FROM_PM;
+        // Policy: PM may propose any of the 6 InitiativeStatus values,
+        // including done/cancelled. Operator approval (accept/refine on
+        // the diff) is the gate — not the validator. See
+        // specs/initiative-investigate.md (schema-gap section) for the
+        // rationale: the PM's job is to surface the right next move and
+        // package it as a reviewable diff; restricting which statuses
+        // it can propose forced ergonomic workarounds (status_check
+        // notes saying "we should mark this done") instead of letting
+        // the operator just click accept.
+        const allowed = new Set([
+          'planned',
+          'in_progress',
+          'at_risk',
+          'blocked',
+          'done',
+          'cancelled',
+        ]);
         if (!allowed.has(c.status)) {
-          errors.push(
-            isRevert
-              ? `changes[${i}]: status "${c.status}" is not a valid initiative status`
-              : `changes[${i}]: status "${c.status}" not allowed from PM (planned/in_progress/at_risk/blocked only)`,
-          );
+          errors.push(`changes[${i}]: status "${c.status}" is not a valid initiative status`);
         }
         break;
       }
@@ -923,10 +928,9 @@ function applyDiff(diff: PmDiff, now: string): void {
       return;
     }
     case 'set_initiative_status': {
-      // Capture previous status so revert can restore it. PM-driven
-      // statuses are limited (planned|in_progress|at_risk|blocked) but
-      // an operator could have left the row in done/cancelled before the
-      // proposal lands — `prev_status` covers all six values.
+      // Capture previous status so revert can restore it. The PM may
+      // propose any of the 6 InitiativeStatus values, and the row may
+      // already be in any of them — `prev_status` covers all six.
       const prev = queryOne<{ status: PmDiffCapture['prev_status'] }>(
         `SELECT status FROM initiatives WHERE id = ?`,
         [diff.initiative_id],

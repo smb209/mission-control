@@ -161,21 +161,43 @@ test('acceptProposal: set_initiative_status flips status', () => {
   assert.equal(after?.status, 'at_risk');
 });
 
-test('acceptProposal rejects done/cancelled status (PM never marks done)', () => {
+test('acceptProposal: set_initiative_status accepts done and cancelled end-to-end', () => {
+  // Policy as of feat(pm) allow done/cancelled: the PM may propose any of
+  // the 6 InitiativeStatus values; the operator's accept click is the
+  // gate, not the validator. See specs/initiative-investigate.md.
   const ws = freshWorkspace();
-  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
-  assert.throws(
-    () => createProposal({
-      workspace_id: ws,
-      trigger_text: '.',
-      impact_md: '.',
-      // done is not in the PM-allowed enum at the type level — cast for the test.
-      proposed_changes: [
-        { kind: 'set_initiative_status', initiative_id: init.id, status: 'done' as never },
-      ],
-    }),
-    PmProposalValidationError,
+  const initDone = createInitiative({ workspace_id: ws, kind: 'story', title: 'D' });
+  const initCancelled = createInitiative({ workspace_id: ws, kind: 'story', title: 'C' });
+
+  const pDone = createProposal({
+    workspace_id: ws,
+    trigger_text: '.',
+    impact_md: '.',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: initDone.id, status: 'done' },
+    ],
+  });
+  acceptProposal(pDone.id);
+  const afterDone = queryOne<{ status: string }>(
+    'SELECT status FROM initiatives WHERE id = ?',
+    [initDone.id],
   );
+  assert.equal(afterDone?.status, 'done');
+
+  const pCancelled = createProposal({
+    workspace_id: ws,
+    trigger_text: '.',
+    impact_md: '.',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: initCancelled.id, status: 'cancelled' },
+    ],
+  });
+  acceptProposal(pCancelled.id);
+  const afterCancelled = queryOne<{ status: string }>(
+    'SELECT status FROM initiatives WHERE id = ?',
+    [initCancelled.id],
+  );
+  assert.equal(afterCancelled?.status, 'cancelled');
 });
 
 test('acceptProposal: add_dependency inserts row, dup is idempotent', () => {

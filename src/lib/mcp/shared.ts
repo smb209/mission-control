@@ -223,7 +223,7 @@ export const DiffSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('set_initiative_status'),
     initiative_id: z.string().min(1),
-    status: z.enum(['planned', 'in_progress', 'at_risk', 'blocked']),
+    status: z.enum(['planned', 'in_progress', 'at_risk', 'blocked', 'done', 'cancelled']),
   }),
   z.object({
     kind: z.literal('add_dependency'),

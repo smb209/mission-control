@@ -18,7 +18,7 @@ import { createInitiative } from '@/lib/db/initiatives';
 import { acceptProposal, getProposal, listProposals } from '@/lib/db/pm-proposals';
 import { dispatchPm } from './pm-dispatch';
 import { ensurePmAgent } from '@/lib/bootstrap-agents';
-import { createProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { createProposal } from '@/lib/db/pm-proposals';
 
 function freshWorkspace(): string {
   const id = `ws-${uuidv4().slice(0, 8)}`;
@@ -133,35 +133,44 @@ test('PM lifecycle: PM is seeded once per workspace and ensurePmAgent is idempot
   assert.equal(pms.length, 1);
 });
 
-test('PM lifecycle: refused diffs (done/cancelled status) never reach the DB', () => {
+test('PM lifecycle: done/cancelled status diffs reach the DB on accept', () => {
+  // Policy as of feat(pm) allow done/cancelled: PM may propose any of
+  // the 6 InitiativeStatus values; the operator's accept click is the
+  // gate. The validator no longer refuses done/cancelled.
   const ws = freshWorkspace();
-  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const initDone = createInitiative({ workspace_id: ws, kind: 'story', title: 'D' });
+  const initCancelled = createInitiative({ workspace_id: ws, kind: 'story', title: 'C' });
 
-  // Direct API call — simulates an LLM trying to slip a forbidden diff
-  // through propose_changes. Validation must reject before any write.
-  let threw = false;
-  try {
-    createProposal({
-      workspace_id: ws,
-      trigger_text: 'sneaky',
-      impact_md: '.',
-      proposed_changes: [
-        // Forbidden status from the PM. The diff is well-formed JSON
-        // but the validator rejects 'done'/'cancelled'.
-        { kind: 'set_initiative_status', initiative_id: init.id, status: 'done' as never },
-      ],
-    });
-  } catch (err) {
-    threw = err instanceof PmProposalValidationError;
-  }
-  assert.equal(threw, true);
-
-  // Initiative status untouched, no proposal row written.
-  const fresh = queryOne<{ status: string }>(
+  const pDone = createProposal({
+    workspace_id: ws,
+    trigger_text: 'mark done',
+    impact_md: '.',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: initDone.id, status: 'done' },
+    ],
+  });
+  acceptProposal(pDone.id);
+  const afterDone = queryOne<{ status: string }>(
     'SELECT status FROM initiatives WHERE id = ?',
-    [init.id],
+    [initDone.id],
   );
-  assert.equal(fresh?.status, 'planned');
+  assert.equal(afterDone?.status, 'done');
+
+  const pCancelled = createProposal({
+    workspace_id: ws,
+    trigger_text: 'cancel it',
+    impact_md: '.',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: initCancelled.id, status: 'cancelled' },
+    ],
+  });
+  acceptProposal(pCancelled.id);
+  const afterCancelled = queryOne<{ status: string }>(
+    'SELECT status FROM initiatives WHERE id = ?',
+    [initCancelled.id],
+  );
+  assert.equal(afterCancelled?.status, 'cancelled');
+
   const all = listProposals({ workspace_id: ws });
-  assert.equal(all.length, 0);
+  assert.equal(all.length, 2);
 });
