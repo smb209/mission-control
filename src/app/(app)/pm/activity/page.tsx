@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { RotateCcw, ExternalLink } from 'lucide-react';
-import { ProposalDiffsList, summarizeDiff, type PmDiff } from '@/components/pm/ProposalDiffsList';
+import { ProposalDiffsList, summarizeDiff, inferTargetInitiativeId, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import { showAlertDialog } from '@/lib/show-alert';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
@@ -223,18 +223,27 @@ export default function PmActivityPage() {
         </p>
       ) : (
         <ul className="space-y-1">
-          {visibleProposals.map(p => (
-            <ActivityListItem
-              key={p.id}
-              proposal={p}
-              agent={p.applied_by_agent_id ? agents[p.applied_by_agent_id] : undefined}
-              targetTitle={
-                p.target_initiative_id ? initiatives[p.target_initiative_id]?.title : undefined
-              }
-              selected={selectedId === p.id}
-              onSelect={() => selectProposal(p.id)}
-            />
-          ))}
+          {visibleProposals.map(p => {
+            // Prefer the explicit target_initiative_id; otherwise infer
+            // from the diffs when they all agree on a single target.
+            // Falls through to undefined → renders "(no target)" only
+            // when the diffs genuinely span multiple initiatives.
+            const explicitTarget = p.target_initiative_id;
+            const inferredTarget = explicitTarget ? null : inferTargetInitiativeId(p.proposed_changes as PmDiff[]);
+            const renderedTargetId = explicitTarget ?? inferredTarget;
+            const targetTitle = renderedTargetId ? initiatives[renderedTargetId]?.title : undefined;
+            return (
+              <ActivityListItem
+                key={p.id}
+                proposal={p}
+                agent={p.applied_by_agent_id ? agents[p.applied_by_agent_id] : undefined}
+                targetTitle={targetTitle}
+                resolveInitiativeTitle={(id) => (id ? initiatives[id]?.title : undefined)}
+                selected={selectedId === p.id}
+                onSelect={() => selectProposal(p.id)}
+              />
+            );
+          })}
         </ul>
       )}
     </div>
@@ -249,19 +258,21 @@ export default function PmActivityPage() {
       outerMaxWidth={null}
       outerPaddingX="px-4"
     >
-      {selectedProposal ? (
-        <ProposalDetailPane
-          proposal={selectedProposal}
-          agent={selectedProposal.applied_by_agent_id ? agents[selectedProposal.applied_by_agent_id] : undefined}
-          targetTitle={
-            selectedProposal.target_initiative_id
-              ? initiatives[selectedProposal.target_initiative_id]?.title
-              : undefined
-          }
-          onRevert={() => onRevert(selectedProposal)}
-          reverting={reverting === selectedProposal.id}
-        />
-      ) : (
+      {selectedProposal ? (() => {
+        const explicitTarget = selectedProposal.target_initiative_id;
+        const inferredTarget = explicitTarget ? null : inferTargetInitiativeId(selectedProposal.proposed_changes as PmDiff[]);
+        const renderedTargetId = explicitTarget ?? inferredTarget;
+        return (
+          <ProposalDetailPane
+            proposal={selectedProposal}
+            agent={selectedProposal.applied_by_agent_id ? agents[selectedProposal.applied_by_agent_id] : undefined}
+            targetTitle={renderedTargetId ? initiatives[renderedTargetId]?.title : undefined}
+            resolveInitiativeTitle={(id) => (id ? initiatives[id]?.title : undefined)}
+            onRevert={() => onRevert(selectedProposal)}
+            reverting={reverting === selectedProposal.id}
+          />
+        );
+      })() : (
         <div className="rounded-lg border border-dashed border-mc-border bg-mc-bg-secondary/30 p-12 text-center text-sm text-mc-text-secondary">
           Select an accepted proposal on the left to inspect its diffs and
           revert if needed.
@@ -276,19 +287,21 @@ function ActivityListItem({
   proposal,
   agent,
   targetTitle,
+  resolveInitiativeTitle,
   selected,
   onSelect,
 }: {
   proposal: PmProposal;
   agent?: AgentLite;
   targetTitle?: string;
+  resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
   selected: boolean;
   onSelect: () => void;
 }) {
   const badge = triggerBadgeFor(proposal.trigger_kind);
   const summary = proposal.proposed_changes.length > 0
     ? proposal.proposed_changes.length === 1
-      ? summarizeDiff(proposal.proposed_changes[0])
+      ? summarizeDiff(proposal.proposed_changes[0], resolveInitiativeTitle)
       : `${proposal.proposed_changes.length} changes`
     : '(no diffs)';
   return (
@@ -331,12 +344,14 @@ function ProposalDetailPane({
   proposal,
   agent,
   targetTitle,
+  resolveInitiativeTitle,
   onRevert,
   reverting,
 }: {
   proposal: PmProposal;
   agent?: AgentLite;
   targetTitle?: string;
+  resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
   onRevert: () => void;
   reverting: boolean;
 }) {
@@ -399,7 +414,11 @@ function ProposalDetailPane({
         <h3 className="text-xs uppercase tracking-wide text-mc-text-secondary/70 mb-3">
           Diffs ({proposal.proposed_changes.length})
         </h3>
-        <ProposalDiffsList diffs={proposal.proposed_changes} showAll />
+        <ProposalDiffsList
+          diffs={proposal.proposed_changes}
+          showAll
+          resolveInitiativeTitle={resolveInitiativeTitle}
+        />
       </section>
     </div>
   );

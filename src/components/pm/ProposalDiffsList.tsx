@@ -70,25 +70,61 @@ function formatInitiativeRef(ref: string | null | undefined): string {
   return shortId(ref);
 }
 
-export function summarizeDiff(c: PmDiff): string {
+/**
+ * Optional resolver mapping initiative ids to their human title. When
+ * provided, the diff summary uses titles in place of short-hash ids
+ * — much friendlier in the recents/activity surfaces. Missing ids
+ * fall back to the short-hash representation so the renderer never
+ * crashes on a stale or partial map.
+ */
+export type InitiativeTitleResolver = (id: string | null | undefined) => string | undefined;
+
+function labelFor(id: string | null | undefined, resolver?: InitiativeTitleResolver): string {
+  if (!id) return '∅';
+  const t = resolver?.(id);
+  return t && t.trim() ? t : shortId(id);
+}
+
+export function summarizeDiff(c: PmDiff, resolver?: InitiativeTitleResolver): string {
   switch (c.kind) {
     case 'shift_initiative_target':
-      return `shift ${shortId(c.initiative_id)}: ${c.target_start ?? '∅'} → ${c.target_end ?? '∅'}`;
+      return `shift ${labelFor(c.initiative_id, resolver)}: ${c.target_start ?? '∅'} → ${c.target_end ?? '∅'}`;
     case 'add_availability':
       return `availability ${shortId(c.agent_id)}: ${c.start} – ${c.end}`;
     case 'set_initiative_status':
-      return `${shortId(c.initiative_id)} → ${c.status}`;
+      return `${labelFor(c.initiative_id, resolver)} → ${c.status}`;
     case 'add_dependency':
-      return `dep ${shortId(c.initiative_id)} blocks on ${shortId(c.depends_on_initiative_id)}`;
+      return `dep ${labelFor(c.initiative_id, resolver)} blocks on ${labelFor(c.depends_on_initiative_id, resolver)}`;
     case 'remove_dependency':
       return `remove dep ${shortId(c.dependency_id)}`;
     case 'reorder_initiatives':
-      return `reorder under ${shortId(c.parent_id ?? null) || 'root'} (${c.child_ids_in_order?.length ?? 0})`;
+      return `reorder under ${labelFor(c.parent_id ?? null, resolver) || 'root'} (${c.child_ids_in_order?.length ?? 0})`;
     case 'update_status_check':
-      return `status_check ${shortId(c.initiative_id)}`;
+      return `status_check ${labelFor(c.initiative_id, resolver)}`;
     default:
       return c.kind ?? '?';
   }
+}
+
+/**
+ * Derive an implicit target initiative when the proposal has no
+ * explicit `target_initiative_id` set. Returns the unique initiative
+ * id referenced across every diff that carries one, or null when
+ * the diffs touch multiple initiatives (or none).
+ *
+ * Used by the activity-list / recents-list rendering to show
+ * "Smart Snappy" instead of "(no target)" for chat-driven proposals
+ * that mutated exactly one initiative.
+ */
+export function inferTargetInitiativeId(diffs: PmDiff[]): string | null {
+  const ids = new Set<string>();
+  for (const d of diffs) {
+    if (typeof d.initiative_id === 'string' && d.initiative_id.length > 0) {
+      ids.add(d.initiative_id);
+    }
+  }
+  if (ids.size === 1) return [...ids][0];
+  return null;
 }
 
 /**
@@ -97,7 +133,7 @@ export function summarizeDiff(c: PmDiff): string {
  * placeholder id agents use to reference this row from a sibling's
  * `depends_on_initiative_ids`.
  */
-export function DiffRow({ diff, index }: { diff: PmDiff; index: number }) {
+export function DiffRow({ diff, index, resolveInitiativeTitle }: { diff: PmDiff; index: number; resolveInitiativeTitle?: InitiativeTitleResolver }) {
   if (diff.kind === 'create_child_initiative' || diff.kind === 'create_task_under_initiative') {
     const complexity = diff.complexity;
     const deps = diff.depends_on_initiative_ids ?? [];
@@ -129,7 +165,7 @@ export function DiffRow({ diff, index }: { diff: PmDiff; index: number }) {
   }
   return (
     <div className="font-mono text-xs text-mc-text-secondary">
-      · {summarizeDiff(diff)}
+      · {summarizeDiff(diff, resolveInitiativeTitle)}
     </div>
   );
 }
@@ -145,6 +181,10 @@ interface ProposalDiffsListProps {
   previewCap?: number;
   /** Wrapping container className override. */
   className?: string;
+  /** Optional id-to-title resolver. When provided, diff summaries
+   *  use the human title (e.g. "Smart Snappy") in place of the short
+   *  hash (e.g. "072d1c7d"). */
+  resolveInitiativeTitle?: InitiativeTitleResolver;
 }
 
 export function ProposalDiffsList({
@@ -152,6 +192,7 @@ export function ProposalDiffsList({
   showAll = false,
   previewCap = DEFAULT_PREVIEW_CAP,
   className = 'px-3 pb-3 space-y-1',
+  resolveInitiativeTitle,
 }: ProposalDiffsListProps) {
   if (diffs.length === 0) return null;
   const cap = showAll ? diffs.length : previewCap;
@@ -160,7 +201,7 @@ export function ProposalDiffsList({
   return (
     <div className={className}>
       {visible.map((c, idx) => (
-        <DiffRow key={idx} diff={c} index={idx} />
+        <DiffRow key={idx} diff={c} index={idx} resolveInitiativeTitle={resolveInitiativeTitle} />
       ))}
       {overflow > 0 && (
         <div className="font-mono text-xs text-mc-text-secondary">
