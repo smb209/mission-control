@@ -165,6 +165,57 @@ test('buildBriefing: is_resume adds resume hint', () => {
   }
 });
 
+test('buildBriefing: is_resume skips identity preamble + role section + notetaker addendum', () => {
+  const fx = makeFixtureTemplates();
+  __setTemplatesDirForTests(fx.dir);
+  const ws = freshWorkspace();
+  try {
+    const fresh = buildBriefing({
+      workspace_id: ws,
+      role: 'builder',
+      scope_key: 'sk',
+      agent_id: 'aid-123',
+      gateway_agent_id: 'mc-runner-dev',
+      run_group_id: 'rg',
+      trigger_body: 'body',
+      is_resume: false,
+    });
+    // Fresh dispatch: all static blocks present.
+    assert.match(fresh, /Your agent_id is: aid-123/);
+    assert.match(fresh, /# Role: builder/);
+    assert.match(fresh, /Builder soul/);
+    assert.match(fresh, /Take notes/);
+
+    const resume = buildBriefing({
+      workspace_id: ws,
+      role: 'builder',
+      scope_key: 'sk',
+      agent_id: 'aid-123',
+      gateway_agent_id: 'mc-runner-dev',
+      run_group_id: 'rg',
+      trigger_body: 'body',
+      is_resume: true,
+    });
+    // Resume dispatch: static blocks omitted, dynamic content kept.
+    assert.doesNotMatch(resume, /Your agent_id is/);
+    assert.doesNotMatch(resume, /# Role: builder/);
+    assert.doesNotMatch(resume, /Builder soul/);
+    assert.doesNotMatch(resume, /Take notes/);
+    assert.match(resume, /body/);
+    assert.match(resume, /prior trajectory/);
+    // Resume briefing must be shorter than fresh — that's the whole point.
+    // The exact ratio depends on the fixture template sizes; in production
+    // (real PM SOUL.md / AGENTS.md), the savings are 3–10K+ tokens.
+    assert.ok(
+      resume.length < fresh.length,
+      `expected resume (${resume.length}b) < fresh (${fresh.length}b)`,
+    );
+  } finally {
+    __setTemplatesDirForTests(null);
+    fx.cleanup();
+  }
+});
+
 test('buildBriefing: role + addendum + trigger order is identity → role → addendum → trigger', () => {
   const fx = makeFixtureTemplates();
   __setTemplatesDirForTests(fx.dir);
