@@ -279,6 +279,16 @@ Audit confirmed no template currently prescribes a CRUD tool to a non-PM role, s
 
 The dep-tool merge is deferred. Two paths if we ever consolidate: (a) `update_initiative_dependencies({ initiative_id, add: [], remove: [] })` — clean batch shape; (b) leave as two tools — ~450 tokens cost. Defer until a use case forces it.
 
+## Standing principle: extend, don't add
+
+When the next piece of MC state needs an agent-callable mutation, **default to extending an existing tool with a new `kind` or `action` value, not adding a new MCP tool.**
+
+- For PM mutations: extend `propose_changes`'s `PmDiff` discriminated union with a new `kind`. Each new `kind` is ~50 tokens of schema; a new tool is ~450.
+- For lifecycle tools that share scope + authz (the way `update_subtask` and `update_note` do): extend the existing `action` enum, or add the new lifecycle tool with an `action` discriminator from day one rather than as three siblings.
+- Only split when the per-`kind` / per-`action` shapes diverge enough that a unified schema becomes unreadable. The propose/refine/from-notes split (three PM tools) is the precedent for "actually different" — they're domain-distinct, not lifecycle variants.
+
+This is the principle that landed PRs 4 and 5; PR 6 codifies it into `agent-templates/pm/SOUL.md` so future contributors don't accidentally regrow the surface.
+
 ## Out of scope
 
 - Anthropic's MCP Tool Search / lazy loading — not supported by OpenClaw's gateway today. Worth tracking as upstream improves.
