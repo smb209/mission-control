@@ -154,10 +154,12 @@ test('apply-mc-servers: write mode rewrites PM and adds scoped servers', () => {
     // for the runner so persona switches don't bleed context. Belt-and-
     // suspenders to the memory_search/memory_get deny above.
     assert.deepEqual(runnerStable.memorySearch, { enabled: false }, 'runner must have memorySearch.enabled=false');
-    assert.deepEqual(runnerStable.startupContext, { enabled: false }, 'runner must have startupContext.enabled=false');
     const runnerDev = after.agents.list.find((a: { id: string }) => a.id === 'mc-runner-dev');
     assert.deepEqual(runnerDev.memorySearch, { enabled: false }, 'dev runner must have memorySearch.enabled=false too');
-    assert.deepEqual(runnerDev.startupContext, { enabled: false }, 'dev runner must have startupContext.enabled=false too');
+    // startupContext per-agent is rejected by openclaw schema validator in
+    // current version — must be disabled globally at agents.defaults if needed.
+    assert.equal(runnerStable.startupContext, undefined, 'runner must NOT have agent-level startupContext (openclaw rejects it)');
+    assert.equal(runnerDev.startupContext, undefined, 'dev runner must NOT have agent-level startupContext (openclaw rejects it)');
     // Skills pinned to the canonical RUNNER_SKILLS list — old-skill-to-be-pruned dropped.
     const expectedSkills = ['acp-router', 'github', 'healthcheck', 'node-connect', 'peekaboo', 'tmux', 'video-frames', 'native-data-fetching', 'taskflow'];
     assert.deepEqual(runnerStable.skills, expectedSkills, 'runner skills must match canonical list');
