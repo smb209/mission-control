@@ -53,6 +53,10 @@ export default function ProposalDetailPage({
   const [refineText, setRefineText] = useState('');
   const [refineErr, setRefineErr] = useState<string | null>(null);
   const [showRefineInput, setShowRefineInput] = useState(false);
+  // initiative-id → title resolver. Loaded after the proposal lands so
+  // we know which workspace to query. Falls back to short-hash UUIDs
+  // when missing.
+  const [initiativeTitles, setInitiativeTitles] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -65,8 +69,21 @@ export default function ProposalDetailPage({
           const body = await res.json().catch(() => ({}));
           throw new Error((body as { error?: string }).error || `Failed to load (${res.status})`);
         }
-        const data = await res.json();
-        if (!cancelled) setProposal(data as PmProposal);
+        const data = (await res.json()) as PmProposal;
+        if (cancelled) return;
+        setProposal(data);
+        // Best-effort initiative-title fetch so diff summaries render
+        // titles instead of short-hash UUIDs. Failure here is silent —
+        // the diff list still renders, just with hashes.
+        try {
+          const iRes = await fetch(`/api/initiatives?workspace_id=${encodeURIComponent(data.workspace_id)}`);
+          if (iRes.ok && !cancelled) {
+            const list = (await iRes.json()) as Array<{ id: string; title?: string }>;
+            const map: Record<string, string> = {};
+            for (const i of list) if (i.id && i.title) map[i.id] = i.title;
+            setInitiativeTitles(map);
+          }
+        } catch { /* swallow */ }
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : 'Failed to load proposal');
       } finally {
@@ -75,6 +92,9 @@ export default function ProposalDetailPage({
     })();
     return () => { cancelled = true; };
   }, [id]);
+
+  const resolveInitiativeTitle = (id: string | null | undefined): string | undefined =>
+    id ? initiativeTitles[id] : undefined;
 
   const accept = async () => {
     if (!proposal) return;
@@ -220,6 +240,7 @@ export default function ProposalDetailPage({
                   diffs={proposal.proposed_changes}
                   showAll
                   className="px-4 py-3 border-b border-amber-500/20 space-y-1"
+                  resolveInitiativeTitle={resolveInitiativeTitle}
                 />
               )}
 
@@ -304,7 +325,8 @@ export default function ProposalDetailPage({
               )}
               {proposal.target_initiative_id && (
                 <div>
-                  <span className="font-medium text-mc-text">Initiative</span> {proposal.target_initiative_id.slice(0, 8)}…
+                  <span className="font-medium text-mc-text">Initiative</span>{' '}
+                  {resolveInitiativeTitle(proposal.target_initiative_id) ?? `${proposal.target_initiative_id.slice(0, 8)}…`}
                 </div>
               )}
               {proposal.applied_at && (
