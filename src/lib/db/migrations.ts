@@ -4230,6 +4230,66 @@ const migrations: Migration[] = [
       console.log('[Migration 077] recurring_jobs.topic_id + brief_template columns added.');
     },
   },
+  {
+    id: '078',
+    name: 'mc_sessions_initiative_audit_scope_type',
+    up: (db) => {
+      // Extend the mc_sessions.scope_type CHECK constraint to include
+      // 'initiative_audit' for the researcher-driven initiative audit
+      // flow. See specs/initiative-investigate.md.
+      //
+      // SQLite has no ALTER CONSTRAINT, so we rebuild the table.
+      const schemaRow = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='mc_sessions'")
+        .get() as { sql: string } | undefined;
+      if (!schemaRow || schemaRow.sql.includes("'initiative_audit'")) {
+        console.log('[Migration 078] mc_sessions.scope_type already includes initiative_audit; skipping.');
+        return;
+      }
+
+      db.exec(`ALTER TABLE mc_sessions RENAME TO _mc_sessions_old_078`);
+      db.exec(`
+        CREATE TABLE mc_sessions (
+          scope_key TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          scope_type TEXT NOT NULL CHECK (scope_type IN (
+            'pm_chat','plan','decompose','decompose_story',
+            'notes_intake','task_coord','task_role',
+            'recurring','heartbeat','initiative_audit'
+          )),
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          recurring_job_id TEXT,
+          attempt INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+            'active','idle','closed','failed'
+          )),
+          last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          closed_at TEXT,
+          run_id TEXT
+        );
+      `);
+      db.exec(`
+        INSERT INTO mc_sessions (
+          scope_key, workspace_id, role, scope_type,
+          task_id, initiative_id, recurring_job_id,
+          attempt, status, last_used_at, created_at, closed_at, run_id
+        )
+        SELECT scope_key, workspace_id, role, scope_type,
+               task_id, initiative_id, recurring_job_id,
+               attempt, status, last_used_at, created_at, closed_at, run_id
+        FROM _mc_sessions_old_078
+      `);
+      db.exec(`DROP TABLE _mc_sessions_old_078`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_task ON mc_sessions(task_id) WHERE task_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_workspace ON mc_sessions(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_role ON mc_sessions(role, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_mc_sessions_run_id ON mc_sessions(run_id) WHERE run_id IS NOT NULL`);
+      console.log('[Migration 078] mc_sessions.scope_type extended with initiative_audit.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
