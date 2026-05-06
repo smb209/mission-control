@@ -105,6 +105,12 @@ function PmChatPageInner() {
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [proposals, setProposals] = useState<Record<string, PmProposal>>({});
   const [recentProposals, setRecentProposals] = useState<PmProposal[]>([]);
+  // Initiative-id → title map. Used to render diff summaries with the
+  // initiative's human title instead of the short-hash UUID. Loaded
+  // once on workspace switch and refreshed on `pm_proposal_replaced`
+  // SSE so newly-created initiatives surface promptly. Doesn't need
+  // to be exhaustive — missing ids fall back to short-hash.
+  const [initiativeTitles, setInitiativeTitles] = useState<Record<string, string>>({});
   // One-slot pending-delete confirmation. Routes through ConfirmDialog
   // per project convention (no native window.confirm).
   const [pendingDeleteProposal, setPendingDeleteProposal] = useState<PmProposal | null>(null);
@@ -224,16 +230,37 @@ function PmChatPageInner() {
     } catch { /* ignore */ }
   }, [workspaceId]);
 
+  // Load workspace initiatives once. Rebuilt to a flat id→title map
+  // for cheap O(1) resolution from diff renderers. Refreshed when a
+  // proposal is replaced (covers the case where the agent's
+  // propose_changes created a new initiative we hadn't seen yet).
+  const loadInitiativeTitles = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      const res = await fetch(`/api/initiatives?workspace_id=${encodeURIComponent(workspaceId)}`);
+      if (!res.ok) return;
+      const list = (await res.json()) as Array<{ id: string; title?: string }>;
+      const map: Record<string, string> = {};
+      for (const i of list) if (i.id && i.title) map[i.id] = i.title;
+      setInitiativeTitles(map);
+    } catch { /* ignore */ }
+  }, [workspaceId]);
+  const resolveInitiativeTitle = useCallback(
+    (id: string | null | undefined): string | undefined => (id ? initiativeTitles[id] : undefined),
+    [initiativeTitles],
+  );
+
   useEffect(() => {
     if (!pmAgent) return;
     loadMessages();
     loadRecent();
+    loadInitiativeTitles();
     const id = setInterval(() => {
       loadMessages();
       loadRecent();
     }, 3000);
     return () => clearInterval(id);
-  }, [pmAgent, loadMessages, loadRecent]);
+  }, [pmAgent, loadMessages, loadRecent, loadInitiativeTitles]);
 
   // Auto-scroll only when the operator is already at the bottom. This
   // depends on `messages` AND the latest stuckToBottom value — including
@@ -360,6 +387,14 @@ function PmChatPageInner() {
           }
           return;
         }
+        if (evt.type === 'pm_proposal_replaced') {
+          // The agent's propose_changes may have created a new
+          // initiative (create_child_initiative) or referenced one
+          // we haven't loaded. Refresh the title map so the next
+          // render shows real titles instead of short hashes.
+          if (evt.payload?.workspace_id === workspaceId) loadInitiativeTitles();
+          return;
+        }
         if (evt.type !== 'pm_dispatch_in_flight') return;
         if (evt.payload?.workspace_id !== workspaceId) return;
         if (evt.payload?.kind === 'delta') {
@@ -385,7 +420,7 @@ function PmChatPageInner() {
       } catch { /* ignore parse errors */ }
     };
     return () => es.close();
-  }, [workspaceId]);
+  }, [workspaceId, loadInitiativeTitles]);
 
   // Clear the preview + tool-call trail when we stop awaiting
   // (timeout / response / abort) so stale state doesn't linger
@@ -791,6 +826,7 @@ function PmChatPageInner() {
               onReject={onReject}
               setRef={(el) => cardRefs.current.set(pinnedStandup.id, el)}
               highlighted={highlightedProposalId === pinnedStandup.id}
+              resolveInitiativeTitle={resolveInitiativeTitle}
             />
           )}
           <div className="relative flex-1 min-h-0">
@@ -832,6 +868,7 @@ function PmChatPageInner() {
                   onRefineTextChange={setRefineText}
                   setCardRef={(id, el) => cardRefs.current.set(id, el)}
                   highlighted={proposal ? highlightedProposalId === proposal.id : false}
+                  resolveInitiativeTitle={resolveInitiativeTitle}
                 />
               );
             })}
@@ -1107,6 +1144,9 @@ interface ChatMessageRowProps {
   setCardRef?: (id: string, el: HTMLDivElement | null) => void;
   /** Phase 6: visual highlight after a deep-link scroll. */
   highlighted?: boolean;
+  /** Resolver for diff renderer — id → initiative title. Falls through
+   *  to short-hash when undefined. */
+  resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
 }
 
 function ChatMessageRow({
@@ -1122,6 +1162,7 @@ function ChatMessageRow({
   onRefineTextChange,
   setCardRef,
   highlighted,
+  resolveInitiativeTitle,
 }: ChatMessageRowProps) {
   const isUser = message.role === 'user';
 
@@ -1200,7 +1241,10 @@ function ChatMessageRow({
             </>
           );
         })()}
-        <ProposalDiffsList diffs={proposal.proposed_changes} />
+        <ProposalDiffsList
+          diffs={proposal.proposed_changes}
+          resolveInitiativeTitle={resolveInitiativeTitle}
+        />
         {proposal.status === 'draft' && (
           <div className="px-3 py-2 border-t border-amber-500/30 bg-amber-500/5 flex items-center gap-2">
             {refining === proposal.id ? (
@@ -1275,6 +1319,7 @@ interface PinnedStandupCardProps {
   onReject: (id: string) => void;
   setRef: (el: HTMLDivElement | null) => void;
   highlighted: boolean;
+  resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
 }
 
 /**
@@ -1294,6 +1339,7 @@ function PinnedStandupCard({
   onReject,
   setRef,
   highlighted,
+  resolveInitiativeTitle,
 }: PinnedStandupCardProps) {
   const created = new Date(
     proposal.created_at.endsWith('Z') ? proposal.created_at : proposal.created_at + 'Z',
@@ -1322,7 +1368,10 @@ function PinnedStandupCard({
       <div className="p-3">
         <ChatMarkdown content={stripSuggestionsSidecar(proposal.impact_md)} />
       </div>
-      <ProposalDiffsList diffs={proposal.proposed_changes} />
+      <ProposalDiffsList
+        diffs={proposal.proposed_changes}
+        resolveInitiativeTitle={resolveInitiativeTitle}
+      />
       <div className="px-3 py-2 border-t border-violet-500/30 bg-violet-500/5 flex items-center gap-2">
         <button
           type="button"
