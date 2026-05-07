@@ -17,8 +17,8 @@
  * per project convention).
  */
 
-import { useMemo, useState } from 'react';
-import { Archive } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { Archive, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import {
   useAgentNotes,
   type AgentNoteKind,
@@ -58,6 +58,19 @@ function groupByRunGroup(notes: AgentNoteRecord[]): Map<string, AgentNoteRecord[
 
 export function NotesRail(props: NotesRailProps) {
   const [showArchived, setShowArchived] = useState(false);
+  // Per-note collapse state. Default = collapsed (Set is empty). Operator
+  // expands one at a time, OR clicks "Expand all" in the header. New
+  // notes arriving via SSE land collapsed for free since their id isn't
+  // in the set yet.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = useCallback((note: AgentNoteRecord) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(note.id)) next.delete(note.id);
+      else next.add(note.id);
+      return next;
+    });
+  }, []);
   // Note pending hard-delete confirmation. Two-step intent: archive
   // first (reversible), then delete from the trash view.
   const [pendingDelete, setPendingDelete] = useState<AgentNoteRecord | null>(null);
@@ -176,7 +189,33 @@ export function NotesRail(props: NotesRailProps) {
     >
       <header className="flex items-center justify-between gap-2 text-xs uppercase tracking-wide opacity-70">
         <span>{props.title ?? 'Notes'} · {activeNotes.length}</span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {notes.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedIds(new Set(notes.map((n) => n.id)))
+                }
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded normal-case tracking-normal hover:bg-black/5 dark:hover:bg-white/5"
+                aria-label="Expand all notes"
+                title="Expand every note in this list"
+              >
+                <ChevronsUpDown className="w-3 h-3" />
+                Expand all
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandedIds(new Set())}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded normal-case tracking-normal hover:bg-black/5 dark:hover:bg-white/5"
+                aria-label="Collapse all notes"
+                title="Collapse every note"
+              >
+                <ChevronsDownUp className="w-3 h-3" />
+                Collapse all
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setShowArchived((v) => !v)}
@@ -233,6 +272,8 @@ export function NotesRail(props: NotesRailProps) {
               note={n}
               onArchive={archive}
               onAskPm={askPm}
+              expanded={expandedIds.has(n.id)}
+              onToggleExpanded={toggleExpanded}
             />
           ))}
         </div>
@@ -251,6 +292,8 @@ export function NotesRail(props: NotesRailProps) {
                   note={n}
                   onRestore={restore}
                   onDelete={(note) => setPendingDelete(note)}
+                  expanded={expandedIds.has(n.id)}
+                  onToggleExpanded={toggleExpanded}
                 />
               ))}
             </div>

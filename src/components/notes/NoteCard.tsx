@@ -9,15 +9,24 @@
  * Buttons are gated by callbacks — when omitted, the card renders
  * read-only as before, so /feed and other consumers don't surface
  * actions until they opt in.
+ *
+ * Collapse: when the caller owns `expanded` state and provides
+ * `onToggleExpanded`, the card renders a one-line preview while
+ * collapsed and the full body + actions when expanded. Used by
+ * NotesRail (which exposes Expand all / Collapse all) so initiative
+ * detail panels stay scannable. Without these props the card is
+ * always-expanded, preserving the /feed page's full-body display.
  */
 
 import Link from 'next/link';
 import {
   Archive,
-  RotateCcw,
-  Trash2,
-  Sparkles,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
+  RotateCcw,
+  Sparkles,
+  Trash2,
 } from 'lucide-react';
 import type { AgentNoteRecord, AgentNoteKind } from '@/hooks/useAgentNotes';
 
@@ -74,6 +83,33 @@ function runKindLabel(kind: string): string {
   }
 }
 
+/**
+ * One-line preview of a note body, used when the card is collapsed.
+ *
+ * Strategy: take the first non-blank line, strip leading markdown noise
+ * (heading hashes, bullet markers, numbered-list prefix) so audit notes
+ * that lead with `## Audit: Foo` collapse to just `Audit: Foo`. Cap at
+ * 100 chars with an ellipsis. Returns the empty string for an empty
+ * body — caller decides whether to render at all.
+ */
+function bodyPreview(body: string): string {
+  if (!body) return '';
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Strip markdown leaders: `## `, `### `, `- `, `* `, `1. `, `> `.
+    const stripped = line
+      .replace(/^#+\s+/, '')
+      .replace(/^[-*+]\s+/, '')
+      .replace(/^\d+\.\s+/, '')
+      .replace(/^>\s+/, '')
+      .trim();
+    if (!stripped) continue;
+    return stripped.length > 100 ? `${stripped.slice(0, 99)}…` : stripped;
+  }
+  return '';
+}
+
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
@@ -105,9 +141,27 @@ interface NoteCardProps {
    * for the network round-trip; the button just emits intent.
    */
   onAskPm?: (note: AgentNoteRecord) => void;
+  /**
+   * Caller-controlled collapse state. When `onToggleExpanded` is
+   * provided, the card renders a chevron + one-line preview while
+   * `expanded` is false and the full body + actions when true.
+   * When omitted, the card behaves as it did pre-collapse — always
+   * expanded, no chevron — which keeps /feed and any other always-on
+   * consumers unchanged.
+   */
+  expanded?: boolean;
+  onToggleExpanded?: (note: AgentNoteRecord) => void;
 }
 
-export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: NoteCardProps) {
+export function NoteCard({
+  note,
+  onArchive,
+  onRestore,
+  onDelete,
+  onAskPm,
+  expanded,
+  onToggleExpanded,
+}: NoteCardProps) {
   const archived = !!note.archived_at;
   const kindClasses = `${KIND_COLOR[note.kind]} ${KIND_DARK[note.kind]}`;
   const importancePin =
@@ -125,6 +179,11 @@ export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: Note
     askPmEligible && (note.consumed_by_stages ?? []).includes('pm_proposal');
 
   const hasActions = !!(onArchive || onRestore || onDelete || askPmEligible);
+  // Collapse is opt-in: only when the caller provides both the state
+  // and a toggle. Default (always expanded) preserves /feed behavior.
+  const collapsible = !!onToggleExpanded;
+  const isExpanded = !collapsible || expanded === true;
+  const preview = collapsible ? bodyPreview(note.body) : '';
 
   return (
     <article
@@ -132,23 +191,56 @@ export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: Note
       data-note-id={note.id}
       data-note-kind={note.kind}
       data-note-archived={archived ? 'true' : 'false'}
+      data-note-expanded={isExpanded ? 'true' : 'false'}
     >
       <header className="flex items-center justify-between gap-2 text-xs opacity-80">
-        <span className="font-medium">
-          {importancePin}
-          {KIND_LABEL[note.kind]} · {note.role}
-          {archived && (
-            <span className="ml-1.5 px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-[10px] uppercase tracking-wide">
-              archived
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => onToggleExpanded?.(note)}
+            className="flex items-center gap-1.5 font-medium text-left hover:opacity-100 opacity-90 min-w-0 flex-1"
+            aria-expanded={isExpanded}
+            aria-label={isExpanded ? 'Collapse note' : 'Expand note'}
+          >
+            {isExpanded ? (
+              <ChevronDown className="w-3 h-3 shrink-0" />
+            ) : (
+              <ChevronRight className="w-3 h-3 shrink-0" />
+            )}
+            <span className="shrink-0">
+              {importancePin}
+              {KIND_LABEL[note.kind]} · {note.role}
             </span>
-          )}
-        </span>
-        <time dateTime={note.created_at} title={note.created_at}>
+            {archived && (
+              <span className="ml-1 px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-[10px] uppercase tracking-wide shrink-0">
+                archived
+              </span>
+            )}
+            {!isExpanded && preview && (
+              <span className="ml-2 truncate opacity-75 font-normal">
+                {preview}
+              </span>
+            )}
+          </button>
+        ) : (
+          <span className="font-medium">
+            {importancePin}
+            {KIND_LABEL[note.kind]} · {note.role}
+            {archived && (
+              <span className="ml-1.5 px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-[10px] uppercase tracking-wide">
+                archived
+              </span>
+            )}
+          </span>
+        )}
+        <time dateTime={note.created_at} title={note.created_at} className="shrink-0">
           {formatTime(note.created_at)}
         </time>
       </header>
-      <p className="whitespace-pre-wrap leading-relaxed">{note.body}</p>
-      {note.originating_run && (
+      {isExpanded && (
+        <p className="whitespace-pre-wrap leading-relaxed">{note.body}</p>
+      )}
+      {isExpanded && note.originating_run && (
         <p className="text-[11px] opacity-70">
           <Link
             href={`/jobs?run=${encodeURIComponent(note.originating_run.id)}`}
@@ -161,7 +253,7 @@ export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: Note
           </Link>
         </p>
       )}
-      {note.attached_files.length > 0 && (
+      {isExpanded && note.attached_files.length > 0 && (
         <ul className="mt-1 flex flex-wrap gap-1">
           {note.attached_files.map((f) => (
             <li
@@ -173,10 +265,10 @@ export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: Note
           ))}
         </ul>
       )}
-      {note.audience && (
+      {isExpanded && note.audience && (
         <p className="text-[11px] opacity-70">→ for {note.audience}</p>
       )}
-      {hasActions && (
+      {isExpanded && hasActions && (
         <div className="flex flex-wrap items-center gap-1.5 pt-1.5 mt-1.5 border-t border-current/10">
           {askPmEligible && (
             <button
