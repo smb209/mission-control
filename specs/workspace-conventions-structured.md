@@ -85,6 +85,12 @@ Switching templates after the textarea has content prompts the operator via `Con
 
 ### 5. Local-repo init checkbox
 
+**Path translation note (PR 4).** The `workspace_path` column stores the **host** path so host-side gateway agents can find the working tree. When MC itself runs in Docker (prod at `:4001`), that host path isn't valid inside the container. The `git init` runner therefore translates host → container via the existing `hostPathToContainerPath` helper, which uses the bind mount declared by `MC_DELIVERABLES_HOST_PATH` / `MC_DELIVERABLES_CONTAINER_PATH`. When MC runs natively (`yarn dev` at `:4010`) the translator is a no-op (host root === container root). Paths outside the bind mount surface a clear error ("translated to X inside MC ... is the bind mount configured?") rather than silently failing.
+
+**Original §5 below.**
+
+
+
 In the Repo section of the settings page (PR 1 lands the checkbox even though `repo_url` itself ships in PR 2 — the use case is "I have a folder, no remote yet, just init git for me"):
 
 - Single boolean field `local_repo_init` (column added in PR 2; pre-PR-2 the checkbox writes to a transient state and only takes effect on PR-2 save).
