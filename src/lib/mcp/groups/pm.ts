@@ -37,10 +37,28 @@ export function registerPmTools(server: McpServer): void {
         'Records that an agent is unavailable in a window. The PM may use this when the operator stated an availability fact directly; otherwise the PM proposes the change via propose_changes.',
       inputSchema: {
         agent_id: agentIdArg,
-        for_agent_id: z.string().min(1),
-        start: z.string().min(1),
-        end: z.string().min(1),
-        reason: z.string().optional(),
+        for_agent_id: z
+          .string()
+          .min(1)
+          .describe(
+            'Agent whose availability is being recorded (target). Distinct from agent_id, which identifies the calling PM.',
+          ),
+        start: z
+          .string()
+          .min(1)
+          .describe(
+            'Inclusive start of the unavailable window. ISO 8601 (YYYY-MM-DD or full datetime).',
+          ),
+        end: z
+          .string()
+          .min(1)
+          .describe(
+            'Exclusive end of the unavailable window. ISO 8601 (YYYY-MM-DD or full datetime).',
+          ),
+        reason: z
+          .string()
+          .optional()
+          .describe('One-line reason ("vacation", "PTO", "on-call rotation"). Surfaces in the schedule UI.'),
       },
       annotations: { destructiveHint: true, openWorldHint: false },
     },
@@ -62,8 +80,17 @@ export function registerPmTools(server: McpServer): void {
         "The PM agent's primary write path. Creates a `pm_proposals` row in `draft` status with a markdown impact summary and a structured diff list. The operator approves at the proposal level — never call any of the other write tools to push changes through; always go through this one.",
       inputSchema: {
         agent_id: agentIdArg,
-        workspace_id: z.string().min(1),
-        trigger_text: z.string().min(1).max(20000),
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe('Workspace this proposal targets. Use the id from your whoami payload.'),
+        trigger_text: z
+          .string()
+          .min(1)
+          .max(20000)
+          .describe(
+            'REQUIRED. The operator statement, audit excerpt, or freeform note that prompted this proposal. Stored on the pm_proposals row so reviewers see what you were responding to. Markdown OK.',
+          ),
         trigger_kind: z
           .enum([
             'manual',
@@ -75,19 +102,44 @@ export function registerPmTools(server: McpServer): void {
             'decompose_story',
             'notes_intake',
           ])
-          .optional(),
-        impact_md: z.string().min(1).max(20000),
+          .optional()
+          .describe(
+            'How this proposal originated. Defaults to "manual". Use "notes_intake" when responding to operator notes / audit findings, "disruption_event" for shifts triggered by an availability change, "scheduled_drift_scan" for daily standup output.',
+          ),
+        impact_md: z
+          .string()
+          .min(1)
+          .max(20000)
+          .describe(
+            'REQUIRED. Markdown summary the operator reads in the proposal review UI. Lead with the headline change in 1–2 sentences, then bullet the schedule/scope impact. Quantify everything (days, percentages, status changes).',
+          ),
         // Tolerate stringified-array payloads coming from agent tool-use
         // serialization layers that occasionally JSON-stringify array args.
         // We unwrap-then-validate so the agent doesn't have to retry just
         // because its caller chose strings over arrays.
-        changes: z.preprocess((val) => {
-          if (typeof val === 'string') {
-            try { return JSON.parse(val); } catch { return val; }
-          }
-          return val;
-        }, z.array(DiffSchema)),
-        parent_proposal_id: z.string().nullish(),
+        changes: z
+          .preprocess(
+            (val) => {
+              if (typeof val === 'string') {
+                try {
+                  return JSON.parse(val);
+                } catch {
+                  return val;
+                }
+              }
+              return val;
+            },
+            z.array(DiffSchema),
+          )
+          .describe(
+            'REQUIRED. Array of structured diffs (PmDiff[]). Each entry has a `kind` discriminator — see set_initiative_status, shift_initiative_target, add_dependency, remove_dependency, create_child_initiative, etc. Empty arrays are rejected.',
+          ),
+        parent_proposal_id: z
+          .string()
+          .nullish()
+          .describe(
+            'Optional. When refining a prior proposal, set this to its id so the chain is preserved.',
+          ),
         /**
          * Structured planning suggestions for plan_initiative proposals.
          * Pass the suggestions object here directly rather than embedding
@@ -95,12 +147,25 @@ export function registerPmTools(server: McpServer): void {
          * Required fields: refined_description, complexity.
          * Optional: target_start, target_end, status_check_md, dependencies.
          */
-        plan_suggestions: z.preprocess((val) => {
-          if (typeof val === 'string') {
-            try { return JSON.parse(val); } catch { return val; }
-          }
-          return val;
-        }, z.record(z.string(), z.unknown()).nullish()),
+        plan_suggestions: z
+          .preprocess((val) => {
+            if (typeof val === 'string') {
+              try {
+                return JSON.parse(val);
+              } catch {
+                return val;
+              }
+            }
+            return val;
+          }, z.record(z.string(), z.unknown()))
+          // .nullish() lives OUTSIDE the preprocess so the JSON-schema
+          // export marks the field as optional. With .nullish() inside
+          // the preprocess the agent saw it as required, forcing a
+          // useless retry on every proposal that wasn't a plan_initiative.
+          .nullish()
+          .describe(
+            'Optional — only populate for plan_initiative proposals. Object with `refined_description` + `complexity` (required when present), plus optional `target_start`, `target_end`, `status_check_md`, `dependencies`. Omit entirely (or send null) for any other proposal kind.',
+          ),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
@@ -125,14 +190,30 @@ export function registerPmTools(server: McpServer): void {
         "Hand the PM a paragraph (or several) of freeform text — meeting notes, kickoff transcript, weekly review, brain-dump — and the PM agent reads it, consults the roadmap snapshot, and replies with a single `propose_changes` MCP call carrying a coherent set of structured diffs (creates/updates on initiatives plus draft tasks under them). Returns `{status: 'dispatched', proposal_id}` on success. If the openclaw gateway is unreachable, the request is enqueued in `pm_pending_notes` and replayed automatically when the gateway comes back; in that case `{status: 'queued', pending_id}` is returned. There is NO deterministic fallback: a regex parser on freeform notes is worse than nothing.",
       inputSchema: {
         agent_id: agentIdArg,
-        workspace_id: z.string().min(1),
-        notes_text: z.string().min(1).max(20000),
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe('Workspace these notes belong to.'),
+        notes_text: z
+          .string()
+          .min(1)
+          .max(20000)
+          .describe(
+            'Freeform paragraphs the PM will read. Meeting notes, kickoff transcripts, weekly reviews, brain-dumps. Markdown is fine. Cap is 20K chars.',
+          ),
         scope_hint: z
           .object({
-            target_initiative_id: z.string().optional(),
-            include_tasks: z.boolean().optional(),
+            target_initiative_id: z
+              .string()
+              .optional()
+              .describe('Focus the PM on this initiative when interpreting the notes.'),
+            include_tasks: z
+              .boolean()
+              .optional()
+              .describe('When true, the PM may propose task-level diffs alongside initiative changes.'),
           })
-          .optional(),
+          .optional()
+          .describe('Optional hints that bias the PM toward a specific initiative or scope.'),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
@@ -200,8 +281,17 @@ export function registerPmTools(server: McpServer): void {
         "Marks the parent superseded and creates a fresh draft. Use this when the operator says 'refine — keep launch on schedule, defer analytics'.",
       inputSchema: {
         agent_id: agentIdArg,
-        proposal_id: z.string().min(1),
-        additional_constraint: z.string().min(1).max(5000),
+        proposal_id: z
+          .string()
+          .min(1)
+          .describe('ID of the proposal to refine. Marked superseded; a fresh draft is created from it.'),
+        additional_constraint: z
+          .string()
+          .min(1)
+          .max(5000)
+          .describe(
+            'The new constraint or steer the operator added — e.g. "keep launch on schedule, defer analytics", "no scope cuts; push target_end instead". One paragraph max.',
+          ),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
     },
@@ -234,18 +324,41 @@ export function registerPmTools(server: McpServer): void {
         'Run the derivation engine against the current snapshot with optional velocity / availability overrides, WITHOUT writing. Use this to estimate impact before composing a propose_changes call.',
       inputSchema: {
         agent_id: agentIdArg,
-        workspace_id: z.string().min(1),
-        velocity_overrides: z.record(z.string(), z.number().min(0).max(10)).optional(),
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe('Workspace whose roadmap snapshot you want to derive against.'),
+        velocity_overrides: z
+          .record(z.string(), z.number().min(0).max(10))
+          .optional()
+          .describe(
+            'Map of agent_id → velocity-multiplier (0..10). Use to model "what if this agent works at half speed for the next sprint?". Omit to use historical velocity.',
+          ),
         availability_overrides: z
           .array(
             z.object({
-              agent_id: z.string().min(1),
-              unavailable_start: z.string().min(1),
-              unavailable_end: z.string().min(1),
-              reason: z.string().optional(),
+              agent_id: z
+                .string()
+                .min(1)
+                .describe('Agent the override applies to.'),
+              unavailable_start: z
+                .string()
+                .min(1)
+                .describe('Inclusive start of the unavailable window. ISO 8601.'),
+              unavailable_end: z
+                .string()
+                .min(1)
+                .describe('Exclusive end of the unavailable window. ISO 8601.'),
+              reason: z
+                .string()
+                .optional()
+                .describe('Optional one-line reason for the operator-facing diff.'),
             }),
           )
-          .optional(),
+          .optional()
+          .describe(
+            'Hypothetical availability windows layered over the real ones for this preview. Doesn\'t persist.',
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
