@@ -15,9 +15,19 @@
 import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
 
-export type AgentRunKind = 'brief';
+export type AgentRunKind =
+  | 'brief'
+  | 'pm_chat'
+  | 'plan'
+  | 'decompose'
+  | 'initiative_audit'
+  | 'recurring'
+  | 'task_coord'
+  | 'task_role';
 export type AgentRunStatus = 'queued' | 'running' | 'complete' | 'failed' | 'cancelled';
-export type AgentRunSourceKind = 'manual' | 'schedule' | 'event';
+export type AgentRunSourceKind = 'manual' | 'schedule' | 'event' | 'fanout';
+
+import type { ScopeType } from '@/lib/db/mc-sessions';
 
 export interface AgentRun {
   id: string;
@@ -26,6 +36,14 @@ export interface AgentRun {
   status: AgentRunStatus;
   source_kind: AgentRunSourceKind;
   source_ref: string | null;
+  scope_key: string | null;
+  scope_type: string | null;
+  role: string | null;
+  agent_id: string | null;
+  initiative_id: string | null;
+  task_id: string | null;
+  parent_run_id: string | null;
+  label: string | null;
   openclaw_session_id: string | null;
   model_used: string | null;
   cost_cents: number | null;
@@ -35,6 +53,32 @@ export interface AgentRun {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Pure mapping from `mc_sessions.scope_type` → `agent_runs.kind`.
+ * Used by `dispatchScope` so every dispatch gets a row in agent_runs
+ * tagged with the right kind for the Jobs-in-Progress UI.
+ */
+export function scopeTypeToRunKind(scopeType: ScopeType): AgentRunKind {
+  switch (scopeType) {
+    case 'pm_chat': return 'pm_chat';
+    case 'plan': return 'plan';
+    case 'decompose': return 'decompose';
+    case 'decompose_story': return 'decompose';
+    case 'notes_intake': return 'pm_chat';
+    case 'task_coord': return 'task_coord';
+    case 'task_role': return 'task_role';
+    case 'recurring': return 'recurring';
+    case 'heartbeat': return 'task_coord';
+    case 'initiative_audit': return 'initiative_audit';
+    default: {
+      // Exhaustiveness check + runtime guard for unknown ScopeType values.
+      const _exhaustive: never = scopeType;
+      void _exhaustive;
+      throw new Error(`scopeTypeToRunKind: unknown scope_type ${scopeType}`);
+    }
+  }
 }
 
 export class AgentRunValidationError extends Error {
@@ -212,6 +256,99 @@ export function markCancelled(id: string, reasonMd?: string): AgentRun {
  * on progress events; jobs whose updated_at hasn't moved in that window
  * are presumed dead. Used by the dispatch failure recovery path.
  */
+// ─── Jobs-in-Progress helpers (PR 1) ────────────────────────────────
+//
+// startAgentRun / completeAgentRun / failAgentRun are the high-level
+// API used by `dispatchScope` so every dispatch path lands in the
+// agent_runs table with the same shape. See specs/jobs-in-progress.md
+// §"Single write site".
+
+export interface StartAgentRunInput {
+  workspace_id: string;
+  kind: AgentRunKind;
+  scope_key: string;
+  scope_type: ScopeType | string;
+  role: string;
+  agent_id: string;
+  initiative_id?: string | null;
+  task_id?: string | null;
+  parent_run_id?: string | null;
+  source_kind?: AgentRunSourceKind;
+  source_ref?: string | null;
+  cost_ceiling_cents?: number | null;
+  label?: string | null;
+}
+
+/**
+ * Insert a new agent_runs row in `running` state and return its id.
+ * Skips the queued→running two-step because in practice every caller
+ * we have today goes from "decided to dispatch" straight to "sent" with
+ * no queue in between.
+ */
+export function startAgentRun(input: StartAgentRunInput): string {
+  if (!input.workspace_id.trim()) {
+    throw new AgentRunValidationError('workspace_id is required');
+  }
+  const id = uuidv4();
+  run(
+    `INSERT INTO agent_runs (
+       id, workspace_id, kind, status, source_kind, source_ref,
+       scope_key, scope_type, role, agent_id,
+       initiative_id, task_id, parent_run_id, label,
+       cost_ceiling_cents, started_at, created_at, updated_at
+     ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
+    [
+      id,
+      input.workspace_id,
+      input.kind,
+      input.source_kind ?? 'manual',
+      input.source_ref ?? null,
+      input.scope_key,
+      input.scope_type,
+      input.role,
+      input.agent_id,
+      input.initiative_id ?? null,
+      input.task_id ?? null,
+      input.parent_run_id ?? null,
+      input.label ?? null,
+      input.cost_ceiling_cents ?? null,
+    ],
+  );
+  return id;
+}
+
+export interface CompleteAgentRunInput {
+  openclaw_session_id?: string | null;
+  model_used?: string | null;
+  cost_cents?: number | null;
+}
+
+export function completeAgentRun(id: string, opts: CompleteAgentRunInput = {}): void {
+  run(
+    `UPDATE agent_runs SET
+       status = 'complete',
+       openclaw_session_id = COALESCE(?, openclaw_session_id),
+       model_used = COALESCE(?, model_used),
+       cost_cents = COALESCE(?, cost_cents),
+       completed_at = datetime('now'),
+       updated_at = datetime('now')
+     WHERE id = ? AND status NOT IN ('complete','failed','cancelled')`,
+    [opts.openclaw_session_id ?? null, opts.model_used ?? null, opts.cost_cents ?? null, id],
+  );
+}
+
+export function failAgentRun(id: string, errorMd: string): void {
+  run(
+    `UPDATE agent_runs SET
+       status = 'failed',
+       error_md = ?,
+       completed_at = datetime('now'),
+       updated_at = datetime('now')
+     WHERE id = ? AND status NOT IN ('complete','failed','cancelled')`,
+    [errorMd, id],
+  );
+}
+
 export function reapStaleRunning(staleSeconds: number, errorMd: string): number {
   const result = run(
     `UPDATE agent_runs SET

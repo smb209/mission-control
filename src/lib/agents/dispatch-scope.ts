@@ -21,6 +21,13 @@ import {
 } from '@/lib/openclaw/send-chat';
 import { buildBriefing, type BriefingRole } from './briefing';
 import { upsertSession, type ScopeType } from '@/lib/db/mc-sessions';
+import {
+  startAgentRun,
+  completeAgentRun,
+  failAgentRun,
+  scopeTypeToRunKind,
+  type AgentRunSourceKind,
+} from '@/lib/db/agent-runs';
 
 /**
  * Map a PM trigger kind to its scope_type label. Worker / recurring /
@@ -100,6 +107,23 @@ export interface DispatchScopeInput {
    * Used by unit tests that don't want to mock the gateway.
    */
   dry_run?: boolean;
+  /**
+   * Optional parent agent_runs.id for fan-out dispatches (subtree audit
+   * leaves attribute up to the root run). Forwarded to startAgentRun.
+   */
+  parent_run_id?: string | null;
+  /** source_kind for the agent_runs row. Defaults to 'manual'. */
+  source_kind?: AgentRunSourceKind;
+  /** Free-form source ref (recurring_job_id, parent run id, etc.). */
+  source_ref?: string | null;
+  /** Display label snapshot at dispatch time (rendered in /jobs UI). */
+  label?: string | null;
+  /**
+   * Skip the agent_runs lifecycle bookkeeping. Used by callers (today:
+   * brief dispatch via run-brief.ts) that already manage their own
+   * agent_runs row externally and would otherwise double-write.
+   */
+  skip_run_row?: boolean;
 }
 
 export interface DispatchScopeResult {
@@ -115,6 +139,11 @@ export interface DispatchScopeResult {
   briefing: string;
   /** The result from sendChatAndAwaitReply, or null on dry_run. */
   reply: Awaited<ReturnType<typeof sendChatAndAwaitReply>> | null;
+  /**
+   * agent_runs.id for the row created by this dispatch, or null when
+   * dry_run / skip_run_row is set. PR 1 of jobs-in-progress.
+   */
+  run_id: string | null;
 }
 
 /**
@@ -177,25 +206,93 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
       briefing_bytes,
       briefing,
       reply: null,
+      run_id: null,
     };
   }
 
-  const reply = await sendChatAndAwaitReply({
-    agent: input.agent,
-    message: briefing,
-    idempotencyKey: input.idempotencyKey ?? `dispatch-scope-${run_group_id}`,
-    timeoutMs: input.timeoutMs,
-    sessionSuffix: input.session_suffix,
-    onEvent: input.onEvent,
-    onAgentEvent: input.onAgentEvent,
-  });
+  // Jobs-in-Progress (PR 1): every non-dry-run dispatch lands in
+  // agent_runs so /jobs can surface live + recently-completed work.
+  // Callers that manage their own agent_runs row (today: brief
+  // dispatch) opt out via `skip_run_row`.
+  let run_id: string | null = null;
+  if (!input.skip_run_row) {
+    try {
+      run_id = startAgentRun({
+        workspace_id: input.workspace_id,
+        kind: scopeTypeToRunKind(scopeType),
+        scope_key,
+        scope_type: scopeType,
+        role: input.role,
+        agent_id: input.agent.id,
+        initiative_id: input.initiative_id ?? null,
+        task_id: input.task_id ?? null,
+        parent_run_id: input.parent_run_id ?? null,
+        source_kind: input.source_kind ?? 'manual',
+        source_ref: input.source_ref ?? null,
+        label: input.label ?? null,
+      });
+    } catch (err) {
+      // Don't let an agent_runs write failure break dispatch. Log and
+      // continue — the dispatch itself is the operator's primary action.
+      console.warn(
+        '[dispatchScope] startAgentRun failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
 
-  return {
-    scope_key,
-    run_group_id,
-    is_resume,
-    briefing_bytes,
-    briefing,
-    reply,
-  };
+  try {
+    const reply = await sendChatAndAwaitReply({
+      agent: input.agent,
+      message: briefing,
+      idempotencyKey: input.idempotencyKey ?? `dispatch-scope-${run_group_id}`,
+      timeoutMs: input.timeoutMs,
+      sessionSuffix: input.session_suffix,
+      onEvent: input.onEvent,
+      onAgentEvent: input.onAgentEvent,
+    });
+
+    if (run_id) {
+      // sendChatAndAwaitReply's reply object doesn't expose model_used /
+      // cost_cents directly today; gateway-side accounting lands those
+      // on a different channel. Pass null for now; PR 2+ can backfill
+      // from the gateway response shape if/when it stabilises.
+      const sessionId = reply?.sessionKey ?? null;
+      try {
+        completeAgentRun(run_id, {
+          openclaw_session_id: sessionId,
+          model_used: input.agent.model ?? null,
+          cost_cents: null,
+        });
+      } catch (err) {
+        console.warn(
+          '[dispatchScope] completeAgentRun failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    return {
+      scope_key,
+      run_group_id,
+      is_resume,
+      briefing_bytes,
+      briefing,
+      reply,
+      run_id,
+    };
+  } catch (err) {
+    if (run_id) {
+      const errorMd = err instanceof Error ? err.message : String(err);
+      try {
+        failAgentRun(run_id, errorMd);
+      } catch (failErr) {
+        console.warn(
+          '[dispatchScope] failAgentRun failed:',
+          failErr instanceof Error ? failErr.message : String(failErr),
+        );
+      }
+    }
+    throw err;
+  }
 }

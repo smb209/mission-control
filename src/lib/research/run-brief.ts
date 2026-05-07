@@ -442,6 +442,10 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
         timeoutMs: options.timeoutMs ?? DEFAULT_BRIEF_TIMEOUT_MS,
         onEvent,
         attempt_strategy: 'fresh',
+        // run-brief.ts already manages a kind='brief' agent_runs row
+        // externally (markRunning above). Skip dispatchScope's own
+        // bookkeeping to avoid double-writing.
+        skip_run_row: true,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -20,9 +20,14 @@ import {
   markFailed,
   markRunning,
   reapStaleRunning,
+  startAgentRun,
+  completeAgentRun,
+  failAgentRun,
+  scopeTypeToRunKind,
   AgentRunTransitionError,
   AgentRunValidationError,
 } from './agent-runs';
+import type { ScopeType } from './mc-sessions';
 
 function freshWorkspace(): string {
   const id = `ws-ar-${uuidv4().slice(0, 8)}`;
@@ -187,4 +192,142 @@ test('FK cascade: deleting workspace removes its agent_runs', () => {
   assert.ok(getAgentRun(r.id));
   run(`DELETE FROM workspaces WHERE id = ?`, [ws]);
   assert.equal(getAgentRun(r.id), null);
+});
+
+// ─── Jobs-in-Progress (PR 1): start/complete/fail + scope mapping ───
+
+test('scopeTypeToRunKind: maps every ScopeType', () => {
+  const cases: Array<[ScopeType, string]> = [
+    ['pm_chat', 'pm_chat'],
+    ['plan', 'plan'],
+    ['decompose', 'decompose'],
+    ['decompose_story', 'decompose'],
+    ['notes_intake', 'pm_chat'],
+    ['task_coord', 'task_coord'],
+    ['task_role', 'task_role'],
+    ['recurring', 'recurring'],
+    ['heartbeat', 'task_coord'],
+    ['initiative_audit', 'initiative_audit'],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(scopeTypeToRunKind(input), expected, `mapping for ${input}`);
+  }
+});
+
+test('scopeTypeToRunKind: throws on unknown scope_type', () => {
+  assert.throws(
+    () => scopeTypeToRunKind('not_a_real_scope_type' as unknown as ScopeType),
+    /unknown scope_type/,
+  );
+});
+
+test('startAgentRun: writes a row in running state with attribution', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'agent:pm:dispatch-main',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'mc-pm-default',
+    label: 'PM chat: ping',
+  });
+  const row = getAgentRun(id);
+  assert.ok(row, 'row inserted');
+  assert.equal(row!.status, 'running');
+  assert.equal(row!.kind, 'pm_chat');
+  assert.equal(row!.scope_key, 'agent:pm:dispatch-main');
+  assert.equal(row!.scope_type, 'pm_chat');
+  assert.equal(row!.role, 'pm');
+  assert.equal(row!.agent_id, 'mc-pm-default');
+  assert.equal(row!.label, 'PM chat: ping');
+  assert.ok(row!.started_at);
+});
+
+test('startAgentRun: rejects empty workspace_id', () => {
+  assert.throws(
+    () =>
+      startAgentRun({
+        workspace_id: '   ',
+        kind: 'pm_chat',
+        scope_key: 'k',
+        scope_type: 'pm_chat',
+        role: 'pm',
+        agent_id: 'a',
+      }),
+    AgentRunValidationError,
+  );
+});
+
+test('completeAgentRun: stamps cost/model/session and marks complete', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'plan',
+    scope_key: 'k1',
+    scope_type: 'plan',
+    role: 'pm',
+    agent_id: 'a',
+  });
+  completeAgentRun(id, {
+    openclaw_session_id: 'agent:pm:plan-x',
+    model_used: 'spark-lb/agent',
+    cost_cents: 7,
+  });
+  const row = getAgentRun(id);
+  assert.equal(row!.status, 'complete');
+  assert.equal(row!.openclaw_session_id, 'agent:pm:plan-x');
+  assert.equal(row!.model_used, 'spark-lb/agent');
+  assert.equal(row!.cost_cents, 7);
+  assert.ok(row!.completed_at);
+});
+
+test('failAgentRun: records error_md and marks failed', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'k2',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a',
+  });
+  failAgentRun(id, 'gateway unreachable');
+  const row = getAgentRun(id);
+  assert.equal(row!.status, 'failed');
+  assert.equal(row!.error_md, 'gateway unreachable');
+  assert.ok(row!.completed_at);
+});
+
+test('completeAgentRun / failAgentRun: terminal status no-op', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'k3',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a',
+  });
+  completeAgentRun(id, { cost_cents: 1 });
+  // Second completion / failure does not mutate the terminal row.
+  failAgentRun(id, 'too late');
+  const row = getAgentRun(id);
+  assert.equal(row!.status, 'complete');
+  assert.equal(row!.error_md, null);
+});
+
+test('migration 080 idempotent: kind enum accepts pm_chat after extension', () => {
+  // The migration runs at db-open time; this just exercises the
+  // post-state by inserting a row with the new enum value.
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'idem-k',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a',
+  });
+  assert.ok(getAgentRun(id));
 });
