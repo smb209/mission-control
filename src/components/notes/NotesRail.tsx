@@ -133,6 +133,37 @@ export function NotesRail(props: NotesRailProps) {
     }
   };
 
+  const askPm = async (note: AgentNoteRecord) => {
+    if (!note.initiative_id) {
+      // Belt-and-braces — Ask PM only renders on observation notes which
+      // come from initiative audits, so they always carry initiative_id.
+      console.warn('[NotesRail] askPm called on note without initiative_id', note.id);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/initiatives/${encodeURIComponent(note.initiative_id)}/ask-pm-from-notes`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ note_ids: [note.id] }),
+        },
+      );
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(
+          (detail as { error?: string }).error || `HTTP ${res.status}`,
+        );
+      }
+      // The route marks the note consumed; refresh so the button label
+      // flips to "Ask PM again". The proposal itself surfaces in the
+      // PM-chat UI; we don't need to navigate here.
+      refresh();
+    } catch (err) {
+      console.error('[NotesRail] askPm failed', err);
+    }
+  };
+
   const groups = useMemo(() => groupByRunGroup(activeNotes), [activeNotes]);
   const archivedGroups = useMemo(() => groupByRunGroup(archivedNotes), [archivedNotes]);
 
@@ -201,6 +232,7 @@ export function NotesRail(props: NotesRailProps) {
               key={n.id}
               note={n}
               onArchive={archive}
+              onAskPm={askPm}
             />
           ))}
         </div>
