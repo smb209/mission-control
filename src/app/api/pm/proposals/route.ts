@@ -68,18 +68,21 @@ export async function GET(request: NextRequest) {
       limit: limitRaw ? Math.max(1, parseInt(limitRaw, 10) || 50) : undefined,
     };
     const rows = listProposals(filters);
-    // Hide proposals with zero structured changes from the list views.
-    // These are pure noise — Mode B placeholders that pre-date PR #234's
-    // auto-cleanup, accepted-but-empty rows from older dispatches, etc.
-    // Affects both the /pm recents sidebar (status=draft) and the
-    // /pm/activity page (status=accepted): a 0-change accepted proposal
-    // doesn't represent a roadmap mutation worth surfacing in audit, and
-    // a 0-change draft is just dead weight.
+    // Hide proposals with zero structured changes AND no plan_suggestions
+    // from the list views. These are pure noise — Mode B placeholders that
+    // pre-date PR #234's auto-cleanup, accepted-but-empty rows from older
+    // dispatches, etc.
+    //
+    // plan_initiative drafts intentionally carry empty proposed_changes
+    // (the advisory output lives in plan_suggestions); those are real
+    // drafts and must remain visible in the recents sidebar.
     //
     // Operators can still view individual rows via direct
     // /pm/proposals/<id> URLs, and can hard-delete via DELETE
     // /api/pm/proposals/<id> (PR #235).
-    const visible = rows.filter((p) => p.proposed_changes.length > 0);
+    const visible = rows.filter(
+      (p) => p.proposed_changes.length > 0 || p.plan_suggestions != null,
+    );
     return NextResponse.json(visible);
   } catch (error) {
     console.error('Failed to list PM proposals:', error);
