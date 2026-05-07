@@ -4,7 +4,11 @@ import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { sendChatToAgent } from '@/lib/openclaw/send-chat';
 import { broadcast } from '@/lib/events';
-import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
+import { getProjectsPath, getMissionControlUrl, resolveWorkspacePath } from '@/lib/config';
+import {
+  resolveVariables,
+  type VariableSource,
+} from '@/lib/workspace-conventions/resolve-variables';
 import { getTaskDeliverableDir } from '@/lib/deliverables/storage';
 import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
 import { getTaskWorkflow } from '@/lib/workflow-engine';
@@ -895,14 +899,30 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
     // no block at all so we don't render an empty placeholder.
     let workspaceConventionsSection = '';
     try {
-      const wsRow = queryOne<{ context_md: string | null }>(
-        `SELECT context_md FROM workspaces WHERE id = ?`,
+      const wsRow = queryOne<{
+        slug: string;
+        name: string;
+        context_md: string | null;
+        workspace_path: string | null;
+      }>(
+        `SELECT slug, name, context_md, workspace_path FROM workspaces WHERE id = ?`,
         [task.workspace_id],
       );
       const ctx = wsRow?.context_md;
-      if (typeof ctx === 'string' && ctx.trim().length > 0) {
-        workspaceConventionsSection =
-          `## Workspace conventions\n\n${ctx.trim()}\n\n---\n\n`;
+      if (wsRow && typeof ctx === 'string' && ctx.trim().length > 0) {
+        // Resolve {{...}} tokens against the workspace's structured
+        // fields so agents see real paths / urls, not literal template
+        // variables. Spec §3.
+        const working_dir =
+          (wsRow.workspace_path && wsRow.workspace_path.trim()) ||
+          resolveWorkspacePath(wsRow.slug, null);
+        const variableSrc: VariableSource = {
+          name: wsRow.name,
+          working_dir,
+          deliverables: working_dir,
+        };
+        const resolved = resolveVariables(ctx.trim(), variableSrc);
+        workspaceConventionsSection = `## Workspace conventions\n\n${resolved}\n\n---\n\n`;
       }
     } catch (err) {
       console.warn('[Dispatch] workspace context lookup failed:', (err as Error).message);

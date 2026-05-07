@@ -13,6 +13,11 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { queryAll, queryOne } from '@/lib/db';
+import { resolveWorkspacePath } from '@/lib/config';
+import {
+  resolveVariables,
+  type VariableSource,
+} from '@/lib/workspace-conventions/resolve-variables';
 import { logActivity } from '@/lib/services/task-activities';
 import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
 import {
@@ -199,14 +204,41 @@ export function registerCoreTools(server: McpServer): void {
           structuredContent: { error: 'agent_not_found', agent_id },
         };
       }
-      const ws = queryOne<{ id: string; name: string; context_md: string | null }>(
-        `SELECT id, name, context_md FROM workspaces WHERE id = ?`,
+      const ws = queryOne<{
+        id: string;
+        slug: string;
+        name: string;
+        context_md: string | null;
+        workspace_path: string | null;
+      }>(
+        `SELECT id, slug, name, context_md, workspace_path FROM workspaces WHERE id = ?`,
         [me.workspace_id],
       );
+
+      const working_dir = ws
+        ? (ws.workspace_path && ws.workspace_path.trim()) ||
+          resolveWorkspacePath(ws.slug, null)
+        : '';
+
+      // Resolve {{...}} tokens in the conventions text so agents see
+      // working_dir / repo_url etc. expanded rather than the literal
+      // template variables. Spec §3.
+      const variableSrc: VariableSource = {
+        name: ws?.name ?? '',
+        working_dir,
+        deliverables: working_dir,
+      };
+      const resolved_context_md = resolveVariables(ws?.context_md ?? null, variableSrc);
+
       const payload = {
         workspace_id: me.workspace_id,
         workspace_name: ws?.name ?? null,
+        // Raw markdown — what's stored in the DB. Kept for back-compat
+        // with callers that already round-trip this exact field.
         context_md: ws?.context_md ?? null,
+        // {{token}}-resolved variant — what agents should prefer.
+        resolved_context_md: resolved_context_md || null,
+        working_dir,
         present: typeof ws?.context_md === 'string' && ws.context_md.trim().length > 0,
       };
       return textResult(JSON.stringify(payload, null, 2), payload);
