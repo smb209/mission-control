@@ -15,7 +15,14 @@ import { useEffect, useState } from 'react';
 import Drawer from '@/components/Drawer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import Link from 'next/link';
-import { Copy, Check, AlertTriangle, ExternalLink } from 'lucide-react';
+import {
+  Copy,
+  Check,
+  AlertTriangle,
+  ExternalLink,
+  FileText,
+  StickyNote,
+} from 'lucide-react';
 
 interface JobDetail {
   id: string;
@@ -92,6 +99,65 @@ function statusChipClass(status: string): string {
   }
 }
 
+interface ArtifactNote {
+  id: string;
+  task_id: string | null;
+  initiative_id: string | null;
+  kind: string;
+  audience: string | null;
+  body: string;
+  importance: number;
+  attached_files: string[];
+  archived_at: string | null;
+  created_at: string;
+}
+
+interface ArtifactDeliverable {
+  id: string;
+  task_id: string;
+  deliverable_type: string;
+  title: string;
+  path: string | null;
+  description: string | null;
+  size_bytes: number | null;
+  role: string;
+  created_at: string;
+}
+
+interface ArtifactsPayload {
+  run_id: string;
+  notes: ArtifactNote[];
+  deliverables: ArtifactDeliverable[];
+}
+
+const ARTIFACTS_POLL_MS = 2000;
+const NOTE_PREVIEW_MAX = 240;
+
+function notePreview(body: string): string {
+  if (!body) return '';
+  // Strip leading markdown leaders so headings don't dominate.
+  const firstNonEmpty = body
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  const stripped = (firstNonEmpty ?? '')
+    .replace(/^#+\s+/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/^\d+\.\s+/, '')
+    .replace(/^>\s+/, '')
+    .trim();
+  return stripped.length > NOTE_PREVIEW_MAX
+    ? `${stripped.slice(0, NOTE_PREVIEW_MAX - 1)}…`
+    : stripped;
+}
+
+function formatBytes(n: number | null): string {
+  if (n == null) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
 interface JobDetailDrawerProps {
   jobId: string | null;
   onClose: () => void;
@@ -105,6 +171,8 @@ export default function JobDetailDrawer({ jobId, onClose, onReset }: JobDetailDr
   const [error, setError] = useState<string | null>(null);
   const [resetPending, setResetPending] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [artifacts, setArtifacts] = useState<ArtifactsPayload | null>(null);
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!jobId) {
@@ -136,6 +204,54 @@ export default function JobDetailDrawer({ jobId, onClose, onReset }: JobDetailDr
       cancelled = true;
     };
   }, [jobId]);
+
+  // Live artifacts feed. Polls every 2s while the run is queued/running
+  // so operators watch notes + deliverables land in real time. Stops as
+  // soon as we see a terminal status — no point polling a finished run.
+  useEffect(() => {
+    if (!jobId) {
+      setArtifacts(null);
+      setArtifactsError(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `/api/jobs/${encodeURIComponent(jobId)}/artifacts`,
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as ArtifactsPayload;
+        if (cancelled) return;
+        setArtifacts(data);
+        setArtifactsError(null);
+      } catch (err) {
+        if (!cancelled) {
+          setArtifactsError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (cancelled) return;
+        const terminal =
+          job?.status === 'complete' ||
+          job?.status === 'failed' ||
+          job?.status === 'cancelled';
+        if (!terminal) {
+          timer = setTimeout(tick, ARTIFACTS_POLL_MS);
+        }
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // job?.status is intentionally a dep — we want the loop to restart
+    // when the run flips terminal so polling stops cleanly.
+  }, [jobId, job?.status]);
 
   const doReset = async () => {
     if (!job || !job.agent_id || !job.scope_key) return;
@@ -270,6 +386,133 @@ export default function JobDetailDrawer({ jobId, onClose, onReset }: JobDetailDr
                 )}
               </section>
             )}
+
+            <section className="space-y-2">
+              <header className="flex items-center justify-between gap-2">
+                <h4 className="text-[10px] uppercase tracking-wider text-mc-text-secondary opacity-70">
+                  Artifacts produced
+                </h4>
+                {artifacts && (
+                  <span className="text-[11px] text-mc-text-secondary">
+                    {artifacts.notes.length} note{artifacts.notes.length === 1 ? '' : 's'} ·{' '}
+                    {artifacts.deliverables.length} deliverable{artifacts.deliverables.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </header>
+              {artifactsError && (
+                <p className="text-[12px] text-amber-300/90">
+                  Couldn&apos;t load artifacts: {artifactsError}
+                </p>
+              )}
+              {!artifacts && !artifactsError && (
+                <p className="text-[12px] text-mc-text-secondary italic">
+                  Loading artifacts…
+                </p>
+              )}
+              {artifacts &&
+                artifacts.notes.length === 0 &&
+                artifacts.deliverables.length === 0 && (
+                  <p className="text-[12px] text-mc-text-secondary italic">
+                    No artifacts yet.{' '}
+                    {job.status === 'running' || job.status === 'queued'
+                      ? 'Notes and deliverables will appear here as the run produces them.'
+                      : 'This run finished without registering any notes or deliverables.'}
+                  </p>
+                )}
+
+              {artifacts && artifacts.deliverables.length > 0 && (
+                <ul className="space-y-1.5">
+                  {artifacts.deliverables.map((d) => (
+                    <li
+                      key={d.id}
+                      className="rounded border border-mc-border bg-mc-bg/50 px-2.5 py-1.5 text-[12px]"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <FileText className="w-3 h-3 shrink-0 text-mc-text-secondary" />
+                            <span className="font-medium text-mc-text truncate">
+                              {d.title}
+                            </span>
+                            <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-mc-bg-tertiary text-mc-text-secondary shrink-0">
+                              {d.deliverable_type}
+                            </span>
+                          </div>
+                          {d.path && (
+                            <p className="mt-0.5 text-[11px] font-mono text-mc-text-secondary truncate">
+                              {d.path}
+                            </p>
+                          )}
+                          {d.description && (
+                            <p className="mt-0.5 text-[11px] text-mc-text-secondary">
+                              {d.description}
+                            </p>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-mc-text-secondary shrink-0">
+                          {formatBytes(d.size_bytes)}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {artifacts && artifacts.notes.length > 0 && (
+                <ul className="space-y-1.5">
+                  {artifacts.notes.map((n) => {
+                    const importancePin =
+                      n.importance === 2 ? '🚩 ' : n.importance === 1 ? '🔔 ' : '';
+                    const linkHref = n.initiative_id
+                      ? `/initiatives/${encodeURIComponent(n.initiative_id)}`
+                      : null;
+                    return (
+                      <li
+                        key={n.id}
+                        className={`rounded border border-mc-border bg-mc-bg/50 px-2.5 py-1.5 text-[12px] ${
+                          n.archived_at ? 'opacity-60' : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 text-[11px] text-mc-text-secondary">
+                          <StickyNote className="w-3 h-3 shrink-0" />
+                          <span className="font-medium text-mc-text">
+                            {importancePin}
+                            {n.kind}
+                          </span>
+                          {n.audience && (
+                            <span className="opacity-80">→ {n.audience}</span>
+                          )}
+                          {n.archived_at && (
+                            <span className="ml-auto text-[10px] uppercase tracking-wide px-1 rounded bg-black/10 dark:bg-white/10">
+                              archived
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-mc-text">
+                          {notePreview(n.body)}
+                        </p>
+                        {n.attached_files.length > 0 && (
+                          <p className="mt-0.5 text-[10px] font-mono text-mc-text-secondary truncate">
+                            {n.attached_files.join(', ')}
+                          </p>
+                        )}
+                        {linkHref && (
+                          <p className="mt-1">
+                            <Link
+                              href={linkHref}
+                              className="inline-flex items-center gap-1 text-[11px] text-mc-accent hover:underline"
+                            >
+                              Open in initiative
+                              <ExternalLink className="w-3 h-3" />
+                            </Link>
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
 
             {job.error_md && (
               <section className="space-y-1">
