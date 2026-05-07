@@ -4455,6 +4455,25 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '083',
+    name: 'workspaces_repo_fields',
+    up: (db) => {
+      // Workspace conventions structuring (PR 2): two nullable strings
+      // backing the {{repo_url}} and {{base_branch}} template variables.
+      // Drives PR-targeting guidance ("always pass --repo X --base Y")
+      // and a "fork → upstream" chip in the settings UI.
+      // See specs/workspace-conventions-structured.md §2.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'repo_url')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN repo_url TEXT`);
+      }
+      if (!cols.some((c) => c.name === 'default_base_branch')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN default_base_branch TEXT`);
+      }
+      console.log('[Migration 083] workspaces.repo_url + default_base_branch added (nullable).');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
