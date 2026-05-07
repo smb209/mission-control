@@ -13,12 +13,22 @@ import {
   AUDIT_SUBTREE_CONCURRENCY_MAX,
 } from '@/lib/db/workspaces';
 import { resolveWorkspacePath } from '@/lib/config';
+import { hostPathToContainerPath } from '@/lib/deliverables/storage';
 
 const execFileAsync = promisify(execFile);
 
 /**
  * Initialize a git repo at `workspacePath` if one isn't already there.
  * Idempotent — when `.git/` already exists this is a silent no-op.
+ *
+ * Path resolution: `workspacePath` is stored as the **host** path
+ * (that's what host-side gateway agents use to find the working tree).
+ * When MC runs in Docker, the host path isn't valid inside the
+ * container, so we translate via `hostPathToContainerPath` (which uses
+ * the bind mount declared via `MC_DELIVERABLES_HOST_PATH` /
+ * `MC_DELIVERABLES_CONTAINER_PATH`). When MC runs natively (dev), the
+ * translator returns the input unchanged. The resulting `.git/` is
+ * visible on the host because the directory is bind-mounted in.
  *
  * Returns a structured result so the route can surface non-blocking
  * warnings; failure does NOT abort the workspace save (the operator's
@@ -28,26 +38,41 @@ const execFileAsync = promisify(execFile);
  */
 async function ensureLocalRepo(
   workspacePath: string,
-): Promise<{ status: 'noop' | 'initialized' | 'error'; message?: string }> {
+): Promise<{
+  status: 'noop' | 'initialized' | 'error';
+  message?: string;
+  /** When the path was translated (host → container), the value MC
+   *  actually executed against. Surfaced for operator sanity-check. */
+  effective_cwd?: string;
+}> {
   if (!workspacePath || !workspacePath.trim()) {
     return { status: 'error', message: 'workspace_path is empty; cannot init git here' };
   }
-  if (!existsSync(workspacePath)) {
+  // Translate host → container if MC is dockerized AND the path is
+  // under the declared bind mount. When MC runs natively this is a
+  // no-op (host root === container root).
+  const effectivePath = hostPathToContainerPath(workspacePath);
+  if (!existsSync(effectivePath)) {
     return {
       status: 'error',
-      message: `workspace_path '${workspacePath}' does not exist on disk`,
+      message:
+        effectivePath === workspacePath
+          ? `workspace_path '${workspacePath}' does not exist on disk`
+          : `workspace_path '${workspacePath}' (translated to '${effectivePath}' inside MC) does not exist on disk — is the bind mount configured?`,
+      effective_cwd: effectivePath,
     };
   }
-  if (existsSync(join(workspacePath, '.git'))) {
-    return { status: 'noop' };
+  if (existsSync(join(effectivePath, '.git'))) {
+    return { status: 'noop', effective_cwd: effectivePath };
   }
   try {
-    await execFileAsync('git', ['init', '-b', 'main'], { cwd: workspacePath });
-    return { status: 'initialized' };
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: effectivePath });
+    return { status: 'initialized', effective_cwd: effectivePath };
   } catch (err) {
     return {
       status: 'error',
       message: err instanceof Error ? err.message : String(err),
+      effective_cwd: effectivePath,
     };
   }
 }

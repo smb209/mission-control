@@ -171,11 +171,22 @@ export default function WorkspaceSettingsPage({
       try {
         const data = await res.json();
         if (data?.local_repo_init_result) {
-          const r = data.local_repo_init_result as { status: string; message?: string };
+          const r = data.local_repo_init_result as {
+            status: string;
+            message?: string;
+            effective_cwd?: string;
+          };
+          // When MC is dockerized, effective_cwd is the container path
+          // (the host path is bind-mounted in). Mention it in the
+          // notice so operators can sanity-check the mapping.
+          const cwdSuffix =
+            r.effective_cwd && r.effective_cwd !== (workspace?.workspace_path ?? '')
+              ? ` (mapped to ${r.effective_cwd} inside MC)`
+              : '';
           if (r.status === 'initialized') {
-            setLocalRepoInitNotice('Initialized a local git repo in the working tree.');
+            setLocalRepoInitNotice(`Initialized a local git repo in the working tree${cwdSuffix}.`);
           } else if (r.status === 'noop') {
-            setLocalRepoInitNotice('Working tree already has a git repo — no init needed.');
+            setLocalRepoInitNotice(`Working tree already has a git repo — no init needed${cwdSuffix}.`);
           } else {
             setLocalRepoInitNotice(`git init skipped: ${r.message ?? 'unknown error'}`);
           }
