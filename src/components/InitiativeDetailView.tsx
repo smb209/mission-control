@@ -29,12 +29,18 @@ import {
   Shuffle,
   CornerUpLeft,
   Trash2,
+  Search,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 import DecomposeStoryToTasksModal from '@/components/DecomposeStoryToTasksModal';
 import { DecomposerAgentPicker, type DecomposerOption } from '@/components/inline/DecomposerAgentPicker';
+import { InvestigatePicker, type InvestigateOption } from '@/components/inline/InvestigatePicker';
+import InvestigateModal from '@/components/InvestigateModal';
+import { NotesRail } from '@/components/notes/NotesRail';
+import { useAgentNotes } from '@/hooks/useAgentNotes';
+import { countPriorAudits } from '@/components/inline/investigate-helpers';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { TaskModal } from '@/components/TaskModal';
 import type { Task } from '@/lib/types';
@@ -282,6 +288,9 @@ export function InitiativeDetailView({
   // Operator guidance for the initial Decompose dispatch. Same idea
   // as planGuidance but persists for the lifetime of the modal.
   const [decomposeHint, setDecomposeHint] = useState<string | null>(null);
+  // Investigate ▾ — narrow-mode audit modal (PR 3 of
+  // specs/initiative-investigate.md). Subtree mode lives in PR 4.
+  const [showInvestigateModal, setShowInvestigateModal] = useState(false);
   // Selected task for the inline TaskModal — clicking a task in the
   // children list opens it here instead of navigating away.
   const [taskModalTask, setTaskModalTask] = useState<Task | null>(null);
@@ -394,6 +403,14 @@ export function InitiativeDetailView({
   // workspace PM has a task-decomposition prompt; other agents will be
   // added once Builder/Coordinator/custom prompts exist (the picker is
   // already shaped for it).
+  // Notes scoped to this initiative — drives the NotesRail at the
+  // bottom of the page and the "Build on prior audit" gate inside
+  // the Investigate modal. Fetches even before `initiative` resolves
+  // so the rail can render its own loading state; `id` alone is enough
+  // since the API filters server-side by initiative_id.
+  const initiativeNotes = useAgentNotes({ initiative_id: id, limit: 50 });
+  const priorAuditCount = countPriorAudits(initiativeNotes.notes);
+
   const decomposerOptions: DecomposerOption[] = (() => {
     const out: DecomposerOption[] = [];
     const pm = agents.find(a => a.is_pm === 1 || a.is_pm === true || a.role === 'pm');
@@ -727,6 +744,16 @@ or "carve out the onboarding flow as its own story first"`}
                 Decompose to tasks
               </DecomposerAgentPicker>
             )}
+            <InvestigatePicker
+              options={INVESTIGATE_OPTIONS}
+              onPick={(scope) => {
+                if (scope === 'narrow') setShowInvestigateModal(true);
+                // 'subtree' is currently disabled in INVESTIGATE_OPTIONS
+                // (PR 4 enables it); the picker will not invoke onPick
+                // for disabled entries, so this branch is effectively
+                // dead code today and kept only as a forward-compat hook.
+              }}
+            />
             <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
               Move
@@ -1072,6 +1099,19 @@ or "carve out the onboarding flow as its own story first"`}
           )}
         </Section>
 
+        {/* Notes — agent-generated observations for this initiative.
+            Surface for the Investigate flow's take_note output. Filters
+            to scoped notes only (no child-task rollup) since the audit
+            writes its report row directly against this initiative_id. */}
+        <Section title="Notes" icon={<Search className="w-4 h-4" />}>
+          <NotesRail
+            initiative_id={initiative.id}
+            workspace_id={initiative.workspace_id}
+            limit={50}
+            title=""
+          />
+        </Section>
+
         {/* History */}
         <Section title="Parent-change history" icon={<History className="w-4 h-4" />}>
           {history.length === 0 ? (
@@ -1174,6 +1214,25 @@ or "carve out the onboarding flow as its own story first"`}
           }}
         />
       )}
+      {showInvestigateModal && (
+        <InvestigateModal
+          initiative={{
+            id: initiative.id,
+            title: initiative.title,
+            workspace_id: initiative.workspace_id,
+          }}
+          priorAuditCount={priorAuditCount}
+          onClose={() => setShowInvestigateModal(false)}
+          onDispatched={() => {
+            // Route is fire-and-forget; close immediately so the
+            // operator returns to the detail view and watches the
+            // NotesRail for the take_note row that lands when the
+            // researcher finishes (1–15 min). The toast inside the
+            // modal communicates dispatch success.
+            setShowInvestigateModal(false);
+          }}
+        />
+      )}
       {showHistoryDrawer && (
         <HistoryDrawer
           initiative={initiative as ListInitiative}
@@ -1209,6 +1268,24 @@ or "carve out the onboarding flow as its own story first"`}
     </div>
   );
 }
+
+// Investigate ▾ menu items. Subtree is intentionally kept visible but
+// disabled so operators see the path exists — PR 4 of
+// specs/initiative-investigate.md enables it.
+const INVESTIGATE_OPTIONS: InvestigateOption[] = [
+  {
+    id: 'narrow',
+    label: 'Just this initiative (narrow)',
+    description: 'One researcher dispatch. Reads description, status check, and direct child tasks.',
+  },
+  {
+    id: 'subtree',
+    label: 'Whole subtree (bottom-up)',
+    description: 'Per-level fan-out across descendants, then a roll-up.',
+    disabled: true,
+    disabledReason: 'Coming soon — subtree mode lands in a follow-up PR',
+  },
+];
 
 function ToolbarButton({
   icon,
