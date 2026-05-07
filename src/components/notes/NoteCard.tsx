@@ -11,7 +11,7 @@
  * actions until they opt in.
  */
 
-import { Archive, RotateCcw, Trash2 } from 'lucide-react';
+import { Archive, RotateCcw, Trash2, Sparkles } from 'lucide-react';
 import type { AgentNoteRecord, AgentNoteKind } from '@/hooks/useAgentNotes';
 
 const KIND_COLOR: Record<AgentNoteKind, string> = {
@@ -68,9 +68,16 @@ interface NoteCardProps {
    *  caller is expected to confirm via ConfirmDialog before issuing
    *  the destructive request. */
   onDelete?: (note: AgentNoteRecord) => void;
+  /**
+   * Called when the operator clicks "Ask PM" on an active note. Only
+   * rendered when the note is `kind='observation'` (the audit-derived
+   * subset, per the audit-actions tradeoff). The caller is responsible
+   * for the network round-trip; the button just emits intent.
+   */
+  onAskPm?: (note: AgentNoteRecord) => void;
 }
 
-export function NoteCard({ note, onArchive, onRestore, onDelete }: NoteCardProps) {
+export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: NoteCardProps) {
   const archived = !!note.archived_at;
   const kindClasses = `${KIND_COLOR[note.kind]} ${KIND_DARK[note.kind]}`;
   const importancePin =
@@ -80,7 +87,14 @@ export function NoteCard({ note, onArchive, onRestore, onDelete }: NoteCardProps
         ? '🔔 '
         : '';
 
-  const hasActions = !!(onArchive || onRestore || onDelete);
+  // "Ask PM" is gated to observation notes — that's where audit findings
+  // live. Other kinds (breadcrumb, decision, etc.) don't represent
+  // actionable findings the PM should triage.
+  const askPmEligible = !archived && note.kind === 'observation' && !!onAskPm;
+  const askPmAlreadyConsumed =
+    askPmEligible && (note.consumed_by_stages ?? []).includes('pm_proposal');
+
+  const hasActions = !!(onArchive || onRestore || onDelete || askPmEligible);
 
   return (
     <article
@@ -121,6 +135,24 @@ export function NoteCard({ note, onArchive, onRestore, onDelete }: NoteCardProps
       )}
       {hasActions && (
         <div className="flex flex-wrap items-center gap-1.5 pt-1.5 mt-1.5 border-t border-current/10">
+          {askPmEligible && (
+            <button
+              type="button"
+              onClick={() => onAskPm?.(note)}
+              className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 ${
+                askPmAlreadyConsumed ? 'opacity-60' : ''
+              }`}
+              aria-label={askPmAlreadyConsumed ? 'Ask PM again' : 'Ask PM to propose changes'}
+              title={
+                askPmAlreadyConsumed
+                  ? 'Already handed to PM once — click to ask again'
+                  : 'Hand this note to the PM and ask for proposed changes'
+              }
+            >
+              <Sparkles className="w-3 h-3" />{' '}
+              {askPmAlreadyConsumed ? 'Ask PM again' : 'Ask PM'}
+            </button>
+          )}
           {!archived && onArchive && (
             <button
               type="button"
