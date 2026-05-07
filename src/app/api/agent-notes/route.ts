@@ -10,7 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { queryAll } from '@/lib/db';
+import { queryAll, queryOne } from '@/lib/db';
 import {
   listNotes,
   parseAttachedFiles,
@@ -19,6 +19,7 @@ import {
   type NoteImportance,
   type NoteKind,
 } from '@/lib/db/agent-notes';
+import type { AgentRunKind, AgentRunStatus } from '@/lib/db/agent-runs';
 
 const VALID_KINDS: ReadonlyArray<NoteKind> = [
   'discovery',
@@ -30,7 +31,42 @@ const VALID_KINDS: ReadonlyArray<NoteKind> = [
   'breadcrumb',
 ];
 
-function notePayload(note: AgentNote): Record<string, unknown> {
+interface OriginatingRun {
+  id: string;
+  kind: AgentRunKind;
+  status: AgentRunStatus;
+  completed_at: string | null;
+}
+
+/**
+ * Look up the most-recent agent_runs row sharing this note's scope_key.
+ *
+ * agent_notes were introduced before the agent_runs migration (065 vs
+ * 075/080), so older notes may have no matching run. PM chats reuse a
+ * scope_key across many runs, so "most recent" is the only sensible
+ * choice for a single chip — if the operator wants the full run history
+ * they can click through to /jobs.
+ *
+ * Two-pass: a single batched query keyed by scope_key would be cheaper,
+ * but listings cap at 200 and SQLite handles 200 keyed lookups in < 1ms
+ * locally. Revisit if /api/agent-notes shows up in slow logs.
+ */
+function fetchOriginatingRun(scopeKey: string): OriginatingRun | null {
+  const row = queryOne<OriginatingRun>(
+    `SELECT id, kind, status, completed_at
+       FROM agent_runs
+      WHERE scope_key = ?
+      ORDER BY started_at DESC, created_at DESC, rowid DESC
+      LIMIT 1`,
+    [scopeKey],
+  );
+  return row ?? null;
+}
+
+function notePayload(
+  note: AgentNote,
+  originatingRun: OriginatingRun | null,
+): Record<string, unknown> {
   return {
     id: note.id,
     workspace_id: note.workspace_id,
@@ -48,6 +84,13 @@ function notePayload(note: AgentNote): Record<string, unknown> {
     consumed_by_stages: parseConsumedStages(note),
     archived_at: note.archived_at,
     created_at: note.created_at,
+    /**
+     * The agent_runs row that produced this note (most recent run for
+     * the scope_key). Null when no agent_runs row matches — typically
+     * pre-migration-075 notes. UI uses this to render a "from <kind> ·
+     * <status>" chip linking into /jobs?run=<id>.
+     */
+    originating_run: originatingRun,
   };
 }
 
@@ -156,8 +199,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
   }
 
+  // Hydrate originating_run per note. We cache by scope_key so the
+  // common case (subtree audit dispatching N notes that share scope)
+  // collapses to a single lookup.
+  const runCache = new Map<string, OriginatingRun | null>();
+  const lookup = (sk: string): OriginatingRun | null => {
+    if (runCache.has(sk)) return runCache.get(sk)!;
+    const row = fetchOriginatingRun(sk);
+    runCache.set(sk, row);
+    return row;
+  };
+
   return NextResponse.json({
     count: notes.length,
-    notes: notes.map(notePayload),
+    notes: notes.map((n) => notePayload(n, lookup(n.scope_key))),
   });
 }

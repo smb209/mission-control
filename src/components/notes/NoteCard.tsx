@@ -11,7 +11,14 @@
  * actions until they opt in.
  */
 
-import { Archive, RotateCcw, Trash2, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import {
+  Archive,
+  RotateCcw,
+  Trash2,
+  Sparkles,
+  ExternalLink,
+} from 'lucide-react';
 import type { AgentNoteRecord, AgentNoteKind } from '@/hooks/useAgentNotes';
 
 const KIND_COLOR: Record<AgentNoteKind, string> = {
@@ -43,6 +50,29 @@ const KIND_LABEL: Record<AgentNoteKind, string> = {
   question: '💬 question',
   breadcrumb: '🍞 breadcrumb',
 };
+
+function runKindLabel(kind: string): string {
+  switch (kind) {
+    case 'initiative_audit':
+      return 'audit';
+    case 'pm_chat':
+      return 'PM';
+    case 'plan':
+      return 'plan';
+    case 'decompose':
+      return 'decompose';
+    case 'task_coord':
+      return 'coord';
+    case 'task_role':
+      return 'role';
+    case 'recurring':
+      return 'recurring';
+    case 'brief':
+      return 'brief';
+    default:
+      return kind;
+  }
+}
 
 function formatTime(iso: string): string {
   try {
@@ -118,6 +148,19 @@ export function NoteCard({ note, onArchive, onRestore, onDelete, onAskPm }: Note
         </time>
       </header>
       <p className="whitespace-pre-wrap leading-relaxed">{note.body}</p>
+      {note.originating_run && (
+        <p className="text-[11px] opacity-70">
+          <Link
+            href={`/jobs?run=${encodeURIComponent(note.originating_run.id)}`}
+            className="inline-flex items-center gap-1 underline-offset-2 hover:underline"
+            title={`Originating run · ${note.originating_run.kind} · ${note.originating_run.status}`}
+          >
+            <ExternalLink className="w-3 h-3" />
+            from {runKindLabel(note.originating_run.kind)} ·{' '}
+            {note.originating_run.status}
+          </Link>
+        </p>
+      )}
       {note.attached_files.length > 0 && (
         <ul className="mt-1 flex flex-wrap gap-1">
           {note.attached_files.map((f) => (

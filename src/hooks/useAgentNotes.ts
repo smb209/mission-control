@@ -33,6 +33,23 @@ export type AgentNoteKind =
   | 'question'
   | 'breadcrumb';
 
+/**
+ * Most-recent `agent_runs` row sharing this note's scope_key. Hydrated
+ * server-side by /api/agent-notes (audit-actions PR 6). Null when no
+ * agent_runs row matches — typically notes from before migration 075.
+ *
+ * Note: SSE-delivered note events (`agent_note_created`) don't carry
+ * this field; the run is hydrated only on initial fetch + refresh().
+ * For most flows that's fine — the note's run is freshly created at
+ * dispatch time, so a refresh shortly after surfaces the link.
+ */
+export interface OriginatingRunRef {
+  id: string;
+  kind: string;
+  status: string;
+  completed_at: string | null;
+}
+
 export interface AgentNoteRecord {
   id: string;
   workspace_id: string;
@@ -50,6 +67,8 @@ export interface AgentNoteRecord {
   consumed_by_stages?: string[];
   archived_at: string | null;
   created_at: string;
+  /** Hydrated by /api/agent-notes; null on SSE-pushed notes. */
+  originating_run?: OriginatingRunRef | null;
 }
 
 export interface UseAgentNotesOptions {
