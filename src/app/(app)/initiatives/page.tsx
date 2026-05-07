@@ -288,6 +288,34 @@ export default function InitiativesPage() {
     refresh();
   }, [refresh]);
 
+  // Note-count chips on each card come from a SQL JOIN on agent_notes
+  // (active rows only). Without an SSE listener the chip stayed stale
+  // until navigation — operator archives a note in NotesRail, that
+  // rail's own count drops, but the list card still showed the old
+  // count. Subscribe to the four agent_note_* events that affect
+  // active counts and re-fetch.
+  useEffect(() => {
+    const source = new EventSource('/api/events/stream');
+    source.onmessage = (e) => {
+      if (!e.data || e.data.startsWith(':')) return;
+      let evt: { type?: string };
+      try {
+        evt = JSON.parse(e.data) as { type?: string };
+      } catch {
+        return;
+      }
+      if (
+        evt.type === 'agent_note_created' ||
+        evt.type === 'agent_note_archived' ||
+        evt.type === 'agent_note_restored' ||
+        evt.type === 'agent_note_deleted'
+      ) {
+        refresh();
+      }
+    };
+    return () => source.close();
+  }, [refresh]);
+
   // Tree + picker list derive from flat + the cancelled-filter toggle.
   // Cancelled rows are spliced out and their non-cancelled children
   // re-parent to the cancelled row's effective parent so the subtree
