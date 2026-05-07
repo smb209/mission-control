@@ -279,6 +279,53 @@ export function archiveNote(noteId: string, reason: string | null): AgentNote | 
   return getNote(noteId);
 }
 
+/**
+ * Un-archive a previously archived note. Clears `archived_at` and
+ * `archived_reason`. No-op if the note isn't archived. Returns null if
+ * the note doesn't exist.
+ */
+export function restoreNote(noteId: string): AgentNote | null {
+  const existing = getNote(noteId);
+  if (!existing) return null;
+  if (!existing.archived_at) return existing;
+
+  run(
+    `UPDATE agent_notes
+        SET archived_at = NULL,
+            archived_reason = NULL
+      WHERE id = ?`,
+    [noteId],
+  );
+  return getNote(noteId);
+}
+
+export class AgentNoteNotArchivedError extends Error {
+  constructor(public id: string) {
+    super(`agent_note ${id} must be archived before hard-delete`);
+    this.name = 'AgentNoteNotArchivedError';
+  }
+}
+
+/**
+ * Permanently delete a note. The note MUST be archived first — this is the
+ * "empty the trash" verb, not a one-shot delete. Throws
+ * `AgentNoteNotArchivedError` if the note isn't archived. Returns true
+ * if a row was deleted, false if the note didn't exist at all.
+ *
+ * The two-step intent (archive, then delete-from-trash) protects against
+ * accidental loss on agent-generated content. Project convention is to
+ * gate this behind ConfirmDialog at the UI layer too.
+ */
+export function hardDeleteNote(noteId: string): boolean {
+  const existing = getNote(noteId);
+  if (!existing) return false;
+  if (!existing.archived_at) {
+    throw new AgentNoteNotArchivedError(noteId);
+  }
+  run(`DELETE FROM agent_notes WHERE id = ?`, [noteId]);
+  return true;
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function safeParseStringArray(json: string): string[] {

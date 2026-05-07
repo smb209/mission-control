@@ -200,6 +200,30 @@ export function useAgentNotes(opts: UseAgentNotesOptions): UseAgentNotesResult {
           }
           return prev.filter((n) => n.id !== payload.note_id);
         });
+      } else if (evt.type === 'agent_note_restored') {
+        // Note flipped back to active. If we're showing only-active and
+        // the note isn't in our list (because we hid it on archive), the
+        // simplest correct behavior is to refetch — the SSE payload doesn't
+        // carry the full note shape, and noteMatchesFilter needs all fields.
+        const payload = evt.payload as unknown as { note_id: string };
+        setNotes((prev) => {
+          const idx = prev.findIndex((n) => n.id === payload.note_id);
+          if (idx === -1) {
+            // Note isn't in our list — trigger a refetch on the next tick.
+            // (Cheap because /api/agent-notes is paginated and indexed.)
+            setRefreshTick((tick) => tick + 1);
+            return prev;
+          }
+          // We have it (filter.include_archived was true) — flip the flag.
+          return prev.map((n) =>
+            n.id === payload.note_id
+              ? { ...n, archived_at: null }
+              : n,
+          );
+        });
+      } else if (evt.type === 'agent_note_deleted') {
+        const payload = evt.payload as unknown as { note_id: string };
+        setNotes((prev) => prev.filter((n) => n.id !== payload.note_id));
       }
     };
 
