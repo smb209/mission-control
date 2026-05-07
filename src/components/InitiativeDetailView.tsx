@@ -1237,12 +1237,22 @@ or "carve out the onboarding flow as its own story first"`}
           mode={investigateMode}
           onClose={() => setShowInvestigateModal(false)}
           onDispatched={() => {
-            // Route is fire-and-forget; close immediately so the
-            // operator returns to the detail view and watches the
-            // NotesRail for the take_note row that lands when the
-            // researcher finishes (1–15 min). The toast inside the
-            // modal communicates dispatch success.
+            // Modal swaps to a persistent confirmation panel — DO NOT
+            // close here (audit-actions PR 3). The operator dismisses
+            // via "Done" or jumps to the Activity strip via "View
+            // activity" (handled by onViewActivity below).
+          }}
+          onViewActivity={() => {
             setShowInvestigateModal(false);
+            // Defer one frame so the modal's unmount completes before
+            // we scroll, otherwise the modal's overflow:hidden parent
+            // wins and the scroll is a no-op.
+            requestAnimationFrame(() => {
+              const heading = Array.from(
+                document.querySelectorAll('h2, h3'),
+              ).find((el) => el.textContent?.trim() === 'Activity');
+              heading?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            });
           }}
         />
       )}
