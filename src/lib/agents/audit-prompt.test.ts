@@ -117,6 +117,39 @@ test('audit-prompt: empty tasks renders placeholder, not empty list', () => {
   assert.match(out, /_\(this initiative has no direct child tasks\)_/);
 });
 
+test('audit-prompt: includes child initiatives in a dedicated section', () => {
+  const out = buildAuditPrompt({
+    initiative: baseInitiative,
+    tasks: [],
+    childInitiatives: [
+      { id: 'c1', title: 'Build AlertDialog', kind: 'story', status: 'done' },
+      { id: 'c2', title: 'Replace alert() in /agents', kind: 'story', status: 'planned' },
+    ],
+  });
+  assert.match(out, /## Direct child initiatives \(decomposed scope\)/);
+  assert.match(out, /\[story\] Build AlertDialog \(done\) \[initiative c1\]/);
+  assert.match(out, /\[story\] Replace alert\(\) in \/agents \(planned\) \[initiative c2\]/);
+});
+
+test('audit-prompt: empty child initiatives renders placeholder', () => {
+  const out = buildAuditPrompt({
+    initiative: baseInitiative,
+    tasks: [],
+    childInitiatives: [],
+  });
+  assert.match(out, /_\(this initiative has no direct child initiatives\)_/);
+});
+
+test('audit-prompt: child initiatives default to [] when omitted', () => {
+  // Unchanged callers (e.g. /feed reproductions) should not crash and
+  // should still render the placeholder.
+  const out = buildAuditPrompt({
+    initiative: baseInitiative,
+    tasks: [],
+  });
+  assert.match(out, /_\(this initiative has no direct child initiatives\)_/);
+});
+
 test('audit-prompt: missing description / status_check / target window get placeholders', () => {
   const out = buildAuditPrompt({
     initiative: {
