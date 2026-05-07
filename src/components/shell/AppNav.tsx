@@ -49,6 +49,7 @@ import {
   Brain,
   Workflow,
   AlertCircle,
+  ListChecks,
 } from 'lucide-react';
 import {
   useCurrentWorkspaceId,
@@ -125,6 +126,7 @@ function buildSections(taskBoardHref: string, workspaceSettingsHref: string): Na
         // dashboard so this entry skips the extra click. Agents are
         // workspace-scoped configuration, so they belong here too.
         { href: '/activity', label: 'Activity', icon: ActivityIcon, prefix: true },
+        { href: '/jobs', label: 'Jobs', icon: ListChecks, prefix: true },
         { href: '/agents', label: 'Agents', icon: Users, prefix: true },
         // Settings here is scoped to the current workspace
         // (/workspace/<slug>/settings). Global / cross-workspace

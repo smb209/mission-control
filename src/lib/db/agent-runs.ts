@@ -349,6 +349,190 @@ export function failAgentRun(id: string, errorMd: string): void {
   );
 }
 
+// ─── Jobs-in-Progress: /api/jobs read model (PR 2) ─────────────────
+//
+// listJobs() backs the GET /api/jobs route. Three buckets in one call:
+// live (queued+running, with pm_chat collapsed by scope_key),
+// scheduled (active recurring_jobs ≤24h horizon), recent (terminal in
+// last 24h, ungrouped). See specs/jobs-in-progress.md §API.
+
+export interface JobsLiveItem {
+  /** When `group_count > 1`, this id refers to the most-recent run in the group. */
+  id: string;
+  kind: AgentRunKind;
+  status: AgentRunStatus;
+  scope_key: string | null;
+  scope_type: string | null;
+  role: string | null;
+  agent_id: string | null;
+  initiative_id: string | null;
+  task_id: string | null;
+  parent_run_id: string | null;
+  label: string | null;
+  /** Server-derived fallback label when `label` is null (e.g. "PM chat",
+   *  "Audit: <initiative title>"). UI can prefer this when label is null. */
+  derived_label: string;
+  started_at: string | null;
+  /** 1 for ungrouped rows; N for collapsed pm_chat groups. */
+  group_count: number;
+}
+
+export interface JobsRecentItem extends JobsLiveItem {
+  completed_at: string | null;
+  cost_cents: number | null;
+  model_used: string | null;
+  error_md: string | null;
+}
+
+export interface JobsScheduledItem {
+  job_id: string;
+  name: string;
+  next_run_at: string;
+  last_run_at: string | null;
+  consecutive_failures: number;
+  role: string;
+}
+
+export interface JobsListResponse {
+  live: JobsLiveItem[];
+  scheduled: JobsScheduledItem[];
+  recent: JobsRecentItem[];
+}
+
+interface RawAgentRunRow extends AgentRun {
+  initiative_title: string | null;
+}
+
+function deriveLabel(row: { kind: AgentRunKind; label: string | null; initiative_title: string | null; scope_key: string | null }): string {
+  if (row.label && row.label.trim()) return row.label;
+  switch (row.kind) {
+    case 'pm_chat': return 'PM chat';
+    case 'plan': return row.initiative_title ? `Plan: ${row.initiative_title}` : 'Plan';
+    case 'decompose': return row.initiative_title ? `Decompose: ${row.initiative_title}` : 'Decompose';
+    case 'initiative_audit': return row.initiative_title ? `Audit: ${row.initiative_title}` : 'Audit';
+    case 'recurring': return 'Recurring tick';
+    case 'task_coord': return 'Task coordinator';
+    case 'task_role': return 'Task role';
+    case 'brief': return 'Brief';
+    default: return row.kind;
+  }
+}
+
+export function listJobs(workspaceId: string): JobsListResponse {
+  if (!workspaceId.trim()) {
+    throw new AgentRunValidationError('workspace_id is required');
+  }
+
+  // Live: queued + running. Join initiatives.title for derived_label fallback.
+  const liveRows = queryAll<RawAgentRunRow>(
+    `SELECT ar.*, i.title AS initiative_title
+       FROM agent_runs ar
+       LEFT JOIN initiatives i ON i.id = ar.initiative_id
+      WHERE ar.workspace_id = ?
+        AND ar.status IN ('queued','running')
+      ORDER BY ar.started_at DESC, ar.created_at DESC, ar.rowid DESC`,
+    [workspaceId],
+  );
+
+  // Collapse pm_chat by scope_key. Other kinds pass through.
+  const live: JobsLiveItem[] = [];
+  const pmGroups = new Map<string, { rep: RawAgentRunRow; count: number }>();
+  for (const row of liveRows) {
+    if (row.kind === 'pm_chat' && row.scope_key) {
+      const g = pmGroups.get(row.scope_key);
+      if (g) {
+        g.count += 1;
+        // Keep most-recent started_at as representative (ORDER BY DESC means first seen wins).
+        continue;
+      }
+      pmGroups.set(row.scope_key, { rep: row, count: 1 });
+    } else {
+      live.push({
+        id: row.id,
+        kind: row.kind,
+        status: row.status,
+        scope_key: row.scope_key,
+        scope_type: row.scope_type,
+        role: row.role,
+        agent_id: row.agent_id,
+        initiative_id: row.initiative_id,
+        task_id: row.task_id,
+        parent_run_id: row.parent_run_id,
+        label: row.label,
+        derived_label: deriveLabel(row),
+        started_at: row.started_at,
+        group_count: 1,
+      });
+    }
+  }
+  for (const { rep, count } of pmGroups.values()) {
+    live.push({
+      id: rep.id,
+      kind: rep.kind,
+      status: rep.status,
+      scope_key: rep.scope_key,
+      scope_type: rep.scope_type,
+      role: rep.role,
+      agent_id: rep.agent_id,
+      initiative_id: rep.initiative_id,
+      task_id: rep.task_id,
+      parent_run_id: rep.parent_run_id,
+      label: rep.label,
+      derived_label: deriveLabel(rep),
+      started_at: rep.started_at,
+      group_count: count,
+    });
+  }
+  // Final sort: most recent started_at first.
+  live.sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''));
+
+  // Scheduled: recurring_jobs active in next 24h.
+  const scheduled = queryAll<JobsScheduledItem>(
+    `SELECT id AS job_id, name, next_run_at, last_run_at, consecutive_failures, role
+       FROM recurring_jobs
+      WHERE workspace_id = ?
+        AND status = 'active'
+        AND next_run_at <= datetime('now', '+24 hours')
+      ORDER BY next_run_at ASC`,
+    [workspaceId],
+  );
+
+  // Recent: terminal in last 24h, individual rows (NOT grouped). Cap 100.
+  const recentRows = queryAll<RawAgentRunRow>(
+    `SELECT ar.*, i.title AS initiative_title
+       FROM agent_runs ar
+       LEFT JOIN initiatives i ON i.id = ar.initiative_id
+      WHERE ar.workspace_id = ?
+        AND ar.status IN ('complete','failed','cancelled')
+        AND ar.completed_at >= datetime('now', '-24 hours')
+      ORDER BY ar.completed_at DESC, ar.rowid DESC
+      LIMIT 100`,
+    [workspaceId],
+  );
+  const recent: JobsRecentItem[] = recentRows.map(row => ({
+    id: row.id,
+    kind: row.kind,
+    status: row.status,
+    scope_key: row.scope_key,
+    scope_type: row.scope_type,
+    role: row.role,
+    agent_id: row.agent_id,
+    initiative_id: row.initiative_id,
+    task_id: row.task_id,
+    parent_run_id: row.parent_run_id,
+    label: row.label,
+    derived_label: deriveLabel(row),
+    started_at: row.started_at,
+    group_count: 1,
+    completed_at: row.completed_at,
+    cost_cents: row.cost_cents,
+    model_used: row.model_used,
+    error_md: row.error_md,
+  }));
+
+  return { live, scheduled, recent };
+}
+
 export function reapStaleRunning(staleSeconds: number, errorMd: string): number {
   const result = run(
     `UPDATE agent_runs SET

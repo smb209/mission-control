@@ -24,6 +24,7 @@ import {
   completeAgentRun,
   failAgentRun,
   scopeTypeToRunKind,
+  listJobs,
   AgentRunTransitionError,
   AgentRunValidationError,
 } from './agent-runs';
@@ -330,4 +331,140 @@ test('migration 080 idempotent: kind enum accepts pm_chat after extension', () =
     agent_id: 'a',
   });
   assert.ok(getAgentRun(id));
+});
+
+// ─── listJobs (PR 2) ────────────────────────────────────────────────
+
+test('listJobs: rejects empty workspace_id', () => {
+  assert.throws(() => listJobs('   '), AgentRunValidationError);
+});
+
+test('listJobs: empty workspace returns three empty buckets', () => {
+  const ws = freshWorkspace();
+  const r = listJobs(ws);
+  assert.deepEqual(r.live, []);
+  assert.deepEqual(r.scheduled, []);
+  assert.deepEqual(r.recent, []);
+});
+
+test('listJobs: pm_chat rows collapse by scope_key with group_count + max started_at', () => {
+  const ws = freshWorkspace();
+  const scope = `scope:${uuidv4()}`;
+  // Insert three pm_chat runs against the same scope_key, with
+  // distinct started_at values so we can verify "most recent wins".
+  for (let i = 0; i < 3; i++) {
+    startAgentRun({
+      workspace_id: ws,
+      kind: 'pm_chat',
+      scope_key: scope,
+      scope_type: 'pm_chat',
+      role: 'pm',
+      agent_id: `agent-${i}`,
+    });
+  }
+  // Plus one different-scope pm_chat — must NOT merge.
+  startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: `scope:${uuidv4()}`,
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'agent-other',
+  });
+  const r = listJobs(ws);
+  // Two groups total: 1 collapsed (count=3) + 1 standalone.
+  assert.equal(r.live.length, 2);
+  const collapsed = r.live.find(x => x.scope_key === scope);
+  assert.ok(collapsed);
+  assert.equal(collapsed!.group_count, 3);
+  const standalone = r.live.find(x => x.scope_key !== scope);
+  assert.equal(standalone!.group_count, 1);
+});
+
+test('listJobs: non-pm_chat kinds never collapse', () => {
+  const ws = freshWorkspace();
+  const scope = `scope:${uuidv4()}`;
+  for (let i = 0; i < 3; i++) {
+    startAgentRun({
+      workspace_id: ws,
+      kind: 'initiative_audit',
+      scope_key: scope,
+      scope_type: 'initiative_audit',
+      role: 'researcher',
+      agent_id: `r-${i}`,
+    });
+  }
+  const r = listJobs(ws);
+  assert.equal(r.live.length, 3);
+  assert.ok(r.live.every(x => x.group_count === 1));
+});
+
+test('listJobs: recent enforces 24h window and excludes still-running rows', () => {
+  const ws = freshWorkspace();
+  // Run that completed 2h ago — should appear.
+  const fresh = startAgentRun({
+    workspace_id: ws, kind: 'plan',
+    scope_key: 's1', scope_type: 'plan', role: 'pm', agent_id: 'a',
+  });
+  run(`UPDATE agent_runs SET status='complete', completed_at=datetime('now','-2 hours') WHERE id=?`, [fresh]);
+
+  // Run that completed 30h ago — must be excluded.
+  const stale = startAgentRun({
+    workspace_id: ws, kind: 'plan',
+    scope_key: 's2', scope_type: 'plan', role: 'pm', agent_id: 'a',
+  });
+  run(`UPDATE agent_runs SET status='complete', completed_at=datetime('now','-30 hours') WHERE id=?`, [stale]);
+
+  // Still-running row — must not leak into recent.
+  const live = startAgentRun({
+    workspace_id: ws, kind: 'plan',
+    scope_key: 's3', scope_type: 'plan', role: 'pm', agent_id: 'a',
+  });
+
+  const r = listJobs(ws);
+  assert.equal(r.recent.length, 1);
+  assert.equal(r.recent[0].id, fresh);
+  assert.ok(r.live.some(x => x.id === live));
+});
+
+test('listJobs: scheduled excludes paused jobs and far-future runs', () => {
+  const ws = freshWorkspace();
+  // Active, due in 1h → include.
+  run(
+    `INSERT INTO recurring_jobs
+       (id, workspace_id, name, role, scope_key_template, briefing_template,
+        cadence_seconds, status, next_run_at)
+     VALUES (?, ?, 'soon', 'researcher', 't', 'b', 3600, 'active', datetime('now','+1 hour'))`,
+    [`rj-${uuidv4()}`, ws],
+  );
+  // Active, due in 3 days → exclude.
+  run(
+    `INSERT INTO recurring_jobs
+       (id, workspace_id, name, role, scope_key_template, briefing_template,
+        cadence_seconds, status, next_run_at)
+     VALUES (?, ?, 'far', 'researcher', 't', 'b', 3600, 'active', datetime('now','+3 days'))`,
+    [`rj-${uuidv4()}`, ws],
+  );
+  // Paused, due in 1h → exclude.
+  run(
+    `INSERT INTO recurring_jobs
+       (id, workspace_id, name, role, scope_key_template, briefing_template,
+        cadence_seconds, status, next_run_at)
+     VALUES (?, ?, 'paused', 'researcher', 't', 'b', 3600, 'paused', datetime('now','+1 hour'))`,
+    [`rj-${uuidv4()}`, ws],
+  );
+  const r = listJobs(ws);
+  assert.equal(r.scheduled.length, 1);
+  assert.equal(r.scheduled[0].name, 'soon');
+});
+
+test('listJobs: workspace-isolated', () => {
+  const ws1 = freshWorkspace();
+  const ws2 = freshWorkspace();
+  startAgentRun({
+    workspace_id: ws1, kind: 'pm_chat',
+    scope_key: 's', scope_type: 'pm_chat', role: 'pm', agent_id: 'a',
+  });
+  const r = listJobs(ws2);
+  assert.equal(r.live.length, 0);
 });
