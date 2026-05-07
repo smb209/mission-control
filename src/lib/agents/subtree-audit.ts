@@ -332,9 +332,27 @@ export async function runSubtreeAudit(
         [node.id],
       );
 
+      // Direct child initiatives of this node — the structural list,
+      // separate from `childFindings` (which is the synthesized audit
+      // body for already-completed children). Including both lets the
+      // researcher cross-reference the structural set against the
+      // finding set and notice a child whose audit failed silently.
+      const childInitiativesForNode = queryAll<{
+        id: string;
+        title: string;
+        kind: string;
+        status: string;
+      }>(
+        `SELECT id, title, kind, status FROM initiatives
+          WHERE parent_initiative_id = ?
+          ORDER BY sort_order, created_at`,
+        [node.id],
+      );
+
       const triggerBody = buildAuditPrompt({
         initiative: node,
         tasks: tasksForNode,
+        childInitiatives: childInitiativesForNode,
         guidance: guidance ?? null,
         priorFindings: [],
         childFindings,

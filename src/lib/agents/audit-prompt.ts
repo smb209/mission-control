@@ -37,6 +37,18 @@ export interface BuildAuditPromptInput {
   >;
   /** Direct child tasks (no nesting). */
   tasks: ReadonlyArray<{ id: string; title: string; status: string }>;
+  /**
+   * Direct child initiatives (epics' stories, themes' epics, etc.).
+   * Critical for narrow-mode audits on parent kinds: an epic's actual
+   * decomposed scope lives in these rows. Pass `[]` for leaf-kind
+   * targets (stories) — the renderer just omits the section.
+   */
+  childInitiatives?: ReadonlyArray<{
+    id: string;
+    title: string;
+    kind: string;
+    status: string;
+  }>;
   /** Operator-supplied focus area. */
   guidance?: string | null;
   /**
@@ -73,6 +85,7 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
   const {
     initiative,
     tasks,
+    childInitiatives = [],
     guidance,
     priorFindings = [],
     childFindings = [],
@@ -97,6 +110,20 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
       ? '_(this initiative has no direct child tasks)_'
       : tasks
           .map((t) => `- ${t.title} (${t.status}) [task ${t.id}]`)
+          .join('\n');
+
+  // Child-initiative block. Themes have epics, epics have stories,
+  // stories may have child stories. Without this, narrow audits on
+  // parent kinds saw "no child tasks" and had to greenfield-discover
+  // the decomposition from git history (see chat-mc-runner-...md).
+  const childInitiativesBlock =
+    childInitiatives.length === 0
+      ? '_(this initiative has no direct child initiatives)_'
+      : childInitiatives
+          .map(
+            (c) =>
+              `- [${c.kind}] ${c.title} (${c.status}) [initiative ${c.id}]`,
+          )
           .join('\n');
 
   const guidanceBlock = guidance?.trim()
@@ -146,6 +173,10 @@ Status check:
 ${statusCheck}
 
 Target window: ${targetWindow}
+
+## Direct child initiatives (decomposed scope)
+
+${childInitiativesBlock}
 
 ## Direct child tasks (this initiative's tasks)
 

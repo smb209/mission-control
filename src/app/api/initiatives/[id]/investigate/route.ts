@@ -34,7 +34,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getInitiative } from '@/lib/db/initiatives';
+import { getInitiative, listInitiatives } from '@/lib/db/initiatives';
 import { listNotes } from '@/lib/db/agent-notes';
 import { getRunnerAgent } from '@/lib/agents/runner';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
@@ -218,9 +218,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           })
         : [];
 
+    // Direct child initiatives — themes' epics, epics' stories, etc.
+    // Without this, narrow audits on parent kinds saw "no child tasks"
+    // and had to greenfield-discover the decomposition (see chat-mc-runner).
+    const childInitiatives = listInitiatives({
+      workspace_id: initiative.workspace_id,
+      parent_id: id,
+    }).map((c) => ({
+      id: c.id,
+      title: c.title,
+      kind: c.kind,
+      status: c.status,
+    }));
+
     const triggerBody = buildAuditPrompt({
       initiative,
       tasks: initiative.tasks ?? [],
+      childInitiatives,
       guidance: guidance ?? null,
       priorFindings,
       mode: 'narrow',
