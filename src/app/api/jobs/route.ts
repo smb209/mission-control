@@ -28,7 +28,11 @@ export async function GET(request: NextRequest) {
     if (searchParams.get('count_only') === 'true') {
       return NextResponse.json({ live: countLiveJobs(workspaceId) });
     }
-    return NextResponse.json(listJobs(workspaceId));
+    // Optional per-initiative filter (audit-actions PR 2). Restricts
+    // live + recent to runs touching this initiative; suppresses
+    // scheduled bucket since recurring_jobs aren't initiative-scoped.
+    const initiativeId = searchParams.get('initiative_id') ?? undefined;
+    return NextResponse.json(listJobs(workspaceId, { initiative_id: initiativeId }));
   } catch (error) {
     if (error instanceof AgentRunValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

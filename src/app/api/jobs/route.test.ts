@@ -101,3 +101,49 @@ test('GET /api/jobs?count_only=true: missing workspace_id → 400', async () => 
   const res = await GET(jobsReq({ count_only: 'true' }));
   assert.equal(res.status, 400);
 });
+
+test('GET /api/jobs?initiative_id=…: filters live + recent, suppresses scheduled', async () => {
+  const ws = freshWorkspace();
+  // Seed two initiatives directly.
+  const iA = `init-A-${uuidv4().slice(0, 6)}`;
+  const iB = `init-B-${uuidv4().slice(0, 6)}`;
+  for (const id of [iA, iB]) {
+    run(
+      `INSERT OR IGNORE INTO initiatives (id, workspace_id, title, status, kind, created_at, updated_at)
+       VALUES (?, ?, ?, 'planned', 'epic', datetime('now'), datetime('now'))`,
+      [id, ws, `seed ${id}`],
+    );
+  }
+
+  // 1 live audit on A, 1 live audit on B.
+  startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: `audit-A-${uuidv4()}`,
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'r1',
+    initiative_id: iA,
+  });
+  startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: `audit-B-${uuidv4()}`,
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'r2',
+    initiative_id: iB,
+  });
+
+  // Filter to A — should see only that one in live, scheduled empty.
+  const resA = await GET(jobsReq({ workspace_id: ws, initiative_id: iA }));
+  const bodyA = await resA.json();
+  assert.equal(bodyA.live.length, 1);
+  assert.equal(bodyA.live[0].initiative_id, iA);
+  assert.deepEqual(bodyA.scheduled, []);
+
+  // No filter — should see both.
+  const resAll = await GET(jobsReq({ workspace_id: ws }));
+  const bodyAll = await resAll.json();
+  assert.equal(bodyAll.live.length, 2);
+});
