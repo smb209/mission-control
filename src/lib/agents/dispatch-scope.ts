@@ -118,6 +118,10 @@ export interface DispatchScopeInput {
   source_ref?: string | null;
   /** Display label snapshot at dispatch time (rendered in /jobs UI). */
   label?: string | null;
+  /** Optional pm_proposals.id for pm_chat dispatches — recorded on
+   *  agent_runs so the cancel cascade can flip the linked proposal to
+   *  `synth_only` (PR 5 of jobs-in-progress). */
+  pm_proposal_id?: string | null;
   /**
    * Skip the agent_runs lifecycle bookkeeping. Used by callers (today:
    * brief dispatch via run-brief.ts) that already manage their own
@@ -230,6 +234,11 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
         source_kind: input.source_kind ?? 'manual',
         source_ref: input.source_ref ?? null,
         label: input.label ?? null,
+        // PR 5: capture the briefing as-sent so the /jobs drill-down
+        // can replay what the agent saw. Composed briefing (not just
+        // trigger_body) so the operator sees the full system context.
+        trigger_body: briefing,
+        pm_proposal_id: input.pm_proposal_id ?? null,
       });
     } catch (err) {
       // Don't let an agent_runs write failure break dispatch. Log and

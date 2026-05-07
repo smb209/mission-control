@@ -4402,6 +4402,40 @@ const migrations: Migration[] = [
       console.log('[Migration 080] agent_runs extended with scope/role/agent/parent attribution; kind enum relaxed.');
     },
   },
+  {
+    id: '081',
+    name: 'agent_runs_trigger_body_and_proposal_link',
+    up: (db) => {
+      // Jobs-in-Progress (PR 5): add `trigger_body` (the briefing text
+      // sent to the agent at dispatch time, surfaced in the /jobs
+      // drill-down) and `pm_proposal_id` (FK linking pm_chat dispatches
+      // to the pm_proposals row they were spawned for, used by the
+      // cancel cascade to flip pending_agent → synth_only). Both
+      // nullable; existing rows stay NULL.
+      const tableRow = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_runs'")
+        .get() as { sql: string } | undefined;
+      if (!tableRow) {
+        console.log('[Migration 081] agent_runs missing; skipping.');
+        return;
+      }
+      const cols = db.prepare(`PRAGMA table_info(agent_runs)`).all() as Array<{ name: string }>;
+      const hasTriggerBody = cols.some((c) => c.name === 'trigger_body');
+      const hasProposalId = cols.some((c) => c.name === 'pm_proposal_id');
+      if (hasTriggerBody && hasProposalId) {
+        console.log('[Migration 081] agent_runs already has trigger_body + pm_proposal_id; skipping.');
+        return;
+      }
+      if (!hasTriggerBody) {
+        db.exec(`ALTER TABLE agent_runs ADD COLUMN trigger_body TEXT`);
+      }
+      if (!hasProposalId) {
+        db.exec(`ALTER TABLE agent_runs ADD COLUMN pm_proposal_id TEXT`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_pm_proposal ON agent_runs(pm_proposal_id) WHERE pm_proposal_id IS NOT NULL`);
+      console.log('[Migration 081] agent_runs.trigger_body + pm_proposal_id columns added.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

@@ -11,7 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { listJobs, AgentRunValidationError } from '@/lib/db/agent-runs';
+import { listJobs, countLiveJobs, AgentRunValidationError } from '@/lib/db/agent-runs';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +21,12 @@ export async function GET(request: NextRequest) {
     const workspaceId = searchParams.get('workspace_id');
     if (!workspaceId) {
       return NextResponse.json({ error: 'workspace_id is required' }, { status: 400 });
+    }
+    // PR 5: lightweight count endpoint for the AppNav live-count badge.
+    // Same collapse rules as the full payload but skips the recent /
+    // scheduled queries entirely.
+    if (searchParams.get('count_only') === 'true') {
+      return NextResponse.json({ live: countLiveJobs(workspaceId) });
     }
     return NextResponse.json(listJobs(workspaceId));
   } catch (error) {

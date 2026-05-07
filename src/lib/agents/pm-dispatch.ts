@@ -485,6 +485,9 @@ async function runDisruptionDispatchInBackground(
       timeoutMs: namedAgentTimeoutMs(),
       onEvent,
       onAgentEvent,
+      // PR 5 jobs-in-progress: link this run to the placeholder so a
+      // mid-flight cancel can flip dispatch_state → synth_only.
+      pm_proposal_id: placeholder.id,
     });
     result = dispatch.reply;
   } catch (err) {
@@ -938,6 +941,8 @@ async function runNamedAgentDispatchInBackground(
       initiative_id: input.target_initiative_id ?? null,
       idempotencyKey: `pm-${input.trigger_kind}-${correlationId}`,
       timeoutMs,
+      // PR 5: thread placeholder so cancel can flip to synth_only.
+      pm_proposal_id: placeholder.id,
     });
     result = dispatch.reply;
   } catch (err) {

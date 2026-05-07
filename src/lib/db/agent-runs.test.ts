@@ -723,3 +723,144 @@ test('cancelAgentRun: returns openclaw_session_id from the row', () => {
   const result = cancelAgentRun(r.id);
   assert.equal(result.openclaw_session_id, 'agent:mc-pm-default:dispatch-main');
 });
+
+// ─── PR 5: trigger_body, pm_proposal_id, drill-down ─────────────────
+
+test('startAgentRun: persists trigger_body + pm_proposal_id', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'scope:t1',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a1',
+    trigger_body: '# briefing\n\nDo the thing.',
+    pm_proposal_id: 'pp-123',
+  });
+  const row = getAgentRun(id)!;
+  assert.equal(row.trigger_body, '# briefing\n\nDo the thing.');
+  assert.equal(row.pm_proposal_id, 'pp-123');
+});
+
+test('startAgentRun: trigger_body / pm_proposal_id default to null', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'scope:t2',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a2',
+  });
+  const row = getAgentRun(id)!;
+  assert.equal(row.trigger_body, null);
+  assert.equal(row.pm_proposal_id, null);
+});
+
+test('cancelAgentRun: linked pm_proposal in pending_agent flips to synth_only', async () => {
+  const { createProposal } = await import('./pm-proposals');
+  const ws = freshWorkspace();
+  const proposal = createProposal({
+    workspace_id: ws,
+    trigger_text: 'unit test',
+    trigger_kind: 'manual',
+    impact_md: 'placeholder',
+    proposed_changes: [],
+    dispatch_state: 'pending_agent',
+  });
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: `scope:${proposal.id}`,
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a-pm',
+    pm_proposal_id: proposal.id,
+  });
+  cancelAgentRun(id);
+  // Re-read the proposal row directly so we don't depend on the
+  // listProposals projection.
+  const after = (await import('./pm-proposals')).getProposal(proposal.id)!;
+  assert.equal(after.dispatch_state, 'synth_only');
+});
+
+test('cancelAgentRun: no linked proposal — still cancels cleanly', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: 'scope:lonely',
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a-lonely',
+  });
+  const result = cancelAgentRun(id);
+  assert.equal(result.status, 'cancelled');
+  assert.equal(getAgentRun(id)!.status, 'cancelled');
+});
+
+test('cancelAgentRun: linked proposal already agent_complete is left alone', async () => {
+  const { createProposal, getProposal } = await import('./pm-proposals');
+  const ws = freshWorkspace();
+  const proposal = createProposal({
+    workspace_id: ws,
+    trigger_text: 'unit test',
+    impact_md: 'something',
+    proposed_changes: [],
+    dispatch_state: 'agent_complete',
+  });
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'pm_chat',
+    scope_key: `scope:${proposal.id}`,
+    scope_type: 'pm_chat',
+    role: 'pm',
+    agent_id: 'a-pm',
+    pm_proposal_id: proposal.id,
+  });
+  cancelAgentRun(id);
+  // Cancel must not regress an already-settled proposal back to synth_only.
+  assert.equal(getProposal(proposal.id)!.dispatch_state, 'agent_complete');
+});
+
+test('countLiveJobs: collapses pm_chat by scope_key', async () => {
+  const { countLiveJobs } = await import('./agent-runs');
+  const ws = freshWorkspace();
+  const scope = `count-scope-${uuidv4()}`;
+  for (let i = 0; i < 3; i++) {
+    startAgentRun({
+      workspace_id: ws,
+      kind: 'pm_chat',
+      scope_key: scope,
+      scope_type: 'pm_chat',
+      role: 'pm',
+      agent_id: `a${i}`,
+    });
+  }
+  startAgentRun({
+    workspace_id: ws,
+    kind: 'plan',
+    scope_key: 'plan-1',
+    scope_type: 'plan',
+    role: 'pm',
+    agent_id: 'plan-a',
+  });
+  // 3 pm_chat rows → 1 group; 1 plan row → 1; total 2.
+  assert.equal(countLiveJobs(ws), 2);
+});
+
+test('countLiveJobs: ignores terminal rows', async () => {
+  const { countLiveJobs } = await import('./agent-runs');
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'plan',
+    scope_key: 'p-done',
+    scope_type: 'plan',
+    role: 'pm',
+    agent_id: 'a',
+  });
+  completeAgentRun(id);
+  assert.equal(countLiveJobs(ws), 0);
+});
