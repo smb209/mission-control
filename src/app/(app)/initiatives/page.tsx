@@ -26,6 +26,7 @@ import {
   CalendarRange,
   ExternalLink,
   FolderInput,
+  StickyNote,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
@@ -53,6 +54,10 @@ export interface Initiative {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** Non-archived agent_notes attached to this initiative. Surfaced by
+   *  the LEFT JOIN in `listInitiatives` (server side). Optional because
+   *  some upstream callers omit it. */
+  note_count?: number;
 }
 
 interface TreeNode extends Initiative {
@@ -903,6 +908,16 @@ function InitiativeRow({
                 title={`${counts.total} tasks: ${counts.draft} draft, ${counts.active} active, ${counts.done} done`}
               >
                 {counts.total} task{counts.total === 1 ? '' : 's'}
+              </span>
+            )}
+            {(node.note_count ?? 0) > 0 && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] text-mc-text-secondary"
+                title={`${node.note_count} agent note${node.note_count === 1 ? '' : 's'} attached`}
+                aria-label={`${node.note_count} agent note${node.note_count === 1 ? '' : 's'} attached`}
+              >
+                <StickyNote className="w-3 h-3" />
+                {node.note_count}
               </span>
             )}
           </div>
