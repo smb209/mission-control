@@ -67,3 +67,37 @@ test('GET /api/jobs: live bucket reflects running pm_chat collapse', async () =>
   assert.equal(body.live[0].kind, 'pm_chat');
   assert.equal(typeof body.live[0].derived_label, 'string');
 });
+
+test('GET /api/jobs?count_only=true: returns just { live: N } with collapse', async () => {
+  const ws = freshWorkspace();
+  const scope = `scope-${uuidv4()}`;
+  for (let i = 0; i < 3; i++) {
+    startAgentRun({
+      workspace_id: ws,
+      kind: 'pm_chat',
+      scope_key: scope,
+      scope_type: 'pm_chat',
+      role: 'pm',
+      agent_id: `a${i}`,
+    });
+  }
+  startAgentRun({
+    workspace_id: ws,
+    kind: 'plan',
+    scope_key: 'plan-x',
+    scope_type: 'plan',
+    role: 'pm',
+    agent_id: 'plan-a',
+  });
+  const res = await GET(jobsReq({ workspace_id: ws, count_only: 'true' }));
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(Object.keys(body), ['live']);
+  // 3 collapsed pm_chat → 1 group + 1 plan row = 2.
+  assert.equal(body.live, 2);
+});
+
+test('GET /api/jobs?count_only=true: missing workspace_id → 400', async () => {
+  const res = await GET(jobsReq({ count_only: 'true' }));
+  assert.equal(res.status, 400);
+});

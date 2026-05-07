@@ -371,6 +371,11 @@ function NavSectionView({
                     <ResearchPreflightDot />
                   </span>
                 )}
+                {item.href === '/jobs' && (
+                  <span className={collapsed ? 'md:hidden' : ''}>
+                    <JobsLivePip />
+                  </span>
+                )}
               </Link>
             </li>
           );
@@ -403,6 +408,59 @@ function ResearchPreflightDot() {
   return (
     <span title={reason} aria-label={reason} className="ml-1 shrink-0">
       <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+    </span>
+  );
+}
+
+/**
+ * Live-count pip on the Jobs nav entry. Polls /api/jobs?count_only=true
+ * every 5s — slower than the /jobs page's 2s poll because the badge
+ * doesn't need to be live-as-fast. Hides at 0; shows "9+" beyond 9.
+ *
+ * Lives in AppNav (not the page) so it stays visible regardless of
+ * which route the operator is on — the whole point is "you don't have
+ * to navigate to /jobs to notice activity."
+ */
+function JobsLivePip() {
+  const workspaceId = useCurrentWorkspaceId();
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!workspaceId) {
+      setCount(0);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `/api/jobs?workspace_id=${encodeURIComponent(workspaceId)}&count_only=true`,
+        );
+        if (res.ok) {
+          const body = (await res.json()) as { live?: number };
+          if (!cancelled) setCount(typeof body.live === 'number' ? body.live : 0);
+        }
+      } catch {
+        /* keep last value on transient failure */
+      } finally {
+        if (!cancelled) timer = setTimeout(tick, 5000);
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [workspaceId]);
+  if (count <= 0) return null;
+  const label = count > 9 ? '9+' : String(count);
+  return (
+    <span
+      title={`${count} live ${count === 1 ? 'job' : 'jobs'}`}
+      aria-label={`${count} live jobs`}
+      className="ml-1 shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-mc-accent-red text-white text-[10px] font-bold flex items-center justify-center"
+    >
+      {label}
     </span>
   );
 }

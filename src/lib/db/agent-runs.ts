@@ -49,6 +49,13 @@ export interface AgentRun {
   cost_cents: number | null;
   cost_ceiling_cents: number | null;
   error_md: string | null;
+  /** Briefing/trigger body sent to the agent at dispatch (PR 5).
+   *  Nullable because rows pre-migration-081 don't have it. */
+  trigger_body: string | null;
+  /** When kind='pm_chat' AND the dispatch was kicked by a pm_proposals
+   *  row, this points at that proposal so the cancel cascade can flip
+   *  it to `synth_only` (PR 5). */
+  pm_proposal_id: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -277,6 +284,13 @@ export interface StartAgentRunInput {
   source_ref?: string | null;
   cost_ceiling_cents?: number | null;
   label?: string | null;
+  /** Briefing/trigger body sent to the agent (PR 5 — surfaced in the
+   *  /jobs drill-down). Optional; existing callers don't set it. */
+  trigger_body?: string | null;
+  /** Optional pm_proposals.id this dispatch is wired up to. Used by
+   *  the cancel cascade to flip `pending_agent` → `synth_only` when
+   *  an in-flight PM chat is killed before the agent replies. */
+  pm_proposal_id?: string | null;
 }
 
 /**
@@ -295,8 +309,9 @@ export function startAgentRun(input: StartAgentRunInput): string {
        id, workspace_id, kind, status, source_kind, source_ref,
        scope_key, scope_type, role, agent_id,
        initiative_id, task_id, parent_run_id, label,
+       trigger_body, pm_proposal_id,
        cost_ceiling_cents, started_at, created_at, updated_at
-     ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
+     ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
     [
       id,
       input.workspace_id,
@@ -311,6 +326,8 @@ export function startAgentRun(input: StartAgentRunInput): string {
       input.task_id ?? null,
       input.parent_run_id ?? null,
       input.label ?? null,
+      input.trigger_body ?? null,
+      input.pm_proposal_id ?? null,
       input.cost_ceiling_cents ?? null,
     ],
   );
@@ -449,6 +466,37 @@ export interface JobsListResponse {
   live: JobsLiveItem[];
   scheduled: JobsScheduledItem[];
   recent: JobsRecentItem[];
+}
+
+/**
+ * Lightweight live count using the same collapse rules as listJobs:
+ * pm_chat collapsed by scope_key (one entry per session), every other
+ * kind one-per-row. Backs the AppNav badge — polled at a slower rate
+ * than the page so we keep this query cheap.
+ */
+export function countLiveJobs(workspaceId: string): number {
+  if (!workspaceId.trim()) {
+    throw new AgentRunValidationError('workspace_id is required');
+  }
+  const row = queryOne<{ live: number }>(
+    `SELECT
+       (SELECT COUNT(*) FROM agent_runs
+          WHERE workspace_id = ?
+            AND status IN ('queued','running')
+            AND (kind != 'pm_chat' OR scope_key IS NULL))
+       +
+       (SELECT COUNT(*) FROM (
+          SELECT 1 FROM agent_runs
+           WHERE workspace_id = ?
+             AND status IN ('queued','running')
+             AND kind = 'pm_chat'
+             AND scope_key IS NOT NULL
+           GROUP BY scope_key
+        ))
+       AS live`,
+    [workspaceId, workspaceId],
+  );
+  return row?.live ?? 0;
 }
 
 interface RawAgentRunRow extends AgentRun {
@@ -671,6 +719,27 @@ export function cancelAgentRun(id: string): CancelAgentRunResult {
          AND status IN ('queued','running')`,
       ['Parent cancelled by operator', id],
     );
+    // PR 5: if this was a PM-chat dispatch tied to a still-pending
+    // pm_proposals row, flip that proposal to `synth_only` so the
+    // existing fallback fires instead of leaving operators staring at
+    // a placeholder card forever. Best-effort — don't unwind the
+    // cancel if this throws.
+    if (row.pm_proposal_id) {
+      try {
+        run(
+          `UPDATE pm_proposals
+              SET dispatch_state = 'synth_only'
+            WHERE id = ?
+              AND dispatch_state = 'pending_agent'`,
+          [row.pm_proposal_id],
+        );
+      } catch (err) {
+        console.warn(
+          '[cancelAgentRun] pm_proposal flip to synth_only failed:',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
     return {
       id,
       status: 'cancelled' as const,

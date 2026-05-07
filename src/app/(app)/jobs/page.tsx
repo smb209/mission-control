@@ -17,6 +17,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Activity, Clock, Calendar, History, AlertTriangle, Copy, Check } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import JobDetailDrawer from './JobDetailDrawer';
 
 const POLL_MS = 2000;
 const AMBER_ELAPSED_MS = 5 * 60 * 1000;
@@ -150,7 +151,8 @@ function CopyableScope({ scopeKey }: { scopeKey: string | null }) {
   return (
     <button
       type="button"
-      onClick={() => {
+      onClick={e => {
+        e.stopPropagation();
         navigator.clipboard?.writeText(scopeKey).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1200);
@@ -173,6 +175,9 @@ export default function JobsPage() {
   const [recentPage, setRecentPage] = useState(0);
   const [pendingCancel, setPendingCancel] = useState<JobsLiveItem | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  // PR 5: drill-down drawer state. Holds the agent_runs.id of the row
+  // the operator clicked. Drawer fetches /api/jobs/:id on open.
+  const [detailJobId, setDetailJobId] = useState<string | null>(null);
 
   // Children-of-pending counter for the dialog body — only count
   // non-terminal direct children since those are what the cascade
@@ -308,7 +313,11 @@ export default function JobsPage() {
                     ? `${(row.scope_key ?? '').split(':').pop() ?? row.scope_key} · ${row.group_count} turns in last hour`
                     : row.derived_label;
                 return (
-                  <tr key={row.id} className={`border-t border-mc-border ${amber ? 'bg-amber-500/10' : ''}`}>
+                  <tr
+                    key={row.id}
+                    onClick={() => setDetailJobId(row.id)}
+                    className={`border-t border-mc-border cursor-pointer hover:bg-mc-bg-tertiary/50 ${amber ? 'bg-amber-500/10' : ''}`}
+                  >
                     <Td><KindBadge kind={row.kind} /></Td>
                     <Td className="text-mc-text">
                       {depth > 0 ? (
@@ -327,7 +336,10 @@ export default function JobsPage() {
                     <Td className="text-xs">
                       <button
                         type="button"
-                        onClick={() => setPendingCancel(row)}
+                        onClick={e => {
+                          e.stopPropagation();
+                          setPendingCancel(row);
+                        }}
                         className="px-2 py-0.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10"
                       >
                         Cancel
@@ -408,7 +420,11 @@ export default function JobsPage() {
               </thead>
               <tbody>
                 {recentSlice.map(row => (
-                  <tr key={row.id} className="border-t border-mc-border">
+                  <tr
+                    key={row.id}
+                    onClick={() => setDetailJobId(row.id)}
+                    className="border-t border-mc-border cursor-pointer hover:bg-mc-bg-tertiary/50"
+                  >
                     <Td><KindBadge kind={row.kind} /></Td>
                     <Td className="text-mc-text">{row.derived_label}</Td>
                     <Td className="text-mc-text-secondary">
@@ -492,6 +508,11 @@ export default function JobsPage() {
         destructive
         onConfirm={doCancel}
         onCancel={() => setPendingCancel(null)}
+      />
+
+      <JobDetailDrawer
+        jobId={detailJobId}
+        onClose={() => setDetailJobId(null)}
       />
     </div>
   );
