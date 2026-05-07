@@ -210,8 +210,11 @@ export function registerCoreTools(server: McpServer): void {
         name: string;
         context_md: string | null;
         workspace_path: string | null;
+        repo_url: string | null;
+        default_base_branch: string | null;
       }>(
-        `SELECT id, slug, name, context_md, workspace_path FROM workspaces WHERE id = ?`,
+        `SELECT id, slug, name, context_md, workspace_path, repo_url, default_base_branch
+           FROM workspaces WHERE id = ?`,
         [me.workspace_id],
       );
 
@@ -227,6 +230,8 @@ export function registerCoreTools(server: McpServer): void {
         name: ws?.name ?? '',
         working_dir,
         deliverables: working_dir,
+        repo_url: ws?.repo_url ?? null,
+        base_branch: ws?.default_base_branch ?? null,
       };
       const resolved_context_md = resolveVariables(ws?.context_md ?? null, variableSrc);
 
@@ -239,6 +244,8 @@ export function registerCoreTools(server: McpServer): void {
         // {{token}}-resolved variant — what agents should prefer.
         resolved_context_md: resolved_context_md || null,
         working_dir,
+        repo_url: ws?.repo_url ?? null,
+        base_branch: ws?.default_base_branch ?? null,
         present: typeof ws?.context_md === 'string' && ws.context_md.trim().length > 0,
       };
       return textResult(JSON.stringify(payload, null, 2), payload);

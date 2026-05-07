@@ -904,8 +904,11 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
         name: string;
         context_md: string | null;
         workspace_path: string | null;
+        repo_url: string | null;
+        default_base_branch: string | null;
       }>(
-        `SELECT slug, name, context_md, workspace_path FROM workspaces WHERE id = ?`,
+        `SELECT slug, name, context_md, workspace_path, repo_url, default_base_branch
+           FROM workspaces WHERE id = ?`,
         [task.workspace_id],
       );
       const ctx = wsRow?.context_md;
@@ -920,6 +923,8 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
           name: wsRow.name,
           working_dir,
           deliverables: working_dir,
+          repo_url: wsRow.repo_url,
+          base_branch: wsRow.default_base_branch,
         };
         const resolved = resolveVariables(ctx.trim(), variableSrc);
         workspaceConventionsSection = `## Workspace conventions\n\n${resolved}\n\n---\n\n`;

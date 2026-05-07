@@ -64,6 +64,11 @@ interface WorkspaceWithDefault {
   /** When true, the PATCH route runs `git init` in workspace_path on save.
    *  Idempotent. See specs/workspace-conventions-structured.md §5. */
   local_repo_init?: number | null;
+  /** Optional remote (e.g. https://github.com/owner/repo). Drives PR
+   *  targeting guidance in the conventions prompt and a UI chip. */
+  repo_url?: string | null;
+  /** Default base branch for PRs (e.g. main). */
+  default_base_branch?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -251,6 +256,8 @@ export default function WorkspaceSettingsPage({
     name: workspace.name,
     working_dir: effectiveWorkingDir,
     deliverables: effectiveWorkingDir,
+    repo_url: workspace.repo_url ?? null,
+    base_branch: workspace.default_base_branch ?? null,
   };
 
   // No top header here: the Identity section below already shows the
@@ -363,23 +370,46 @@ export default function WorkspaceSettingsPage({
           </Field>
         </Section>
 
-        {/* Source control — local-repo-init checkbox. The repo URL +
-            base-branch fields land in PR 2 of audit-actions structuring
-            (specs/workspace-conventions-structured.md). */}
+        {/* Source control — repo metadata + local-repo-init. Drives the
+            {{repo_url}} / {{base_branch}} variables and the "always
+            target this remote" rule in the dispatched prompt. See
+            specs/workspace-conventions-structured.md §2 / §5. */}
         <Section
           id="source-control"
           title="Source control"
           description={
             <>
-              Even non-code workspaces benefit from local git history — it lets
-              the orchestrator rewind if a thread goes off-track. Toggle
-              <strong className="text-mc-text"> &nbsp;Initialize local git repo&nbsp;</strong>
-              to have MC run <code className="text-mc-text">git init</code> in
-              the working tree on save (idempotent — no-op when{' '}
-              <code className="text-mc-text">.git/</code> is already there).
+              Optional repository metadata for <code className="text-mc-text">{`{{repo_url}}`}</code>
+              {' '}and <code className="text-mc-text">{`{{base_branch}}`}</code> in the conventions
+              text. Even folder-only workspaces benefit from local git history —
+              tick the checkbox below to <code className="text-mc-text">git init</code>{' '}
+              the working tree on save (idempotent).
             </>
           }
         >
+          <Field label="Repo URL">
+            <InlineText
+              value={workspace.repo_url ?? ''}
+              onSave={(next) => patch({ repo_url: next.trim() })}
+              placeholder="https://github.com/owner/repo (optional)"
+              label="Edit repo URL"
+            />
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              Used by <code className="text-mc-text">{`{{repo_url}}`}</code>. Leave
+              blank for folder-only workspaces.
+            </p>
+          </Field>
+          <Field label="Default base branch">
+            <InlineText
+              value={workspace.default_base_branch ?? ''}
+              onSave={(next) => patch({ default_base_branch: next.trim() })}
+              placeholder="main"
+              label="Edit default base branch"
+            />
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              Used by <code className="text-mc-text">{`{{base_branch}}`}</code>.
+            </p>
+          </Field>
           <Field label="Initialize local git repo">
             <label className="inline-flex items-center gap-2 text-sm text-mc-text cursor-pointer">
               <input
@@ -418,10 +448,9 @@ export default function WorkspaceSettingsPage({
               {' '}block. Use{' '}
               <code className="text-mc-text">{`{{name}}`}</code>,{' '}
               <code className="text-mc-text">{`{{working_dir}}`}</code>,{' '}
-              <code className="text-mc-text">{`{{deliverables}}`}</code>{' '}
-              (and once PR 2 lands,{' '}
+              <code className="text-mc-text">{`{{deliverables}}`}</code>,{' '}
               <code className="text-mc-text">{`{{repo_url}}`}</code>,{' '}
-              <code className="text-mc-text">{`{{base_branch}}`}</code>) — they
+              <code className="text-mc-text">{`{{base_branch}}`}</code> — they
               expand at dispatch time. Leave blank to skip the block entirely.
             </>
           }

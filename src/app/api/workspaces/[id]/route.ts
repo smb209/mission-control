@@ -111,6 +111,8 @@ export async function PATCH(
       audit_per_node_timeout_ms,
       audit_subtree_concurrency,
       local_repo_init,
+      repo_url,
+      default_base_branch,
     } = body;
 
     const db = getDb();
@@ -176,6 +178,17 @@ export async function PATCH(
       // Boolean stored as INTEGER (0/1) per the migration.
       updates.push('local_repo_init = ?');
       values.push(local_repo_init ? 1 : 0);
+    }
+    if (repo_url !== undefined) {
+      // Empty string clears the field; any other value persists trimmed.
+      const trimmed = typeof repo_url === 'string' ? repo_url.trim() : null;
+      updates.push('repo_url = ?');
+      values.push(trimmed && trimmed.length > 0 ? trimmed : null);
+    }
+    if (default_base_branch !== undefined) {
+      const trimmed = typeof default_base_branch === 'string' ? default_base_branch.trim() : null;
+      updates.push('default_base_branch = ?');
+      values.push(trimmed && trimmed.length > 0 ? trimmed : null);
     }
     if (audit_subtree_concurrency !== undefined) {
       const n = Number(audit_subtree_concurrency);
