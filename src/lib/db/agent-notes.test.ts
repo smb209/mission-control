@@ -12,13 +12,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { run, queryOne } from '@/lib/db';
 import {
   AgentNoteValidationError,
+  AgentNoteNotArchivedError,
   archiveNote,
   createNote,
   getNote,
+  hardDeleteNote,
   listNotes,
   markNoteConsumed,
   parseAttachedFiles,
   parseConsumedStages,
+  restoreNote,
   NOTE_BODY_MAX,
 } from './agent-notes';
 
@@ -228,6 +231,58 @@ test('archiveNote: idempotent', () => {
 
 test('archiveNote: returns null for missing note', () => {
   assert.equal(archiveNote('missing', 'irrelevant'), null);
+});
+
+test('restoreNote: clears archived_at + archived_reason', () => {
+  const ws = freshWorkspace();
+  const note = createNote(baseInput(ws, { body: 'maybe still relevant' }));
+  archiveNote(note.id, 'archived for now');
+  assert.ok(getNote(note.id)?.archived_at);
+
+  const restored = restoreNote(note.id);
+  assert.ok(restored);
+  assert.equal(restored.archived_at, null);
+  assert.equal(restored.archived_reason, null);
+
+  // Default listing now includes it again.
+  const visible = listNotes({ workspace_id: ws });
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].id, note.id);
+});
+
+test('restoreNote: no-op when note is already active', () => {
+  const ws = freshWorkspace();
+  const note = createNote(baseInput(ws));
+  const restored = restoreNote(note.id);
+  assert.ok(restored);
+  assert.equal(restored.archived_at, null);
+});
+
+test('restoreNote: returns null for missing note', () => {
+  assert.equal(restoreNote('missing'), null);
+});
+
+test('hardDeleteNote: requires archive first, then deletes the row', () => {
+  const ws = freshWorkspace();
+  const note = createNote(baseInput(ws, { body: 'will be purged' }));
+
+  // Trying to hard-delete an active note throws.
+  assert.throws(() => hardDeleteNote(note.id), AgentNoteNotArchivedError);
+  assert.ok(getNote(note.id), 'row should still exist after failed hard-delete');
+
+  // Archive first, then hard-delete succeeds.
+  archiveNote(note.id, 'no longer needed');
+  const deleted = hardDeleteNote(note.id);
+  assert.equal(deleted, true);
+  assert.equal(getNote(note.id), null);
+
+  // Even include_archived no longer surfaces it — the row is gone.
+  const all = listNotes({ workspace_id: ws, include_archived: true });
+  assert.equal(all.length, 0);
+});
+
+test('hardDeleteNote: returns false for missing note', () => {
+  assert.equal(hardDeleteNote('does-not-exist'), false);
 });
 
 test('listNotes: workspace deletion cascades agent_notes (FK)', () => {
