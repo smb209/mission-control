@@ -28,6 +28,7 @@ import {
   Loader2,
   Sparkles,
   Trash2,
+  Upload,
   FilePlus,
   X,
 } from 'lucide-react';
@@ -259,6 +260,7 @@ export default function WorkspaceSettingsPage({
     { id: 'conventions', label: 'Workspace conventions' },
     { id: 'audit-defaults', label: 'Audit defaults' },
     { id: 'export', label: 'Export' },
+    { id: 'import', label: 'Import' },
     { id: 'danger-zone', label: 'Danger zone' },
   ];
 
@@ -664,6 +666,24 @@ export default function WorkspaceSettingsPage({
           </div>
         </Section>
 
+        {/* Import — counterpart to Export. Reads a JSON file from disk,
+            shows a per-table checkbox list backed by table_counts in the
+            export, lets the operator import into this workspace OR
+            create a new one, and supports a dry-run preview. Backed by
+            src/lib/db/workspace-import.ts (same lib the CLI script uses). */}
+        <Section
+          id="import"
+          title="Import"
+          description="Load a workspace export JSON. Choose which tables to import, whether to add to this workspace or create a new one, and run a dry-run first to preview the changes."
+        >
+          <ImportPanel
+            currentWorkspaceId={workspace.id}
+            onImported={async () => {
+              await refresh();
+            }}
+          />
+        </Section>
+
         {/* Danger Zone — GitHub-style. Red border, destructive actions
             grouped at the bottom of the page so they're never the first
             thing the operator clicks. Delete is the only one for now;
@@ -809,6 +829,422 @@ function AgentPromptPreview({
           {`## Workspace conventions\n\n${resolved}\n\n---`}
         </ReactMarkdown>
       </div>
+    </div>
+  );
+}
+
+/**
+ * ImportPanel — file picker + per-table checkboxes + new-vs-existing
+ * mode toggle + dry-run preview, all wired to POST /api/workspaces/:id/import.
+ *
+ * The panel reads the file client-side, parses it as JSON, and then
+ * renders the operator's choices against the parsed `table_counts`. The
+ * server is the source of truth for what's allowed (transient gating,
+ * unknown-table filtering); the panel just helps the operator choose.
+ */
+const TRANSIENT_TABLES = new Set([
+  'agent_mailbox',
+  'agent_health',
+  'agent_chat_messages',
+  'openclaw_sessions',
+]);
+
+interface WorkspaceExportFile {
+  version: number;
+  workspace_id: string;
+  exported_at?: string;
+  table_counts?: Record<string, number>;
+  tables: Record<string, unknown[]>;
+  schema_migration?: string | null;
+}
+
+interface ImportResultPayload {
+  workspace_id: string;
+  created_workspace: boolean;
+  inserted: Record<string, number>;
+  skipped: Record<string, number>;
+  fk_nulled: Record<string, number>;
+  ignored_tables: string[];
+  dry_run: boolean;
+}
+
+function ImportPanel({
+  currentWorkspaceId,
+  onImported,
+}: {
+  currentWorkspaceId: string;
+  onImported: () => void | Promise<void>;
+}) {
+  const [parsedFile, setParsedFile] = useState<WorkspaceExportFile | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [filename, setFilename] = useState<string | null>(null);
+  const [mode, setMode] = useState<'existing' | 'new'>('existing');
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [includeTransient, setIncludeTransient] = useState(false);
+  const [tableSelection, setTableSelection] = useState<Record<string, boolean>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [result, setResult] = useState<ImportResultPayload | null>(null);
+
+  const handleFile = async (file: File) => {
+    setParseError(null);
+    setResult(null);
+    setSubmitError(null);
+    setFilename(file.name);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as WorkspaceExportFile;
+      if (typeof parsed !== 'object' || !parsed || !parsed.tables) {
+        throw new Error('not a valid workspace export — missing `tables`');
+      }
+      setParsedFile(parsed);
+      // Default selection: every non-transient table with non-zero rows ON.
+      const sel: Record<string, boolean> = {};
+      const counts = parsed.table_counts ?? {};
+      for (const [table, count] of Object.entries(counts)) {
+        if (count <= 0) continue;
+        sel[table] = !TRANSIENT_TABLES.has(table);
+      }
+      setTableSelection(sel);
+    } catch (e) {
+      setParsedFile(null);
+      setTableSelection({});
+      setParseError(e instanceof Error ? e.message : 'failed to parse JSON');
+    }
+  };
+
+  const tableEntries = parsedFile
+    ? Object.entries(parsedFile.table_counts ?? {})
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+    : [];
+
+  const submit = async (dryRun: boolean) => {
+    if (!parsedFile || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    if (!dryRun) setResult(null);
+    try {
+      const selectedTables = Object.entries(tableSelection)
+        .filter(([, on]) => on)
+        .map(([t]) => t);
+      const body = {
+        export: parsedFile,
+        mode,
+        tables: selectedTables.length > 0 ? selectedTables : undefined,
+        include_transient: includeTransient,
+        dry_run: dryRun,
+        new_workspace:
+          mode === 'new' && newWorkspaceName.trim()
+            ? { name: newWorkspaceName.trim() }
+            : undefined,
+      };
+      const res = await fetch(
+        `/api/workspaces/${encodeURIComponent(currentWorkspaceId)}/import`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
+      }
+      setResult(data as ImportResultPayload);
+      if (!dryRun) {
+        await onImported();
+      }
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'import failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const reset = () => {
+    setParsedFile(null);
+    setFilename(null);
+    setParseError(null);
+    setTableSelection({});
+    setResult(null);
+    setSubmitError(null);
+    setNewWorkspaceName('');
+    setMode('existing');
+  };
+
+  const totalRowsSelected = tableEntries
+    .filter(([t]) => tableSelection[t])
+    .reduce((acc, [, c]) => acc + c, 0);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {!parsedFile && (
+        <label className="flex flex-col gap-2 p-4 rounded border border-dashed border-mc-border text-sm text-mc-text cursor-pointer hover:bg-mc-bg-tertiary/50">
+          <span className="inline-flex items-center gap-2 text-mc-text-secondary">
+            <Upload className="w-3.5 h-3.5" />
+            Choose a workspace export JSON…
+          </span>
+          <input
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleFile(f);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      )}
+
+      {parseError && (
+        <p className="text-xs text-rose-300" role="alert">
+          {filename}: {parseError}
+        </p>
+      )}
+
+      {parsedFile && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-2 text-xs text-mc-text-secondary">
+            <div>
+              <p className="text-mc-text">
+                <strong>{filename}</strong> — workspace_id{' '}
+                <code className="text-mc-text">{parsedFile.workspace_id}</code>
+                {parsedFile.exported_at && (
+                  <span className="ml-2">
+                    exported {parsedFile.exported_at.slice(0, 19).replace('T', ' ')}
+                  </span>
+                )}
+              </p>
+              <p className="mt-0.5 opacity-70">
+                version {parsedFile.version}
+                {parsedFile.schema_migration && (
+                  <span className="ml-2">
+                    schema {parsedFile.schema_migration}
+                  </span>
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={reset}
+              className="text-[11px] underline text-mc-text-secondary hover:text-mc-text"
+            >
+              Choose a different file
+            </button>
+          </div>
+
+          {/* Mode toggle */}
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="text-[11px] uppercase tracking-wide text-mc-text-secondary/80 mb-1">
+              Where should the import land?
+            </legend>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="import-mode"
+                checked={mode === 'existing'}
+                onChange={() => setMode('existing')}
+              />
+              <span>
+                Add to <strong className="text-mc-text">this workspace</strong>{' '}
+                <code className="text-mc-text-secondary text-xs">
+                  ({currentWorkspaceId})
+                </code>
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="import-mode"
+                checked={mode === 'new'}
+                onChange={() => setMode('new')}
+              />
+              <span>Create a new workspace</span>
+            </label>
+            {mode === 'new' && (
+              <input
+                type="text"
+                value={newWorkspaceName}
+                onChange={(e) => setNewWorkspaceName(e.target.value.slice(0, 120))}
+                placeholder="New workspace name (required)"
+                className="ml-6 mt-1 px-2 py-1 rounded border border-mc-border bg-mc-bg text-sm text-mc-text outline-none focus:border-mc-accent/60 max-w-md"
+                aria-label="New workspace name"
+              />
+            )}
+          </fieldset>
+
+          {/* Per-table checkbox list */}
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="text-[11px] uppercase tracking-wide text-mc-text-secondary/80 mb-1 flex items-center justify-between gap-2">
+              <span>Tables ({totalRowsSelected.toLocaleString()} rows selected)</span>
+              <span className="flex items-center gap-2 normal-case tracking-normal">
+                <button
+                  type="button"
+                  className="underline text-mc-text-secondary hover:text-mc-text"
+                  onClick={() =>
+                    setTableSelection(
+                      Object.fromEntries(
+                        tableEntries.map(([t]) => [t, !TRANSIENT_TABLES.has(t)]),
+                      ),
+                    )
+                  }
+                >
+                  Reset to defaults
+                </button>
+                <button
+                  type="button"
+                  className="underline text-mc-text-secondary hover:text-mc-text"
+                  onClick={() =>
+                    setTableSelection(
+                      Object.fromEntries(tableEntries.map(([t]) => [t, true])),
+                    )
+                  }
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className="underline text-mc-text-secondary hover:text-mc-text"
+                  onClick={() => setTableSelection({})}
+                >
+                  None
+                </button>
+              </span>
+            </legend>
+            <div className="rounded border border-mc-border max-h-72 overflow-y-auto">
+              <ul className="divide-y divide-mc-border/40">
+                {tableEntries.map(([table, count]) => {
+                  const transient = TRANSIENT_TABLES.has(table);
+                  const checked = !!tableSelection[table];
+                  return (
+                    <li
+                      key={table}
+                      className="px-3 py-1.5 flex items-center justify-between gap-3 text-xs"
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer text-mc-text">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) =>
+                            setTableSelection((prev) => ({
+                              ...prev,
+                              [table]: e.target.checked,
+                            }))
+                          }
+                        />
+                        <code>{table}</code>
+                        {transient && (
+                          <span className="text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">
+                            transient
+                          </span>
+                        )}
+                      </label>
+                      <span className="text-mc-text-secondary tabular-nums">
+                        {count.toLocaleString()}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-mc-text-secondary mt-1">
+              <input
+                type="checkbox"
+                checked={includeTransient}
+                onChange={(e) => setIncludeTransient(e.target.checked)}
+              />
+              Include transient tables (mailbox, chat, sessions, agent health)
+            </label>
+          </fieldset>
+
+          {submitError && (
+            <p className="text-xs text-rose-300" role="alert">
+              {submitError}
+            </p>
+          )}
+
+          {result && (
+            <div className="rounded border border-mc-border bg-mc-bg-tertiary/40 p-3 text-xs">
+              <p className="text-mc-text mb-2">
+                {result.dry_run ? (
+                  <>
+                    <strong>Dry run — nothing was written.</strong> Reviewing
+                    what an import would do:
+                  </>
+                ) : (
+                  <>
+                    <strong>Import complete.</strong>{' '}
+                    {result.created_workspace
+                      ? `Created new workspace ${result.workspace_id}.`
+                      : `Wrote into workspace ${result.workspace_id}.`}
+                  </>
+                )}
+              </p>
+              <table className="w-full text-mc-text-secondary">
+                <thead className="text-[10px] uppercase tracking-wide opacity-70">
+                  <tr>
+                    <th className="text-left pb-1">Table</th>
+                    <th className="text-right pb-1">Inserted</th>
+                    <th className="text-right pb-1">Skipped</th>
+                    <th className="text-right pb-1">FK nulled</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono text-[11px]">
+                  {Object.keys(result.inserted)
+                    .sort()
+                    .map((t) => (
+                      <tr key={t}>
+                        <td className="pr-2">{t}</td>
+                        <td className="text-right tabular-nums">
+                          {result.inserted[t] ?? 0}
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {result.skipped[t] ?? 0}
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {result.fk_nulled[t] ?? 0}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              {result.ignored_tables.length > 0 && (
+                <p className="mt-2 opacity-70">
+                  Ignored tables (filtered, transient, or not in target schema):{' '}
+                  {result.ignored_tables.join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => submit(true)}
+              disabled={submitting || (mode === 'new' && !newWorkspaceName.trim())}
+              className="px-3 py-1.5 text-sm rounded border border-mc-border text-mc-text-secondary hover:bg-mc-bg-tertiary disabled:opacity-40 inline-flex items-center gap-1.5"
+            >
+              {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+              Dry run
+            </button>
+            <button
+              type="button"
+              onClick={() => submit(false)}
+              disabled={submitting || (mode === 'new' && !newWorkspaceName.trim())}
+              className="px-3 py-1.5 text-sm rounded bg-mc-accent text-white disabled:opacity-40 inline-flex items-center gap-1.5"
+            >
+              {submitting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Upload className="w-3.5 h-3.5" />
+              )}
+              Import
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
