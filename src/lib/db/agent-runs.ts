@@ -518,10 +518,25 @@ function deriveLabel(row: { kind: AgentRunKind; label: string | null; initiative
   }
 }
 
-export function listJobs(workspaceId: string): JobsListResponse {
+export interface ListJobsOptions {
+  /**
+   * When set, restrict live + recent buckets to runs whose
+   * `initiative_id` matches. Scheduled bucket is excluded under this
+   * filter (recurring_jobs aren't initiative-scoped today; revisit if
+   * that changes). See specs/audit-actions-and-tracking.md PR 2.
+   */
+  initiative_id?: string;
+}
+
+export function listJobs(
+  workspaceId: string,
+  options: ListJobsOptions = {},
+): JobsListResponse {
   if (!workspaceId.trim()) {
     throw new AgentRunValidationError('workspace_id is required');
   }
+
+  const initiativeFilter = options.initiative_id?.trim() || undefined;
 
   // Live: queued + running. Join initiatives.title for derived_label fallback.
   const liveRows = queryAll<RawAgentRunRow>(
@@ -529,9 +544,10 @@ export function listJobs(workspaceId: string): JobsListResponse {
        FROM agent_runs ar
        LEFT JOIN initiatives i ON i.id = ar.initiative_id
       WHERE ar.workspace_id = ?
+        ${initiativeFilter ? 'AND ar.initiative_id = ?' : ''}
         AND ar.status IN ('queued','running')
       ORDER BY ar.started_at DESC, ar.created_at DESC, ar.rowid DESC`,
-    [workspaceId],
+    initiativeFilter ? [workspaceId, initiativeFilter] : [workspaceId],
   );
 
   // Collapse pm_chat by scope_key. Other kinds pass through.
@@ -589,15 +605,22 @@ export function listJobs(workspaceId: string): JobsListResponse {
   // Scheduled: recurring_jobs active in next 24h. For rows with a
   // failure streak, attach the most recent matching failed agent_runs
   // row's error_md as `last_failure_md` for the chip tooltip (PR 3).
-  const scheduledRaw = queryAll<Omit<JobsScheduledItem, 'last_failure_md'>>(
-    `SELECT id AS job_id, name, next_run_at, last_run_at, consecutive_failures, role
-       FROM recurring_jobs
-      WHERE workspace_id = ?
-        AND status = 'active'
-        AND next_run_at <= datetime('now', '+24 hours')
-      ORDER BY next_run_at ASC`,
-    [workspaceId],
-  );
+  //
+  // When filtering by initiative_id, scheduled is suppressed —
+  // recurring_jobs aren't initiative-scoped today, and showing all of a
+  // workspace's recurring jobs on every initiative page would be noisy.
+  // If recurring_jobs grow an initiative_id column later, revisit.
+  const scheduledRaw = initiativeFilter
+    ? []
+    : queryAll<Omit<JobsScheduledItem, 'last_failure_md'>>(
+        `SELECT id AS job_id, name, next_run_at, last_run_at, consecutive_failures, role
+           FROM recurring_jobs
+          WHERE workspace_id = ?
+            AND status = 'active'
+            AND next_run_at <= datetime('now', '+24 hours')
+          ORDER BY next_run_at ASC`,
+        [workspaceId],
+      );
   const scheduled: JobsScheduledItem[] = scheduledRaw.map((row) => {
     let last_failure_md: string | null = null;
     if (row.consecutive_failures > 0) {
@@ -622,11 +645,12 @@ export function listJobs(workspaceId: string): JobsListResponse {
        FROM agent_runs ar
        LEFT JOIN initiatives i ON i.id = ar.initiative_id
       WHERE ar.workspace_id = ?
+        ${initiativeFilter ? 'AND ar.initiative_id = ?' : ''}
         AND ar.status IN ('complete','failed','cancelled')
         AND ar.completed_at >= datetime('now', '-24 hours')
       ORDER BY ar.completed_at DESC, ar.rowid DESC
       LIMIT 100`,
-    [workspaceId],
+    initiativeFilter ? [workspaceId, initiativeFilter] : [workspaceId],
   );
   const recent: JobsRecentItem[] = recentRows.map(row => ({
     id: row.id,

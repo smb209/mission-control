@@ -30,6 +30,7 @@ import {
   CornerUpLeft,
   Trash2,
   Search,
+  Activity,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,6 +40,7 @@ import { DecomposerAgentPicker, type DecomposerOption } from '@/components/inlin
 import { InvestigatePicker, type InvestigateOption } from '@/components/inline/InvestigatePicker';
 import InvestigateModal from '@/components/InvestigateModal';
 import { NotesRail } from '@/components/notes/NotesRail';
+import { InitiativeRunsStrip } from '@/components/initiative/InitiativeRunsStrip';
 import { useAgentNotes } from '@/hooks/useAgentNotes';
 import { countPriorAudits } from '@/components/inline/investigate-helpers';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -1096,6 +1098,17 @@ or "carve out the onboarding flow as its own story first"`}
               ))}
             </ul>
           )}
+        </Section>
+
+        {/* Activity — live + recent agent_runs touching this initiative.
+            Closes the "what did I just queue?" gap after page refresh and
+            gives investigations a durable surface beyond the dispatch
+            toast. See specs/audit-actions-and-tracking.md PR 2. */}
+        <Section title="Activity" icon={<Activity className="w-4 h-4" />}>
+          <InitiativeRunsStrip
+            workspaceId={initiative.workspace_id}
+            initiativeId={initiative.id}
+          />
         </Section>
 
         {/* Notes — agent-generated observations for this initiative.
