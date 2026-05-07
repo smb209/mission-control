@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState, useMemo } from 'react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { Activity, Clock, Calendar, History, AlertTriangle, Copy, Check } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -177,7 +178,21 @@ export default function JobsPage() {
   const [cancelling, setCancelling] = useState(false);
   // PR 5: drill-down drawer state. Holds the agent_runs.id of the row
   // the operator clicked. Drawer fetches /api/jobs/:id on open.
-  const [detailJobId, setDetailJobId] = useState<string | null>(null);
+  // Driven by the `?run=<id>` query param so the URL is shareable —
+  // the artifacts panel inside the drawer is what makes a deep link
+  // useful (operators want to point each other at "this audit's
+  // notes" without re-clicking through the table).
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const detailJobId = searchParams.get('run');
+  const setDetailJobId = (next: string | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set('run', next);
+    else params.delete('run');
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
 
   // Children-of-pending counter for the dialog body — only count
   // non-terminal direct children since those are what the cascade
