@@ -25,8 +25,11 @@ import {
   Folder,
   GitBranch,
   Loader,
+  Loader2,
+  Sparkles,
   Trash2,
   FilePlus,
+  X,
 } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
@@ -104,6 +107,7 @@ export default function WorkspaceSettingsPage({
   const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
   const [pendingTemplate, setPendingTemplate] = useState<WorkspaceTemplate | null>(null);
   const [localRepoInitNotice, setLocalRepoInitNotice] = useState<string | null>(null);
+  const [refineModalOpen, setRefineModalOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -505,6 +509,21 @@ export default function WorkspaceSettingsPage({
               label="Edit workspace conventions"
               onDraftChange={setConventionsDraft}
             />
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={() => setRefineModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs border border-mc-border hover:bg-mc-surface-hover text-mc-text"
+                aria-label="Refine conventions with an agent"
+              >
+                <Sparkles className="w-3 h-3" />
+                Refine with agent
+              </button>
+              <span className="ml-2 text-[11px] text-mc-text-secondary">
+                Hand the current text to a writer agent and get a proposed
+                rewrite or follow-up questions.
+              </span>
+            </div>
           </Field>
         </Section>
 
@@ -529,6 +548,19 @@ export default function WorkspaceSettingsPage({
           }}
           onCancel={() => setPendingTemplate(null)}
         />
+
+        {refineModalOpen && (
+          <RefineModal
+            workspaceId={workspace.id}
+            currentConventions={conventionsDraft ?? workspace.context_md ?? ''}
+            onClose={() => setRefineModalOpen(false)}
+            onAccept={(replacement) => {
+              setRefineModalOpen(false);
+              patch({ context_md: replacement.length > 0 ? replacement : null });
+              setConventionsDraft(replacement);
+            }}
+          />
+        )}
 
         {/* Audit defaults — workspace-scoped knobs for the initiative
             Investigate flow's subtree mode. See
@@ -765,6 +797,271 @@ function AgentPromptPreview({
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {`## Workspace conventions\n\n${resolved}\n\n---`}
         </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Refine modal — POSTs the current conventions text to the runner agent
+ * and renders the structured proposal (replacement or questions) for
+ * the operator to review.
+ *
+ * v1 keeps the flow synchronous: submit → spinner → result. Failure is
+ * surfaced inline; the modal stays open so the operator can edit + retry.
+ *
+ * Spec: specs/workspace-conventions-structured.md §6.
+ */
+interface RefineModalProps {
+  workspaceId: string;
+  currentConventions: string;
+  onClose: () => void;
+  onAccept: (replacement: string) => void;
+}
+
+interface RefineProposal {
+  kind: 'replacement' | 'questions';
+  body?: string;
+  questions?: string[];
+  rationale?: string;
+}
+
+function RefineModal({
+  workspaceId,
+  currentConventions,
+  onClose,
+  onAccept,
+}: RefineModalProps) {
+  const [operatorNote, setOperatorNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<RefineProposal | null>(null);
+  // When agent returned questions, the operator answers inline → next
+  // submit appends them to operator_note for the second turn.
+  const [answers, setAnswers] = useState<string[]>([]);
+
+  const submit = async (extraNote?: string) => {
+    if (submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const composed = [operatorNote, extraNote ?? ''].filter(Boolean).join('\n\n').trim();
+      const res = await fetch(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/refine-conventions`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            current_conventions: currentConventions,
+            operator_note: composed || null,
+          }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || `HTTP ${res.status}`);
+      }
+      const p = (data as { proposal: RefineProposal }).proposal;
+      setProposal(p);
+      if (p.kind === 'questions') {
+        setAnswers(new Array(p.questions?.length ?? 0).fill(''));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refine failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const sendAnswers = async () => {
+    if (!proposal || proposal.kind !== 'questions') return;
+    const composed = (proposal.questions ?? [])
+      .map((q, i) => `Q: ${q}\nA: ${answers[i] ?? '(no answer)'}`)
+      .join('\n\n');
+    await submit(`Operator answers to your follow-up questions:\n\n${composed}`);
+    setAnswers([]);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Refine workspace conventions"
+      onClick={onClose}
+    >
+      <div
+        className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-2xl flex flex-col text-mc-text max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex items-start justify-between gap-2 px-5 py-3 border-b border-mc-border shrink-0">
+          <div className="flex items-start gap-2">
+            <Sparkles className="w-4 h-4 mt-0.5 text-mc-accent shrink-0" />
+            <div>
+              <h2 className="text-base font-semibold leading-tight">
+                Refine conventions with an agent
+              </h2>
+              <p className="text-xs text-mc-text-secondary mt-0.5">
+                The runner agent will review the current text and either propose
+                a rewrite or ask up to 5 clarifying questions.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </header>
+
+        <div className="px-5 py-4 flex flex-col gap-4 overflow-y-auto">
+          {error && (
+            <div
+              className="p-3 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-sm"
+              role="alert"
+            >
+              {error}
+            </div>
+          )}
+
+          {!proposal && (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
+                  Operator note <span className="normal-case opacity-70">(optional)</span>
+                </span>
+                <textarea
+                  value={operatorNote}
+                  onChange={(e) => setOperatorNote(e.target.value.slice(0, 2000))}
+                  rows={4}
+                  placeholder="What would you like the agent to focus on? e.g. 'tighten the testing section', 'add a deliverables policy'."
+                  className="w-full px-2 py-1.5 rounded bg-mc-bg border border-mc-border text-sm text-mc-text outline-none focus:border-mc-accent/60 resize-y leading-relaxed"
+                  maxLength={2000}
+                />
+                <span className="text-[10px] text-mc-text-secondary/70 self-end">
+                  {operatorNote.length}/2000
+                </span>
+              </label>
+            </>
+          )}
+
+          {proposal?.kind === 'replacement' && (
+            <>
+              {proposal.rationale && (
+                <p className="text-xs text-mc-text-secondary italic">
+                  {proposal.rationale}
+                </p>
+              )}
+              <div>
+                <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
+                  Proposed replacement
+                </span>
+                <pre className="mt-1 p-3 rounded bg-mc-bg border border-mc-border text-xs leading-relaxed whitespace-pre-wrap break-words text-mc-text max-h-[40vh] overflow-y-auto">
+                  {proposal.body}
+                </pre>
+              </div>
+            </>
+          )}
+
+          {proposal?.kind === 'questions' && (
+            <>
+              {proposal.rationale && (
+                <p className="text-xs text-mc-text-secondary italic">
+                  {proposal.rationale}
+                </p>
+              )}
+              <div className="flex flex-col gap-3">
+                <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
+                  Clarifying questions
+                </span>
+                {(proposal.questions ?? []).map((q, i) => (
+                  <label key={i} className="flex flex-col gap-1">
+                    <span className="text-sm text-mc-text">{q}</span>
+                    <textarea
+                      value={answers[i] ?? ''}
+                      onChange={(e) =>
+                        setAnswers((prev) => {
+                          const next = [...prev];
+                          next[i] = e.target.value;
+                          return next;
+                        })
+                      }
+                      rows={2}
+                      className="w-full px-2 py-1.5 rounded bg-mc-bg border border-mc-border text-sm text-mc-text outline-none focus:border-mc-accent/60 resize-y leading-relaxed"
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2 shrink-0">
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          {!proposal && (
+            <button
+              onClick={() => submit()}
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Refining…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Refine
+                </>
+              )}
+            </button>
+          )}
+          {proposal?.kind === 'replacement' && (
+            <>
+              <button
+                onClick={() => {
+                  setProposal(null);
+                  setAnswers([]);
+                }}
+                disabled={submitting}
+                className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm disabled:opacity-50"
+              >
+                Refine again
+              </button>
+              <button
+                onClick={() => proposal.body && onAccept(proposal.body)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm"
+              >
+                Accept replacement
+              </button>
+            </>
+          )}
+          {proposal?.kind === 'questions' && (
+            <button
+              onClick={sendAnswers}
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50"
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                <>Send answers</>
+              )}
+            </button>
+          )}
+        </footer>
       </div>
     </div>
   );
