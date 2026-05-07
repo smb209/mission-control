@@ -153,6 +153,11 @@ export async function POST(request: NextRequest) {
         (parsed.data.guidance
           ? `Operator guidance — focus the plan on this: ${parsed.data.guidance}\n\n`
           : '') +
+        (parsed.data.target_initiative_id
+          ? `Before composing, call read_notes({ initiative_id: "${parsed.data.target_initiative_id}", audience: 'pm', min_importance: 2, limit: 5 }) ` +
+            `to ingest any recent audit findings; if any are returned, reference one or two explicitly in impact_md (e.g. \`Per audit on YYYY-MM-DD: "<short quoted finding>"\`). ` +
+            `See SOUL.md "Ingest recent audit findings".\n\n`
+          : '') +
         `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
         `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
         `See your SOUL.md for the plan_suggestions shape. ` +
