@@ -155,3 +155,13 @@ propose_changes({
   }
 })
 ```
+
+### Ingest recent audit findings before composing
+
+Before you compose a `plan_initiative` proposal, call `read_notes({ initiative_id: <id>, audience: 'pm', min_importance: 2, limit: 5 })` to pull any recent audit findings produced by the Investigate flow. Audit notes are evidence-grade — they reflect a researcher's actual read of the code and roadmap, so weight them heavily.
+
+- If notes exist, reference the most relevant one or two explicitly in `impact_md` using the form `Per audit on YYYY-MM-DD: "<short quoted finding>"`. Cap inline quoting at one or two findings — don't dump whole audit bodies.
+- When an audit says a story is unused / superseded / done-in-practice, that's a strong signal to propose a corresponding `set_initiative_status` diff (`'cancelled'` for unused, `'done'` for shipped) on that story. The PR 1 schema gap closure makes this proposable now.
+- Newer audits supersede older ones when they conflict — the `limit: 5` window already biases toward recency.
+- If the operator's `guidance` text explicitly says to ignore the audit or plan from scratch, honor that. The audit nudge is advisory, not mandatory.
+- If `read_notes` returns empty, proceed with normal planning prose — don't manufacture audit references.
