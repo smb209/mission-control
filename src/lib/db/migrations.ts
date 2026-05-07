@@ -4290,6 +4290,28 @@ const migrations: Migration[] = [
       console.log('[Migration 078] mc_sessions.scope_type extended with initiative_audit.');
     },
   },
+  {
+    id: '079',
+    name: 'workspaces_audit_settings',
+    up: (db) => {
+      // Workspace-scoped knobs for the initiative audit (subtree) flow.
+      // See specs/initiative-investigate.md §"Decisions" item 1.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'audit_per_node_timeout_ms')) {
+        db.exec(`
+          ALTER TABLE workspaces
+            ADD COLUMN audit_per_node_timeout_ms INTEGER NOT NULL DEFAULT 900000
+        `);
+      }
+      if (!cols.some((c) => c.name === 'audit_subtree_concurrency')) {
+        db.exec(`
+          ALTER TABLE workspaces
+            ADD COLUMN audit_subtree_concurrency INTEGER NOT NULL DEFAULT 4
+        `);
+      }
+      console.log('[Migration 079] audit_per_node_timeout_ms + audit_subtree_concurrency columns added to workspaces.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

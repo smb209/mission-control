@@ -45,6 +45,22 @@ export interface BuildAuditPromptInput {
    * what was previously concluded.
    */
   priorFindings?: ReadonlyArray<Pick<AgentNote, 'id' | 'body' | 'created_at'>>;
+  /**
+   * Subtree-audit roll-up findings from child initiatives that were
+   * already audited in a prior layer. Rendered in a dedicated
+   * "Findings from child initiatives" block so the rolling-up
+   * researcher can synthesize without re-deriving. PR 4.
+   */
+  childFindings?: ReadonlyArray<{
+    childId: string;
+    childTitle: string;
+    /** Body of the child's audit note, or "(audit failed)" placeholder. */
+    body: string;
+    /** True when the child's audit failed/timed out — render with a banner. */
+    failed?: boolean;
+  }>;
+  /** Subtree-vs-narrow flavor. Defaults to 'narrow'. PR 4. */
+  mode?: 'narrow' | 'subtree';
 }
 
 /**
@@ -54,7 +70,14 @@ export interface BuildAuditPromptInput {
  * briefing header (identity / role soul / notetaker addendum).
  */
 export function buildAuditPrompt(input: BuildAuditPromptInput): string {
-  const { initiative, tasks, guidance, priorFindings = [] } = input;
+  const {
+    initiative,
+    tasks,
+    guidance,
+    priorFindings = [],
+    childFindings = [],
+    mode = 'narrow',
+  } = input;
 
   const targetWindow =
     initiative.target_start || initiative.target_end
@@ -90,6 +113,18 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
           )
           .join('\n---\n\n')}\n`;
 
+  const childBlock =
+    childFindings.length === 0
+      ? ''
+      : `\n## Findings from child initiatives (already audited)\n\nThese reports came from researchers we dispatched against this initiative's children in a prior layer. Synthesize them — agree, refine, or refute based on what you can verify yourself — into your roll-up. Do **not** re-audit each child from scratch; trust their evidence and focus your work on the parent-level questions (cross-cutting drift, coverage gaps, terminal verdict for the whole subtree).\n\n${childFindings
+          .map((f, i) => {
+            const banner = f.failed
+              ? '> **Audit failed for this child.** Treat as an explicit gap; flag it in your roll-up.\n\n'
+              : '';
+            return `### Child ${i + 1}: ${f.childTitle} (id=${f.childId})\n\n${banner}${f.body.trim()}\n`;
+          })
+          .join('\n---\n\n')}\n`;
+
   // The take_note arg shape is LOAD-BEARING.
   // Tests assert this exact string. Don't re-flow casually.
   const takeNoteCall = `take_note({
@@ -100,7 +135,7 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
   body: <full report>,
 })`;
 
-  return `**Initiative audit (mode: narrow)**
+  return `**Initiative audit (mode: ${mode})**
 
 Target: ${initiative.title}  (kind=${initiative.kind}, status=${initiative.status}, id=${initiative.id})
 
@@ -115,7 +150,7 @@ Target window: ${targetWindow}
 ## Direct child tasks (this initiative's tasks)
 
 ${tasksBlock}
-${guidanceBlock}${priorBlock}
+${guidanceBlock}${priorBlock}${childBlock}
 ## Your job
 
 Audit this initiative against reality. Produce a markdown report covering:

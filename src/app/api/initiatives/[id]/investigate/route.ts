@@ -4,31 +4,32 @@
  * Dispatches a researcher to audit an initiative against reality.
  * See specs/initiative-investigate.md.
  *
- * PR 2 ships **narrow mode only** — one researcher dispatch per call.
- * Subtree mode lands with PR 4 (it'll add a child-findings synthesis
- * step before the parent-level dispatch).
+ * PR 2: narrow mode (one researcher dispatch).
+ * PR 4: subtree mode — MC-driven layered fan-out.
  *
  * Request body:
  *   {
- *     mode: 'narrow',          // PR 4: 'subtree'
- *     guidance?: string,       // optional operator focus area
- *     reaudit?: 'fresh' | 'build_on'  // default 'fresh'
+ *     mode: 'narrow' | 'subtree',
+ *     guidance?: string,                // optional operator focus area
+ *     reaudit?: 'fresh' | 'build_on'    // narrow only; subtree always fresh
  *   }
  *
  * Response (200):
- *   {
- *     ok: true,
- *     scope_key: string,
- *     scope_keys: string[],     // single-element for narrow; subtree
- *                                // returns one per node (PR 4)
- *     attempt: number,
- *     dispatched_at: string,
- *   }
+ *   For narrow: { ok, mode: 'narrow', scope_key, scope_keys, attempt, dispatched_at }
+ *   For subtree: { ok, mode: 'subtree', root_scope_key, planned_layers,
+ *                  planned_nodes, concurrency, per_node_timeout_ms,
+ *                  dispatched_at }
+ *
+ * GET /api/initiatives/:id/investigate?dryrun=1&mode=subtree
+ *   Returns the subtree plan ({ planned_layers, planned_nodes,
+ *   concurrency, per_node_timeout_ms }) for the modal's ETA/banner.
+ *   Cheap + side-effect-free.
  *
  * The dispatch runs **fire-and-forget**. The route returns as soon as
- * the briefing has been queued at the gateway; the researcher's
- * take_note + final reply land asynchronously and are surfaced via
- * SSE / the initiative detail page.
+ * the briefing has been queued at the gateway (narrow) or the
+ * orchestration promise has been kicked off (subtree); the per-node
+ * take_note rows land asynchronously and are surfaced via SSE / the
+ * initiative detail page.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -39,11 +40,13 @@ import { getRunnerAgent } from '@/lib/agents/runner';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { buildAuditPrompt } from '@/lib/agents/audit-prompt';
 import { queryAll } from '@/lib/db';
+import { getAuditSettings } from '@/lib/db/workspaces';
+import { planSubtreeAudit, runSubtreeAudit } from '@/lib/agents/subtree-audit';
 
 export const dynamic = 'force-dynamic';
 
 const InvestigateSchema = z.object({
-  mode: z.enum(['narrow']).default('narrow'),
+  mode: z.enum(['narrow', 'subtree']).default('narrow'),
   guidance: z.string().max(2000).nullish(),
   reaudit: z.enum(['fresh', 'build_on']).default('fresh'),
 });
@@ -51,6 +54,8 @@ const InvestigateSchema = z.object({
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
+
+const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
 /**
  * Compute the next `:audit:N` attempt suffix for fresh-mode dispatch.
@@ -68,6 +73,50 @@ function nextAuditAttempt(initiativeId: string): number {
   );
   const count = rows[0]?.n ?? 0;
   return count + 1;
+}
+
+export async function GET(request: NextRequest, { params }: RouteParams) {
+  const { id } = await params;
+  const url = request.nextUrl;
+  if (url.searchParams.get('dryrun') !== '1') {
+    return NextResponse.json(
+      { error: 'Use POST to dispatch; pass ?dryrun=1 for plan info.' },
+      { status: 400 },
+    );
+  }
+  const mode = url.searchParams.get('mode') ?? 'subtree';
+  const initiative = getInitiative(id);
+  if (!initiative) {
+    return NextResponse.json({ error: 'Initiative not found' }, { status: 404 });
+  }
+  const settings = getAuditSettings(initiative.workspace_id);
+  if (mode === 'narrow') {
+    return NextResponse.json({
+      ok: true,
+      mode: 'narrow',
+      planned_nodes: 1,
+      planned_layers: 1,
+      concurrency: 1,
+      per_node_timeout_ms: settings.perNodeTimeoutMs,
+    });
+  }
+  if (TERMINAL_STATUSES.has(initiative.status)) {
+    return NextResponse.json(
+      {
+        error: `Cannot plan a subtree audit for an initiative in terminal status '${initiative.status}'.`,
+      },
+      { status: 400 },
+    );
+  }
+  const plan = planSubtreeAudit(id, initiative.workspace_id);
+  return NextResponse.json({
+    ok: true,
+    mode: 'subtree',
+    planned_nodes: plan.plannedNodes,
+    planned_layers: plan.plannedLayers,
+    concurrency: settings.subtreeConcurrency,
+    per_node_timeout_ms: settings.perNodeTimeoutMs,
+  });
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
@@ -95,50 +144,94 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const runner = getRunnerAgent();
     if (!runner) {
       return NextResponse.json(
-        { error: 'Runner agent not registered (mc-runner-dev / mc-runner missing)' },
+        {
+          error:
+            'Runner agent not registered (mc-runner-dev / mc-runner missing)',
+        },
         { status: 503 },
       );
     }
 
-    // Build-on mode: reuse `:audit:1` so the researcher resumes the
-    // prior session AND inline the prior audit notes. Fresh mode: mint
-    // a brand new attempt suffix and pass priorFindings: [].
+    if (mode === 'subtree') {
+      // Subtree mode: reject terminal-status roots — auditing a
+      // done/cancelled initiative's whole subtree is meaningless.
+      if (TERMINAL_STATUSES.has(initiative.status)) {
+        return NextResponse.json(
+          {
+            error: `Subtree audit on a terminal-state initiative ('${initiative.status}') is meaningless — there are no non-terminal descendants to audit and the root itself is closed.`,
+          },
+          { status: 400 },
+        );
+      }
+
+      const settings = getAuditSettings(initiative.workspace_id);
+      const plan = planSubtreeAudit(id, initiative.workspace_id);
+      const dispatchedAt = new Date().toISOString();
+      const rootSessionSuffix = `initiative-${id}:audit:subtree`;
+      const rootScopeKey = (runner as { session_key_prefix?: string | null })
+        .session_key_prefix
+        ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:${rootSessionSuffix}`
+        : rootSessionSuffix;
+
+      // Fire-and-forget — the orchestration runs as a background
+      // promise. Per-layer concurrency cap is enforced inside the
+      // helper. Per-node failures are recorded as placeholders and
+      // don't abort the rest of the run.
+      void runSubtreeAudit({
+        rootId: id,
+        workspaceId: initiative.workspace_id,
+        guidance: guidance ?? null,
+        perNodeTimeoutMs: settings.perNodeTimeoutMs,
+        subtreeConcurrency: settings.subtreeConcurrency,
+        runner,
+      }).catch((err) => {
+        console.error(
+          `[investigate] subtree run failed for initiative ${id}:`,
+          (err as Error).message,
+        );
+      });
+
+      return NextResponse.json({
+        ok: true,
+        mode: 'subtree',
+        root_scope_key: rootScopeKey,
+        planned_nodes: plan.plannedNodes,
+        planned_layers: plan.plannedLayers,
+        concurrency: settings.subtreeConcurrency,
+        per_node_timeout_ms: settings.perNodeTimeoutMs,
+        dispatched_at: dispatchedAt,
+      });
+    }
+
+    // ----- narrow mode (unchanged from PR 2) ----------------------
     const attempt = reaudit === 'build_on' ? 1 : nextAuditAttempt(id);
     const sessionSuffix = `initiative-${id}:audit:${attempt}`;
 
-    const priorFindings = reaudit === 'build_on'
-      ? listNotes({
-          initiative_id: id,
-          audience: 'pm',
-          min_importance: 2,
-          limit: 5,
-          order: 'desc',
-        })
-      : [];
+    const priorFindings =
+      reaudit === 'build_on'
+        ? listNotes({
+            initiative_id: id,
+            audience: 'pm',
+            min_importance: 2,
+            limit: 5,
+            order: 'desc',
+          })
+        : [];
 
     const triggerBody = buildAuditPrompt({
       initiative,
       tasks: initiative.tasks ?? [],
       guidance: guidance ?? null,
       priorFindings,
+      mode: 'narrow',
     });
 
-    // Compute scope_key + a synthetic run_group_id up front so the
-    // route can respond immediately. Audits run for up to 15 min; we
-    // can't make the operator's HTTP request hang on that. The actual
-    // dispatchScope call runs detached — its reply is consumed by
-    // openclaw's session log and the take_note row that lands when the
-    // researcher finishes. The `is_resume` bookkeeping inside
-    // dispatchScope still happens via upsertSession on the same tick.
     const dispatchedAt = new Date().toISOString();
     const scopeKey = (runner as { session_key_prefix?: string | null })
       .session_key_prefix
       ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:${sessionSuffix}`
       : sessionSuffix;
 
-    // Kick off the dispatch but don't await it. Errors are logged so
-    // operators see them in MC server logs; the route already
-    // responded.
     void dispatchScope({
       workspace_id: initiative.workspace_id,
       role: 'researcher',
@@ -159,7 +252,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({
       ok: true,
-      mode,
+      mode: 'narrow',
       scope_key: scopeKey,
       scope_keys: [scopeKey],
       attempt,

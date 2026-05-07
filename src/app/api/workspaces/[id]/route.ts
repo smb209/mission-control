@@ -3,6 +3,10 @@ import { getDb } from '@/lib/db';
 import {
   deleteWorkspaceCascade,
   getWorkspaceCascadeCounts,
+  AUDIT_PER_NODE_TIMEOUT_MS_MIN,
+  AUDIT_PER_NODE_TIMEOUT_MS_MAX,
+  AUDIT_SUBTREE_CONCURRENCY_MIN,
+  AUDIT_SUBTREE_CONCURRENCY_MAX,
 } from '@/lib/db/workspaces';
 import { resolveWorkspacePath } from '@/lib/config';
 
@@ -56,7 +60,15 @@ export async function PATCH(
 
   try {
     const body = await request.json();
-    const { name, description, icon, workspace_path, context_md } = body;
+    const {
+      name,
+      description,
+      icon,
+      workspace_path,
+      context_md,
+      audit_per_node_timeout_ms,
+      audit_subtree_concurrency,
+    } = body;
 
     const db = getDb();
 
@@ -96,6 +108,45 @@ export async function PATCH(
       updates.push('context_md = ?');
       const trimmed = typeof context_md === 'string' ? context_md : null;
       values.push(trimmed && trimmed.length > 0 ? trimmed : null);
+    }
+
+    if (audit_per_node_timeout_ms !== undefined) {
+      const n = Number(audit_per_node_timeout_ms);
+      if (!Number.isFinite(n) || !Number.isInteger(n)) {
+        return NextResponse.json(
+          { error: 'audit_per_node_timeout_ms must be an integer (ms)' },
+          { status: 400 },
+        );
+      }
+      if (n < AUDIT_PER_NODE_TIMEOUT_MS_MIN || n > AUDIT_PER_NODE_TIMEOUT_MS_MAX) {
+        return NextResponse.json(
+          {
+            error: `audit_per_node_timeout_ms must be between ${AUDIT_PER_NODE_TIMEOUT_MS_MIN} and ${AUDIT_PER_NODE_TIMEOUT_MS_MAX} ms (1–60 minutes)`,
+          },
+          { status: 400 },
+        );
+      }
+      updates.push('audit_per_node_timeout_ms = ?');
+      values.push(n);
+    }
+    if (audit_subtree_concurrency !== undefined) {
+      const n = Number(audit_subtree_concurrency);
+      if (!Number.isFinite(n) || !Number.isInteger(n)) {
+        return NextResponse.json(
+          { error: 'audit_subtree_concurrency must be an integer' },
+          { status: 400 },
+        );
+      }
+      if (n < AUDIT_SUBTREE_CONCURRENCY_MIN || n > AUDIT_SUBTREE_CONCURRENCY_MAX) {
+        return NextResponse.json(
+          {
+            error: `audit_subtree_concurrency must be between ${AUDIT_SUBTREE_CONCURRENCY_MIN} and ${AUDIT_SUBTREE_CONCURRENCY_MAX}`,
+          },
+          { status: 400 },
+        );
+      }
+      updates.push('audit_subtree_concurrency = ?');
+      values.push(n);
     }
 
     if (updates.length === 0) {

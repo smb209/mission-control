@@ -1,20 +1,18 @@
 'use client';
 
 /**
- * Narrow-mode investigate modal.
+ * Investigate modal — mode-aware (narrow / subtree).
  *
- * PR 3 of specs/initiative-investigate.md. Wires the existing
- * POST /api/initiatives/:id/investigate endpoint (mode='narrow') into
- * the initiative detail page action toolbar.
- *
- * Subtree mode lands in PR 4 — the radio for it is intentionally absent
- * here to keep the modal lean. The toolbar's split-button shows a
- * disabled "Whole subtree (bottom-up)" entry so operators see the path
- * exists.
+ * PR 3 wired narrow mode through the POST /api/initiatives/:id/investigate
+ * endpoint. PR 4 (specs/initiative-investigate.md) extends it for subtree
+ * mode: the re-audit-policy radio is hidden (subtree always fresh in
+ * PR 4), and a pre-flight `?dryrun=1` GET fetches the planned-layers /
+ * planned-nodes / concurrency numbers so the modal can render an
+ * accurate ETA banner.
  *
  * The audit dispatch is fire-and-forget at the route layer; we close
- * the modal on 202 and let the operator watch for the take_note row to
- * land in the NotesRail on the same page.
+ * the modal once the orchestration has been queued and let the
+ * operator watch for the take_note rows in each node's NotesRail.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -36,8 +34,25 @@ export interface InvestigateModalProps {
    * audit" radio. Caller derives this from the initiative's notes.
    */
   priorAuditCount: number;
+  /** Audit scope. Drives radio visibility + endpoint mode. */
+  mode?: 'narrow' | 'subtree';
   onClose: () => void;
-  onDispatched: (result: { scope_key: string; attempt: number }) => void;
+  onDispatched: (result: {
+    mode: 'narrow' | 'subtree';
+    scope_key?: string;
+    root_scope_key?: string;
+    attempt?: number;
+    planned_nodes?: number;
+    planned_layers?: number;
+    concurrency?: number;
+  }) => void;
+}
+
+interface SubtreePlan {
+  planned_nodes: number;
+  planned_layers: number;
+  concurrency: number;
+  per_node_timeout_ms: number;
 }
 
 type Reaudit = 'fresh' | 'build_on';
@@ -47,6 +62,7 @@ const GUIDANCE_MAX = 2000;
 export default function InvestigateModal({
   initiative,
   priorAuditCount,
+  mode = 'narrow',
   onClose,
   onDispatched,
 }: InvestigateModalProps) {
@@ -54,7 +70,37 @@ export default function InvestigateModal({
   const [guidance, setGuidance] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [plan, setPlan] = useState<SubtreePlan | null>(null);
+  const [planErr, setPlanErr] = useState<string | null>(null);
   const { addToast } = useToast();
+
+  // Pre-flight: when opened in subtree mode, fetch the planned-nodes /
+  // planned-layers / concurrency from the dryrun endpoint so we can
+  // render an accurate ETA banner. Falls back to a generic message if
+  // the request fails.
+  useEffect(() => {
+    if (mode !== 'subtree') return;
+    let cancelled = false;
+    setPlanErr(null);
+    fetch(
+      `/api/initiatives/${initiative.id}/investigate?dryrun=1&mode=subtree`,
+    )
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(
+            (body as { error?: string }).error || `Plan fetch failed (${res.status})`,
+          );
+        }
+        if (!cancelled) setPlan(body as SubtreePlan);
+      })
+      .catch((e) => {
+        if (!cancelled) setPlanErr(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, initiative.id]);
 
   const canBuildOn = priorAuditCount > 0;
 
@@ -84,28 +130,61 @@ export default function InvestigateModal({
     setSubmitting(true);
     setErr(null);
     try {
+      const baseBody = buildInvestigateBody({ reaudit, guidance });
+      // Subtree mode is always 'fresh' in PR 4; reaudit field is ignored
+      // server-side but harmless to omit. The route default keeps narrow
+      // behavior unchanged.
+      const requestBody = mode === 'subtree'
+        ? { mode: 'subtree', guidance: baseBody.guidance }
+        : baseBody;
       const res = await fetch(`/api/initiatives/${initiative.id}/investigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildInvestigateBody({ reaudit, guidance })),
+        body: JSON.stringify(requestBody),
       });
-      // The route returns 200 (not 202) once the dispatch is queued.
-      // Treat any 2xx as success.
+      // The route returns 200 once the dispatch is queued (or the
+      // subtree orchestration is kicked off). Treat any 2xx as success.
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(
           (body as { error?: string }).error || `Investigate failed (${res.status})`,
         );
       }
-      const { scope_key, attempt } = body as { scope_key: string; attempt: number };
-      addToast({
-        type: 'success',
-        title: 'Audit dispatched to researcher',
-        message:
-          'Note will appear in this initiative’s notes panel when the researcher finishes (typically 1–15 min).',
-        duration: 8000,
-      });
-      onDispatched({ scope_key, attempt });
+      if (mode === 'subtree') {
+        const { root_scope_key, planned_nodes, planned_layers, concurrency } =
+          body as {
+            root_scope_key: string;
+            planned_nodes: number;
+            planned_layers: number;
+            concurrency: number;
+          };
+        addToast({
+          type: 'success',
+          title: 'Subtree audit dispatched',
+          message: `${planned_nodes} initiative${planned_nodes === 1 ? '' : 's'} across ${planned_layers} layer${planned_layers === 1 ? '' : 's'} (up to ${concurrency} parallel). Each node’s note will appear in its own initiative’s notes panel as it lands.`,
+          duration: 10000,
+        });
+        onDispatched({
+          mode: 'subtree',
+          root_scope_key,
+          planned_nodes,
+          planned_layers,
+          concurrency,
+        });
+      } else {
+        const { scope_key, attempt } = body as {
+          scope_key: string;
+          attempt: number;
+        };
+        addToast({
+          type: 'success',
+          title: 'Audit dispatched to researcher',
+          message:
+            'Note will appear in this initiative’s notes panel when the researcher finishes (typically 1–15 min).',
+          duration: 8000,
+        });
+        onDispatched({ mode: 'narrow', scope_key, attempt });
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Investigate failed');
       // Leave the modal open so the operator can adjust + retry.
@@ -130,7 +209,11 @@ export default function InvestigateModal({
           <div className="flex items-start gap-2">
             <Search className="w-4 h-4 mt-0.5 text-mc-accent shrink-0" />
             <div className="min-w-0">
-              <h2 className="text-base font-semibold leading-tight">Investigate initiative</h2>
+              <h2 className="text-base font-semibold leading-tight">
+                {mode === 'subtree'
+                  ? 'Investigate subtree (bottom-up)'
+                  : 'Investigate initiative'}
+              </h2>
               <p className="text-xs text-mc-text-secondary mt-0.5 truncate" title={initiative.title}>
                 {initiative.title}
               </p>
@@ -156,6 +239,7 @@ export default function InvestigateModal({
             </div>
           )}
 
+          {mode === 'narrow' && (
           <fieldset className="flex flex-col gap-2">
             <legend className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
               Re-audit policy
@@ -201,6 +285,7 @@ export default function InvestigateModal({
               </span>
             </label>
           </fieldset>
+          )}
 
           <label className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
@@ -219,9 +304,34 @@ export default function InvestigateModal({
             </span>
           </label>
 
-          <p className="text-xs italic text-mc-text-secondary">
-            May take 1–15 minutes. The note will appear in this initiative&apos;s notes panel when complete.
-          </p>
+          {mode === 'subtree' ? (
+            <div className="text-xs text-mc-text-secondary leading-relaxed border border-mc-border/60 rounded p-3 bg-mc-bg/40">
+              {planErr ? (
+                <span className="text-red-300">Couldn&apos;t plan subtree: {planErr}</span>
+              ) : !plan ? (
+                <span className="opacity-70">Computing planned nodes…</span>
+              ) : (
+                <>
+                  Audits <strong className="text-mc-text">{plan.planned_nodes}</strong>{' '}
+                  initiative{plan.planned_nodes === 1 ? '' : 's'} across{' '}
+                  <strong className="text-mc-text">{plan.planned_layers}</strong>{' '}
+                  layer{plan.planned_layers === 1 ? '' : 's'}, up to{' '}
+                  <strong className="text-mc-text">{plan.concurrency}</strong>{' '}
+                  in parallel. Estimated time:{' '}
+                  <strong className="text-mc-text">
+                    {plan.planned_layers * Math.round(plan.per_node_timeout_ms / 60_000)} min
+                  </strong>{' '}
+                  worst case (one researcher per node, layered). Each node&apos;s
+                  note appears in its own initiative&apos;s notes panel as it
+                  completes.
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs italic text-mc-text-secondary">
+              May take 1–15 minutes. The note will appear in this initiative&apos;s notes panel when complete.
+            </p>
+          )}
         </div>
 
         <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2">

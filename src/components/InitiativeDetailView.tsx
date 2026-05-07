@@ -291,6 +291,8 @@ export function InitiativeDetailView({
   // Investigate ▾ — narrow-mode audit modal (PR 3 of
   // specs/initiative-investigate.md). Subtree mode lives in PR 4.
   const [showInvestigateModal, setShowInvestigateModal] = useState(false);
+  // PR 4 of specs/initiative-investigate.md — subtree mode added.
+  const [investigateMode, setInvestigateMode] = useState<'narrow' | 'subtree'>('narrow');
   // Selected task for the inline TaskModal — clicking a task in the
   // children list opens it here instead of navigating away.
   const [taskModalTask, setTaskModalTask] = useState<Task | null>(null);
@@ -747,11 +749,8 @@ or "carve out the onboarding flow as its own story first"`}
             <InvestigatePicker
               options={INVESTIGATE_OPTIONS}
               onPick={(scope) => {
-                if (scope === 'narrow') setShowInvestigateModal(true);
-                // 'subtree' is currently disabled in INVESTIGATE_OPTIONS
-                // (PR 4 enables it); the picker will not invoke onPick
-                // for disabled entries, so this branch is effectively
-                // dead code today and kept only as a forward-compat hook.
+                setInvestigateMode(scope);
+                setShowInvestigateModal(true);
               }}
             />
             <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
@@ -1222,6 +1221,7 @@ or "carve out the onboarding flow as its own story first"`}
             workspace_id: initiative.workspace_id,
           }}
           priorAuditCount={priorAuditCount}
+          mode={investigateMode}
           onClose={() => setShowInvestigateModal(false)}
           onDispatched={() => {
             // Route is fire-and-forget; close immediately so the
@@ -1269,9 +1269,8 @@ or "carve out the onboarding flow as its own story first"`}
   );
 }
 
-// Investigate ▾ menu items. Subtree is intentionally kept visible but
-// disabled so operators see the path exists — PR 4 of
-// specs/initiative-investigate.md enables it.
+// Investigate ▾ menu items. Subtree mode lands in PR 4 of
+// specs/initiative-investigate.md.
 const INVESTIGATE_OPTIONS: InvestigateOption[] = [
   {
     id: 'narrow',
@@ -1281,9 +1280,7 @@ const INVESTIGATE_OPTIONS: InvestigateOption[] = [
   {
     id: 'subtree',
     label: 'Whole subtree (bottom-up)',
-    description: 'Per-level fan-out across descendants, then a roll-up.',
-    disabled: true,
-    disabledReason: 'Coming soon — subtree mode lands in a follow-up PR',
+    description: 'MC fans researchers across non-terminal descendants layer by layer, then rolls up into a parent verdict.',
   },
 ];
 
