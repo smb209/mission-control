@@ -349,6 +349,52 @@ export function failAgentRun(id: string, errorMd: string): void {
   );
 }
 
+/**
+ * Roll up a fan-out parent based on its children's outcomes.
+ *
+ * Used by orchestrators (today: subtree audit) that create a synthetic
+ * root agent_runs row before fanning out leaves. After all children
+ * settle, call this to flip the parent to `complete` (≤ failureThreshold
+ * fraction failed) or `failed` (> threshold) in one shot.
+ *
+ * The default 0.5 threshold mirrors `SUBTREE_FAILURE_THRESHOLD` in
+ * subtree-audit.ts — kept as a parameter so other fan-outs can tune it.
+ *
+ * No-ops if the parent is already terminal.
+ */
+export interface RollupChildResult {
+  status: 'ok' | 'failed';
+  error?: string | null;
+}
+
+export function markRunRollup(
+  parentId: string,
+  childResults: ReadonlyArray<RollupChildResult>,
+  failureThreshold = 0.5,
+): void {
+  const total = childResults.length;
+  const failedCount = childResults.filter((c) => c.status === 'failed').length;
+  // Empty fan-outs (no children dispatched) are treated as a successful
+  // no-op rather than NaN > threshold = false. Caller probably doesn't
+  // want a "failed" parent for a tree with no non-terminal descendants.
+  const failRatio = total === 0 ? 0 : failedCount / total;
+  if (failRatio > failureThreshold) {
+    const sample = childResults
+      .filter((c) => c.status === 'failed' && c.error)
+      .slice(0, 3)
+      .map((c, i) => `${i + 1}. ${c.error}`)
+      .join('\n');
+    failAgentRun(
+      parentId,
+      `Subtree audit: ${failedCount}/${total} children failed (>${(
+        failureThreshold * 100
+      ).toFixed(0)}%).${sample ? `\n\nFirst failures:\n${sample}` : ''}`,
+    );
+  } else {
+    completeAgentRun(parentId);
+  }
+}
+
 // ─── Jobs-in-Progress: /api/jobs read model (PR 2) ─────────────────
 //
 // listJobs() backs the GET /api/jobs route. Three buckets in one call:
@@ -391,6 +437,12 @@ export interface JobsScheduledItem {
   last_run_at: string | null;
   consecutive_failures: number;
   role: string;
+  /**
+   * error_md from the most recent failed `recurring` agent_runs row
+   * for this job_id. Populated only when consecutive_failures > 0;
+   * null otherwise. UI uses it as the failure-chip tooltip (PR 3).
+   */
+  last_failure_md: string | null;
 }
 
 export interface JobsListResponse {
@@ -486,8 +538,10 @@ export function listJobs(workspaceId: string): JobsListResponse {
   // Final sort: most recent started_at first.
   live.sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''));
 
-  // Scheduled: recurring_jobs active in next 24h.
-  const scheduled = queryAll<JobsScheduledItem>(
+  // Scheduled: recurring_jobs active in next 24h. For rows with a
+  // failure streak, attach the most recent matching failed agent_runs
+  // row's error_md as `last_failure_md` for the chip tooltip (PR 3).
+  const scheduledRaw = queryAll<Omit<JobsScheduledItem, 'last_failure_md'>>(
     `SELECT id AS job_id, name, next_run_at, last_run_at, consecutive_failures, role
        FROM recurring_jobs
       WHERE workspace_id = ?
@@ -496,6 +550,23 @@ export function listJobs(workspaceId: string): JobsListResponse {
       ORDER BY next_run_at ASC`,
     [workspaceId],
   );
+  const scheduled: JobsScheduledItem[] = scheduledRaw.map((row) => {
+    let last_failure_md: string | null = null;
+    if (row.consecutive_failures > 0) {
+      const last = queryOne<{ error_md: string | null }>(
+        `SELECT error_md FROM agent_runs
+          WHERE workspace_id = ?
+            AND kind = 'recurring'
+            AND status = 'failed'
+            AND source_ref = ?
+          ORDER BY completed_at DESC, rowid DESC
+          LIMIT 1`,
+        [workspaceId, row.job_id],
+      );
+      last_failure_md = last?.error_md ?? null;
+    }
+    return { ...row, last_failure_md };
+  });
 
   // Recent: terminal in last 24h, individual rows (NOT grouped). Cap 100.
   const recentRows = queryAll<RawAgentRunRow>(

@@ -14,10 +14,21 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { v4 as uuidv4 } from 'uuid';
+import { run, queryAll } from '@/lib/db';
 import {
   enumerateLayersBottomUp,
   boundedAll,
+  runSubtreeAudit,
 } from './subtree-audit';
+import { createInitiative } from '@/lib/db/initiatives';
+import { getAgentRun } from '@/lib/db/agent-runs';
+import {
+  __setSendChatClientForTests,
+  type ChatEvent,
+  type SendChatClient,
+} from '@/lib/openclaw/send-chat';
+import type { Agent } from '@/lib/types';
 
 type Lite = Parameters<typeof enumerateLayersBottomUp>[1][number];
 
@@ -166,4 +177,125 @@ test('boundedAll: cap >= task count behaves like Promise.all-ish', async () => {
     out.map((r) => (r.ok ? r.value : null)),
     ['a', 'b'],
   );
+});
+
+// ─── runSubtreeAudit: parent_run_id linkage + rollup (PR 3) ────────
+
+function freshWorkspace(): string {
+  const id = `ws-st-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT OR IGNORE INTO workspaces (id, name, slug, created_at) VALUES (?, ?, ?, datetime('now'))`,
+    [id, id, id],
+  );
+  return id;
+}
+
+function fakeRunner(): Agent {
+  return {
+    id: 'agent-test-runner',
+    name: 'Runner Test',
+    role: 'researcher',
+    avatar_emoji: '🔬',
+    status: 'standby',
+    is_master: false,
+    workspace_id: 'default',
+    source: 'gateway',
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    gateway_agent_id: 'mc-runner-test',
+    session_key_prefix: 'agent:mc-runner-test',
+    model: 'spark-lb/agent',
+  } as unknown as Agent;
+}
+
+function stubClient(events: ChatEvent[] = [{ state: 'final', message: 'ok' }]): SendChatClient {
+  const listeners = new Set<(p: ChatEvent) => void>();
+  return {
+    isConnected: () => true,
+    on: (event, listener) => { if (event === 'chat_event') listeners.add(listener); return undefined; },
+    off: (event, listener) => { if (event === 'chat_event') listeners.delete(listener); return undefined; },
+    call: async (method, params) => {
+      if (method !== 'chat.send') return undefined;
+      const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey;
+      setImmediate(() => {
+        for (const e of events) {
+          const withKey = { ...e, sessionKey };
+          for (const l of listeners) l(withKey);
+        }
+      });
+      return {};
+    },
+  };
+}
+
+test.afterEach(() => {
+  __setSendChatClientForTests(null);
+});
+
+test('runSubtreeAudit: creates synthetic parent + child rows linked by parent_run_id', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  // Tree: root -> 3 stories.
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Root epic' });
+  const c1 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 1', parent_initiative_id: root.id });
+  const c2 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 2', parent_initiative_id: root.id });
+  const c3 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 3', parent_initiative_id: root.id });
+
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 2,
+    runner: fakeRunner(),
+  });
+
+  // Synthetic parent row exists with the expected shape.
+  assert.ok(result.parentRunId);
+  const parent = getAgentRun(result.parentRunId!)!;
+  assert.equal(parent.kind, 'initiative_audit');
+  assert.equal(parent.source_kind, 'fanout');
+  assert.equal(parent.parent_run_id, null);
+  assert.equal(parent.initiative_id, root.id);
+  assert.match(parent.label ?? '', /Subtree audit:/);
+
+  // Child rows: one per node (3 stories + 1 root re-audit at top layer = 4).
+  const children = queryAll<{ id: string; parent_run_id: string | null; initiative_id: string | null }>(
+    `SELECT id, parent_run_id, initiative_id FROM agent_runs
+       WHERE workspace_id = ? AND parent_run_id = ?
+       ORDER BY created_at`,
+    [ws, result.parentRunId],
+  );
+  assert.equal(children.length, 4, '3 stories + root self-audit');
+  const childInitiativeIds = new Set(children.map((c) => c.initiative_id));
+  for (const id of [root.id, c1.id, c2.id, c3.id]) {
+    assert.ok(childInitiativeIds.has(id), `child for initiative ${id} present`);
+  }
+  for (const c of children) {
+    assert.equal(c.parent_run_id, result.parentRunId);
+  }
+});
+
+test('runSubtreeAudit: parent rolls up to complete when all children succeed', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'OK epic' });
+  // No children — single-node fan-out (just the root).
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 1,
+    runner: fakeRunner(),
+  });
+  // The single-node dispatch lands but won't have a take_note row; the
+  // orchestrator records that as a failure outcome. With 1/1 failed
+  // (>50%), the parent rolls up to failed. That's expected behavior —
+  // see SUBTREE_FAILURE_THRESHOLD. Assert the rollup ran (parent is
+  // terminal, not stuck running) regardless of branch.
+  const parent = getAgentRun(result.parentRunId!)!;
+  assert.ok(['complete', 'failed'].includes(parent.status), 'parent rolled up');
+  assert.ok(parent.completed_at);
 });

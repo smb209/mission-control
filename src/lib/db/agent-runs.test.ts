@@ -19,6 +19,7 @@ import {
   markComplete,
   markFailed,
   markRunning,
+  markRunRollup,
   reapStaleRunning,
   startAgentRun,
   completeAgentRun,
@@ -467,4 +468,121 @@ test('listJobs: workspace-isolated', () => {
   });
   const r = listJobs(ws2);
   assert.equal(r.live.length, 0);
+});
+
+// ─── markRunRollup (PR 3) ─────────────────────────────────────────
+
+test('markRunRollup: all-green children → parent complete', () => {
+  const ws = freshWorkspace();
+  const parent = startAgentRun({
+    workspace_id: ws, kind: 'initiative_audit',
+    scope_key: 'rollup-ok', scope_type: 'initiative_audit',
+    role: 'researcher', agent_id: 'r', source_kind: 'fanout',
+  });
+  markRunRollup(parent, [
+    { status: 'ok' }, { status: 'ok' }, { status: 'ok' },
+  ]);
+  const row = getAgentRun(parent)!;
+  assert.equal(row.status, 'complete');
+  assert.ok(row.completed_at);
+  assert.equal(row.error_md, null);
+});
+
+test('markRunRollup: >50% failed children → parent failed with sample', () => {
+  const ws = freshWorkspace();
+  const parent = startAgentRun({
+    workspace_id: ws, kind: 'initiative_audit',
+    scope_key: 'rollup-bad', scope_type: 'initiative_audit',
+    role: 'researcher', agent_id: 'r', source_kind: 'fanout',
+  });
+  markRunRollup(parent, [
+    { status: 'failed', error: 'gateway timeout' },
+    { status: 'failed', error: 'no take_note row' },
+    { status: 'ok' },
+  ]);
+  const row = getAgentRun(parent)!;
+  assert.equal(row.status, 'failed');
+  assert.match(row.error_md ?? '', /2\/3 children failed/);
+  assert.match(row.error_md ?? '', /gateway timeout/);
+});
+
+test('markRunRollup: exactly 50% failed → parent complete (threshold strict)', () => {
+  const ws = freshWorkspace();
+  const parent = startAgentRun({
+    workspace_id: ws, kind: 'initiative_audit',
+    scope_key: 'rollup-edge', scope_type: 'initiative_audit',
+    role: 'researcher', agent_id: 'r', source_kind: 'fanout',
+  });
+  markRunRollup(parent, [
+    { status: 'failed', error: 'x' }, { status: 'ok' },
+  ]);
+  assert.equal(getAgentRun(parent)!.status, 'complete');
+});
+
+test('markRunRollup: empty children list → parent complete (no-op fan-out)', () => {
+  const ws = freshWorkspace();
+  const parent = startAgentRun({
+    workspace_id: ws, kind: 'initiative_audit',
+    scope_key: 'rollup-empty', scope_type: 'initiative_audit',
+    role: 'researcher', agent_id: 'r', source_kind: 'fanout',
+  });
+  markRunRollup(parent, []);
+  assert.equal(getAgentRun(parent)!.status, 'complete');
+});
+
+// ─── listJobs scheduled.last_failure_md (PR 3) ────────────────────
+
+test('listJobs: scheduled.last_failure_md is null when no streak', () => {
+  const ws = freshWorkspace();
+  run(
+    `INSERT INTO recurring_jobs
+       (id, workspace_id, name, role, scope_key_template, briefing_template,
+        cadence_seconds, status, next_run_at, consecutive_failures)
+     VALUES (?, ?, 'happy', 'researcher', 't', 'b', 3600, 'active', datetime('now','+1 hour'), 0)`,
+    [`rj-${uuidv4()}`, ws],
+  );
+  const r = listJobs(ws);
+  assert.equal(r.scheduled.length, 1);
+  assert.equal(r.scheduled[0].last_failure_md, null);
+});
+
+test('listJobs: scheduled.last_failure_md attaches most-recent failed recurring run', () => {
+  const ws = freshWorkspace();
+  const jobId = `rj-${uuidv4()}`;
+  run(
+    `INSERT INTO recurring_jobs
+       (id, workspace_id, name, role, scope_key_template, briefing_template,
+        cadence_seconds, status, next_run_at, consecutive_failures)
+     VALUES (?, ?, 'flaky', 'researcher', 't', 'b', 3600, 'active', datetime('now','+1 hour'), 2)`,
+    [jobId, ws],
+  );
+  // Older failure — must be ignored.
+  const older = startAgentRun({
+    workspace_id: ws, kind: 'recurring',
+    scope_key: 's-old', scope_type: 'recurring',
+    role: 'researcher', agent_id: 'r',
+    source_kind: 'schedule', source_ref: jobId,
+  });
+  run(`UPDATE agent_runs SET status='failed', error_md='old error', completed_at=datetime('now','-2 hours') WHERE id=?`, [older]);
+  // Newer failure — must win.
+  const newer = startAgentRun({
+    workspace_id: ws, kind: 'recurring',
+    scope_key: 's-new', scope_type: 'recurring',
+    role: 'researcher', agent_id: 'r',
+    source_kind: 'schedule', source_ref: jobId,
+  });
+  run(`UPDATE agent_runs SET status='failed', error_md='LATEST: gateway 502', completed_at=datetime('now','-30 minutes') WHERE id=?`, [newer]);
+  // A success on a different job — must not bleed in.
+  const otherJobId = `rj-${uuidv4()}`;
+  const otherRun = startAgentRun({
+    workspace_id: ws, kind: 'recurring',
+    scope_key: 's-other', scope_type: 'recurring',
+    role: 'researcher', agent_id: 'r',
+    source_kind: 'schedule', source_ref: otherJobId,
+  });
+  run(`UPDATE agent_runs SET status='failed', error_md='wrong job', completed_at=datetime('now','-10 minutes') WHERE id=?`, [otherRun]);
+
+  const r = listJobs(ws);
+  const sched = r.scheduled.find(x => x.job_id === jobId)!;
+  assert.equal(sched.last_failure_md, 'LATEST: gateway 502');
 });

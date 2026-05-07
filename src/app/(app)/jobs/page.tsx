@@ -52,6 +52,7 @@ interface JobsScheduledItem {
   last_run_at: string | null;
   consecutive_failures: number;
   role: string;
+  last_failure_md: string | null;
 }
 
 interface JobsResponse {
@@ -94,6 +95,41 @@ function relativePast(iso: string | null, now: number): string {
   if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
   return `${Math.round(diff / 86_400_000)}d ago`;
+}
+
+/**
+ * Group flat live rows into a parent-then-children traversal.
+ *
+ * For every row whose parent_run_id matches another live row's id, the
+ * child is rendered indented under its parent (depth 1). Children of
+ * children would be deeper, but the subtree-audit fan-out is one level,
+ * so depth caps at 1 in practice. Orphaned rows (parent already settled,
+ * shouldn't happen with rollup but guarded) appear at the top level.
+ */
+interface LiveDisplayRow { row: JobsLiveItem; depth: number }
+
+function groupLiveRows(live: ReadonlyArray<JobsLiveItem>): LiveDisplayRow[] {
+  const byId = new Map<string, JobsLiveItem>();
+  for (const r of live) byId.set(r.id, r);
+  const childrenByParent = new Map<string, JobsLiveItem[]>();
+  const topLevel: JobsLiveItem[] = [];
+  for (const r of live) {
+    if (r.parent_run_id && byId.has(r.parent_run_id)) {
+      const list = childrenByParent.get(r.parent_run_id) ?? [];
+      list.push(r);
+      childrenByParent.set(r.parent_run_id, list);
+    } else {
+      topLevel.push(r);
+    }
+  }
+  const out: LiveDisplayRow[] = [];
+  const walk = (row: JobsLiveItem, depth: number) => {
+    out.push({ row, depth });
+    const kids = childrenByParent.get(row.id);
+    if (kids) for (const k of kids) walk(k, depth + 1);
+  };
+  for (const r of topLevel) walk(r, 0);
+  return out;
 }
 
 function statusChipClass(status: string): string {
@@ -226,20 +262,25 @@ export default function JobsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.live.map(row => {
+              {groupLiveRows(data.live).map(({ row, depth }) => {
                 const startedMs = row.started_at
                   ? new Date(row.started_at + (row.started_at.includes('T') ? '' : 'Z')).getTime()
                   : null;
                 const elapsedMs = startedMs ? now - startedMs : 0;
                 const amber = startedMs && elapsedMs > AMBER_ELAPSED_MS;
-                const labelText =
+                const baseLabel =
                   row.group_count > 1
                     ? `${(row.scope_key ?? '').split(':').pop() ?? row.scope_key} · ${row.group_count} turns in last hour`
                     : row.derived_label;
                 return (
                   <tr key={row.id} className={`border-t border-mc-border ${amber ? 'bg-amber-500/10' : ''}`}>
                     <Td><KindBadge kind={row.kind} /></Td>
-                    <Td className="text-mc-text">{labelText}</Td>
+                    <Td className="text-mc-text">
+                      {depth > 0 ? (
+                        <span className="text-mc-text-secondary mr-2 font-mono">└─</span>
+                      ) : null}
+                      {baseLabel}
+                    </Td>
                     <Td className="text-mc-text-secondary">
                       {row.role ?? '—'} · <span className="font-mono text-[11px]">{shortId(row.agent_id)}</span>
                     </Td>
@@ -285,7 +326,10 @@ export default function JobsPage() {
                   </Td>
                   <Td>
                     {row.consecutive_failures > 0 ? (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 text-[11px]">
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 text-[11px] cursor-help"
+                        title={row.last_failure_md ?? `${row.consecutive_failures} consecutive failures`}
+                      >
                         <AlertTriangle className="w-3 h-3" />✗{row.consecutive_failures}
                       </span>
                     ) : (
