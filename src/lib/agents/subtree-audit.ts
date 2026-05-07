@@ -36,8 +36,16 @@ import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { buildAuditPrompt } from '@/lib/agents/audit-prompt';
 import type { Agent } from '@/lib/types';
 import { queryAll } from '@/lib/db';
+import { markRunRollup, startAgentRun } from '@/lib/db/agent-runs';
 
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
+
+/**
+ * Fraction of child node failures above which the synthetic parent
+ * agent_runs row rolls up to `failed` instead of `complete`. Pure
+ * display semantic — orchestration always finishes the layered fan-out.
+ */
+export const SUBTREE_FAILURE_THRESHOLD = 0.5;
 
 /** Initiative shape we need internally — kept narrow on purpose. */
 type LiteInitiative = Pick<
@@ -197,6 +205,8 @@ export interface RunSubtreeAuditInput {
 
 export interface SubtreeAuditResult {
   rootId: string;
+  /** ID of the synthetic root agent_runs row that owns this fan-out. */
+  parentRunId: string | null;
   totalDispatched: number;
   failedCount: number;
   perNodeOutcomes: Array<{
@@ -240,6 +250,42 @@ export async function runSubtreeAudit(
   const { rootId, workspaceId, guidance, perNodeTimeoutMs, subtreeConcurrency, runner } =
     input;
   const { layers } = planSubtreeAudit(rootId, workspaceId);
+
+  // Synthetic root agent_runs row — exists purely so the /jobs UI can
+  // group per-node child dispatches under one parent. Uses the
+  // representative scope/role/agent of a child for a clean join. Not
+  // dispatched to openclaw.
+  const rootInitiative = layers[layers.length - 1]?.[0];
+  const rootScopeKey = (runner as { session_key_prefix?: string | null })
+    .session_key_prefix
+    ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:initiative-${rootId}:audit-subtree`
+    : `initiative-${rootId}:audit-subtree`;
+  let parentRunId: string | null = null;
+  try {
+    parentRunId = startAgentRun({
+      workspace_id: workspaceId,
+      kind: 'initiative_audit',
+      scope_key: rootScopeKey,
+      scope_type: 'initiative_audit',
+      role: 'researcher',
+      agent_id: runner.id,
+      initiative_id: rootId,
+      parent_run_id: null,
+      source_kind: 'fanout',
+      source_ref: rootId,
+      label: rootInitiative
+        ? `Subtree audit: ${rootInitiative.title}`
+        : `Subtree audit: ${rootId}`,
+    });
+  } catch (err) {
+    // Don't let an agent_runs write failure block orchestration; the
+    // /jobs UI will just show the children flat. Mirrors the
+    // dispatchScope guard.
+    console.warn(
+      '[subtree-audit] failed to create synthetic parent agent_run:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   // Map of initiative_id → most-recent finding body (or "(audit failed)" placeholder).
   const findingsByInitiative = new Map<string, { body: string; failed: boolean }>();
@@ -307,6 +353,10 @@ export async function runSubtreeAudit(
           attempt_strategy: 'fresh',
           timeoutMs: perNodeTimeoutMs,
           idempotencyKey: `subtree-audit-${node.id}-${attempt}-${Date.now()}`,
+          parent_run_id: parentRunId,
+          source_kind: 'fanout',
+          source_ref: rootId,
+          label: `Audit: ${node.title}`,
         });
 
         // Pull the most recent observation/pm/importance=2 note for
@@ -363,8 +413,28 @@ export async function runSubtreeAudit(
   }
 
   const failedCount = perNodeOutcomes.filter((o) => o.status === 'failed').length;
+
+  // Roll up the synthetic parent based on child success ratio. Pure
+  // display semantic — orchestration has already finished. Soft-fail:
+  // if the parent insert earlier failed, skip the rollup.
+  if (parentRunId) {
+    try {
+      markRunRollup(
+        parentRunId,
+        perNodeOutcomes.map((o) => ({ status: o.status, error: o.error })),
+        SUBTREE_FAILURE_THRESHOLD,
+      );
+    } catch (err) {
+      console.warn(
+        '[subtree-audit] rollup of synthetic parent failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   return {
     rootId,
+    parentRunId,
     totalDispatched: perNodeOutcomes.length,
     failedCount,
     perNodeOutcomes,
