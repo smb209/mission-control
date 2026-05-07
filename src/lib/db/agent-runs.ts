@@ -13,7 +13,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { queryAll, queryOne, run } from '@/lib/db';
+import { queryAll, queryOne, run, transaction } from '@/lib/db';
 
 export type AgentRunKind =
   | 'brief'
@@ -602,6 +602,82 @@ export function listJobs(workspaceId: string): JobsListResponse {
   }));
 
   return { live, scheduled, recent };
+}
+
+// ─── Jobs-in-Progress: cancel (PR 4) ───────────────────────────────
+//
+// cancelAgentRun flips a queued/running row → cancelled and cascades
+// to any non-terminal direct children (parent_run_id = id). Used by
+// POST /api/jobs/:id/cancel. Gateway session-close is best-effort and
+// happens in the route, not here — DAO stays pure.
+
+export class AgentRunNotFoundError extends Error {
+  constructor(id: string) {
+    super(`agent_run ${id} not found`);
+    this.name = 'AgentRunNotFoundError';
+  }
+}
+
+export class AgentRunNotCancellableError extends Error {
+  constructor(public id: string, public status: AgentRunStatus) {
+    super(`agent_run ${id} is ${status}, not cancellable`);
+    this.name = 'AgentRunNotCancellableError';
+  }
+}
+
+export interface CancelAgentRunResult {
+  id: string;
+  status: 'cancelled';
+  children_cancelled: number;
+  /** The openclaw_session_id the row had at cancel time, if any.
+   *  Returned so the route can fire a best-effort gateway abort. */
+  openclaw_session_id: string | null;
+}
+
+/**
+ * Cancel an agent_runs row and any non-terminal direct children.
+ *
+ * Throws AgentRunNotFoundError if the id doesn't exist.
+ * Throws AgentRunNotCancellableError if the row is already terminal
+ * (complete/failed/cancelled) — caller maps to 409.
+ *
+ * Children are matched by `parent_run_id = id` and cancelled with
+ * 'Parent cancelled by operator'. The whole thing runs in one
+ * transaction so a partial cascade can't strand children.
+ */
+export function cancelAgentRun(id: string): CancelAgentRunResult {
+  return transaction(() => {
+    const row = getAgentRun(id);
+    if (!row) throw new AgentRunNotFoundError(id);
+    if (row.status !== 'queued' && row.status !== 'running') {
+      throw new AgentRunNotCancellableError(id, row.status);
+    }
+    run(
+      `UPDATE agent_runs SET
+         status = 'cancelled',
+         error_md = COALESCE(error_md, ?),
+         completed_at = datetime('now'),
+         updated_at = datetime('now')
+       WHERE id = ?`,
+      ['Cancelled by operator', id],
+    );
+    const result = run(
+      `UPDATE agent_runs SET
+         status = 'cancelled',
+         error_md = COALESCE(error_md, ?),
+         completed_at = datetime('now'),
+         updated_at = datetime('now')
+       WHERE parent_run_id = ?
+         AND status IN ('queued','running')`,
+      ['Parent cancelled by operator', id],
+    );
+    return {
+      id,
+      status: 'cancelled' as const,
+      children_cancelled: result.changes,
+      openclaw_session_id: row.openclaw_session_id,
+    };
+  });
 }
 
 export function reapStaleRunning(staleSeconds: number, errorMd: string): number {

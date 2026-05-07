@@ -16,6 +16,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Activity, Clock, Calendar, History, AlertTriangle, Copy, Check } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 const POLL_MS = 2000;
 const AMBER_ELAPSED_MS = 5 * 60 * 1000;
@@ -170,6 +171,40 @@ export default function JobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [recentPage, setRecentPage] = useState(0);
+  const [pendingCancel, setPendingCancel] = useState<JobsLiveItem | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Children-of-pending counter for the dialog body — only count
+  // non-terminal direct children since those are what the cascade
+  // hits on the server.
+  const pendingChildCount = useMemo(() => {
+    if (!pendingCancel || !data) return 0;
+    return data.live.filter(r => r.parent_run_id === pendingCancel.id).length;
+  }, [pendingCancel, data]);
+
+  const doCancel = async () => {
+    if (!pendingCancel) return;
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(pendingCancel.id)}/cancel`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        // Route through the global alert shim — same affordance as the
+        // rest of the app per UI conventions in CLAUDE.md.
+        window.alert(
+          `Cancel failed: ${body.error || `HTTP ${res.status}`}`,
+        );
+      }
+      // 200 path: the 2s poll picks up the cancelled status; no manual mutation needed.
+    } catch (err) {
+      window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setCancelling(false);
+      setPendingCancel(null);
+    }
+  };
 
   // Tick `now` every second so live elapsed columns refresh without
   // waiting on the 2s poll.
@@ -289,7 +324,15 @@ export default function JobsPage() {
                     <Td className={amber ? 'text-amber-300 font-medium' : 'text-mc-text-secondary'}>
                       {startedMs ? formatDuration(elapsedMs) : '—'}
                     </Td>
-                    <Td className="text-mc-text-secondary text-xs">—</Td>
+                    <Td className="text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setPendingCancel(row)}
+                        className="px-2 py-0.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10"
+                      >
+                        Cancel
+                      </button>
+                    </Td>
                   </tr>
                 );
               })}
@@ -416,6 +459,40 @@ export default function JobsPage() {
           </>
         )}
       </Section>
+
+      <ConfirmDialog
+        open={pendingCancel !== null}
+        title="Cancel job?"
+        body={
+          pendingCancel ? (
+            <div className="space-y-2">
+              <p>
+                <span className="font-mono text-[11px]">{pendingCancel.kind}</span>
+                {' · '}
+                <span>{pendingCancel.derived_label}</span>
+              </p>
+              {pendingCancel.scope_key && (
+                <p className="font-mono text-[11px] text-mc-text-secondary break-all">
+                  {pendingCancel.scope_key}
+                </p>
+              )}
+              {pendingChildCount > 0 && (
+                <p className="text-amber-300">
+                  This will also cancel {pendingChildCount} in-flight {pendingChildCount === 1 ? 'child' : 'children'}.
+                </p>
+              )}
+              <p className="text-mc-text-secondary">
+                The agent may continue running briefly while shutdown propagates — gateway abort is best-effort.
+              </p>
+            </div>
+          ) : null
+        }
+        confirmLabel={cancelling ? 'Cancelling…' : 'Cancel job'}
+        cancelLabel="Keep running"
+        destructive
+        onConfirm={doCancel}
+        onCancel={() => setPendingCancel(null)}
+      />
     </div>
   );
 }

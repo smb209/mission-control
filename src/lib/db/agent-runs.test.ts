@@ -16,6 +16,9 @@ import {
   getAgentRun,
   listAgentRuns,
   markCancelled,
+  cancelAgentRun,
+  AgentRunNotFoundError,
+  AgentRunNotCancellableError,
   markComplete,
   markFailed,
   markRunning,
@@ -585,4 +588,138 @@ test('listJobs: scheduled.last_failure_md attaches most-recent failed recurring 
   const r = listJobs(ws);
   const sched = r.scheduled.find(x => x.job_id === jobId)!;
   assert.equal(sched.last_failure_md, 'LATEST: gateway 502');
+});
+
+// ─── cancelAgentRun (PR 4) ──────────────────────────────────────────
+
+test('cancelAgentRun: queued → cancelled stamps timestamp + error_md', () => {
+  const ws = freshWorkspace();
+  const r = createAgentRun({ workspace_id: ws, kind: 'pm_chat' });
+  assert.equal(r.status, 'queued');
+  const result = cancelAgentRun(r.id);
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.children_cancelled, 0);
+  const after = getAgentRun(r.id)!;
+  assert.equal(after.status, 'cancelled');
+  assert.equal(after.error_md, 'Cancelled by operator');
+  assert.ok(after.completed_at, 'completed_at stamped');
+});
+
+test('cancelAgentRun: running → cancelled', () => {
+  const ws = freshWorkspace();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'plan',
+    scope_key: 's',
+    scope_type: 'plan',
+    role: 'planner',
+    agent_id: 'a',
+  });
+  const result = cancelAgentRun(id);
+  assert.equal(result.status, 'cancelled');
+  const row = getAgentRun(id)!;
+  assert.equal(row.status, 'cancelled');
+});
+
+test('cancelAgentRun: missing id throws AgentRunNotFoundError', () => {
+  assert.throws(() => cancelAgentRun('does-not-exist'), AgentRunNotFoundError);
+});
+
+test('cancelAgentRun: already-complete row throws AgentRunNotCancellableError', () => {
+  const ws = freshWorkspace();
+  const r = createAgentRun({ workspace_id: ws, kind: 'pm_chat' });
+  markRunning(r.id);
+  markComplete(r.id);
+  assert.throws(() => cancelAgentRun(r.id), AgentRunNotCancellableError);
+});
+
+test('cancelAgentRun: already-cancelled row throws AgentRunNotCancellableError', () => {
+  const ws = freshWorkspace();
+  const r = createAgentRun({ workspace_id: ws, kind: 'pm_chat' });
+  markCancelled(r.id);
+  assert.throws(() => cancelAgentRun(r.id), AgentRunNotCancellableError);
+});
+
+test('cancelAgentRun: parent + 2 running children all flip to cancelled', () => {
+  const ws = freshWorkspace();
+  const parentId = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:1',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-parent',
+  });
+  const childA = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:1:a',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-child-a',
+    parent_run_id: parentId,
+  });
+  const childB = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:1:b',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-child-b',
+    parent_run_id: parentId,
+  });
+
+  const result = cancelAgentRun(parentId);
+  assert.equal(result.children_cancelled, 2);
+  assert.equal(getAgentRun(parentId)!.status, 'cancelled');
+  const a = getAgentRun(childA)!;
+  const b = getAgentRun(childB)!;
+  assert.equal(a.status, 'cancelled');
+  assert.equal(b.status, 'cancelled');
+  assert.equal(a.error_md, 'Parent cancelled by operator');
+  assert.equal(b.error_md, 'Parent cancelled by operator');
+});
+
+test('cancelAgentRun: child already complete is left alone', () => {
+  const ws = freshWorkspace();
+  const parentId = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:2',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-parent',
+  });
+  const childDone = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:2:done',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-done',
+    parent_run_id: parentId,
+  });
+  completeAgentRun(childDone);
+  const childRunning = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'audit:2:run',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a-run',
+    parent_run_id: parentId,
+  });
+
+  const result = cancelAgentRun(parentId);
+  assert.equal(result.children_cancelled, 1, 'only running child cancelled');
+  assert.equal(getAgentRun(childDone)!.status, 'complete', 'finished child untouched');
+  assert.equal(getAgentRun(childRunning)!.status, 'cancelled');
+});
+
+test('cancelAgentRun: returns openclaw_session_id from the row', () => {
+  const ws = freshWorkspace();
+  const r = createAgentRun({ workspace_id: ws, kind: 'pm_chat' });
+  markRunning(r.id, { openclaw_session_id: 'agent:mc-pm-default:dispatch-main' });
+  const result = cancelAgentRun(r.id);
+  assert.equal(result.openclaw_session_id, 'agent:mc-pm-default:dispatch-main');
 });
