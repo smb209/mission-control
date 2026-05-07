@@ -45,6 +45,14 @@ export interface Initiative {
   source_idea_id: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Count of non-archived agent_notes attached to this initiative.
+   * Populated by `listInitiatives` and `getInitiativeTree` (the list-card
+   * paths) via LEFT JOIN; left undefined by single-row reads
+   * (`getInitiative`, INSERT/UPDATE round-trips) since those callers
+   * don't render the indicator. Treat absence as 0.
+   */
+  note_count?: number;
 }
 
 export interface InitiativeDependency {
@@ -184,33 +192,50 @@ export interface ListInitiativesFilters {
 }
 
 export function listInitiatives(filters: ListInitiativesFilters = {}): Initiative[] {
+  // Build WHERE against the `i.` alias from the start so the JOIN below
+  // doesn't need post-hoc rewriting.
   const where: string[] = [];
   const params: unknown[] = [];
 
   if (filters.workspace_id) {
-    where.push('workspace_id = ?');
+    where.push('i.workspace_id = ?');
     params.push(filters.workspace_id);
   }
   if (filters.product_id) {
-    where.push('product_id = ?');
+    where.push('i.product_id = ?');
     params.push(filters.product_id);
   }
   if (filters.parent_id === null) {
-    where.push('parent_initiative_id IS NULL');
+    where.push('i.parent_initiative_id IS NULL');
   } else if (typeof filters.parent_id === 'string') {
-    where.push('parent_initiative_id = ?');
+    where.push('i.parent_initiative_id = ?');
     params.push(filters.parent_id);
   }
   if (filters.status) {
-    where.push('status = ?');
+    where.push('i.status = ?');
     params.push(filters.status);
   }
   if (filters.kind) {
-    where.push('kind = ?');
+    where.push('i.kind = ?');
     params.push(filters.kind);
   }
 
-  const sql = `SELECT * FROM initiatives ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY sort_order, created_at`;
+  // LEFT JOIN a COUNT-by-initiative_id subquery for the note-presence
+  // indicator on list cards. Excludes archived notes so the chip
+  // disappears when the operator empties the trash. Subquery uses the
+  // existing idx_agent_notes_initiative index.
+  const sql = `
+    SELECT i.*, COALESCE(n.note_count, 0) AS note_count
+      FROM initiatives i
+      LEFT JOIN (
+        SELECT initiative_id, COUNT(*) AS note_count
+          FROM agent_notes
+         WHERE initiative_id IS NOT NULL
+           AND archived_at IS NULL
+         GROUP BY initiative_id
+      ) n ON n.initiative_id = i.id
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY i.sort_order, i.created_at`;
   return queryAll<Initiative>(sql, params);
 }
 
@@ -224,8 +249,19 @@ export interface InitiativeTreeNode extends Initiative {
  * is flattened into a single array so callers can render a top-level list.
  */
 export function getInitiativeTree(workspace_id: string, root_id?: string): InitiativeTreeNode[] {
+  // Same JOIN as listInitiatives so tree-rendered cards also get note_count.
   const all = queryAll<Initiative>(
-    'SELECT * FROM initiatives WHERE workspace_id = ? ORDER BY sort_order, created_at',
+    `SELECT i.*, COALESCE(n.note_count, 0) AS note_count
+       FROM initiatives i
+       LEFT JOIN (
+         SELECT initiative_id, COUNT(*) AS note_count
+           FROM agent_notes
+          WHERE initiative_id IS NOT NULL
+            AND archived_at IS NULL
+          GROUP BY initiative_id
+       ) n ON n.initiative_id = i.id
+      WHERE i.workspace_id = ?
+      ORDER BY i.sort_order, i.created_at`,
     [workspace_id],
   );
 
