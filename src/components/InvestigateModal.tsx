@@ -16,8 +16,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Search, X, Loader2 } from 'lucide-react';
-import { useToast } from '@/components/Toast';
+import {
+  Search,
+  X,
+  Loader2,
+  Activity,
+  CheckCircle2,
+  ExternalLink,
+} from 'lucide-react';
 import { buildInvestigateBody } from '@/components/inline/investigate-helpers';
 
 interface InitiativeLite {
@@ -37,6 +43,12 @@ export interface InvestigateModalProps {
   /** Audit scope. Drives radio visibility + endpoint mode. */
   mode?: 'narrow' | 'subtree';
   onClose: () => void;
+  /**
+   * Called after a successful dispatch. The modal stays open and shows
+   * a confirmation panel — the parent should NOT close the modal in
+   * response (closing happens when the operator clicks Done or
+   * View Activity).
+   */
   onDispatched: (result: {
     mode: 'narrow' | 'subtree';
     scope_key?: string;
@@ -46,6 +58,13 @@ export interface InvestigateModalProps {
     planned_layers?: number;
     concurrency?: number;
   }) => void;
+  /**
+   * Called when the operator clicks "View activity" on the confirmation
+   * panel. Parent should close the modal AND scroll the Activity strip
+   * into view (audit-actions PR 2 mounts the strip on InitiativeDetailView).
+   * If omitted, the button falls back to plain `onClose`.
+   */
+  onViewActivity?: () => void;
 }
 
 interface SubtreePlan {
@@ -55,9 +74,157 @@ interface SubtreePlan {
   per_node_timeout_ms: number;
 }
 
+/**
+ * Persistent confirmation panel shown after a successful dispatch.
+ *
+ * Polls /api/jobs filtered to this initiative every 2s and renders a
+ * compact live-status line so the operator can watch the dispatch
+ * progress without leaving the modal. The same data backs the Activity
+ * strip on InitiativeDetailView (audit-actions PR 2) — this is just an
+ * in-modal echo so the dispatch confirmation isn't a vanishing toast.
+ */
+function DispatchedPanel({
+  initiative,
+  result,
+  onRunAnother,
+}: {
+  initiative: InitiativeLite;
+  result: DispatchResult;
+  onRunAnother: () => void;
+}) {
+  interface JobsRow {
+    id: string;
+    kind: string;
+    status: string;
+    started_at: string | null;
+    completed_at?: string | null;
+    derived_label: string;
+    parent_run_id: string | null;
+  }
+  const [live, setLive] = useState<JobsRow[]>([]);
+  const [recent, setRecent] = useState<JobsRow[]>([]);
+  const [now, setNow] = useState<number>(Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      try {
+        const url = `/api/jobs?workspace_id=${encodeURIComponent(initiative.workspace_id)}&initiative_id=${encodeURIComponent(initiative.id)}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as { live: JobsRow[]; recent: JobsRow[] };
+        if (cancelled) return;
+        setLive(json.live ?? []);
+        setRecent(json.recent ?? []);
+      } catch {
+        /* swallow — the strip on the page handles surfacing errors. */
+      } finally {
+        if (!cancelled) timer = setTimeout(tick, 2000);
+      }
+    };
+    tick();
+    const elapsedTimer = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      clearInterval(elapsedTimer);
+    };
+  }, [initiative.id, initiative.workspace_id]);
+
+  // Filter to runs started at-or-after the dispatch we just kicked off.
+  // Belt-and-braces: scope_key alone would match too, but a parent
+  // running in subtree fanout doesn't carry the per-node scope.
+  const dispatchedAtMs = new Date(result.dispatched_at).getTime();
+  const inFlight = live.filter((r) => {
+    if (!r.started_at) return true;
+    const t = new Date(r.started_at + (r.started_at.includes('T') ? '' : 'Z')).getTime();
+    // Tolerate clock skew: include rows started up to 5s before dispatch.
+    return t >= dispatchedAtMs - 5_000;
+  });
+  const justCompleted = recent.filter((r) => {
+    if (!r.completed_at) return false;
+    const t = new Date(r.completed_at + (r.completed_at.includes('T') ? '' : 'Z')).getTime();
+    return t >= dispatchedAtMs - 5_000;
+  });
+
+  const runningCount = inFlight.filter((r) => r.status === 'running' || r.status === 'queued').length;
+  const completeCount = justCompleted.filter((r) => r.status === 'complete').length;
+  const failedCount = justCompleted.filter((r) => r.status === 'failed' || r.status === 'cancelled').length;
+
+  const summary =
+    result.mode === 'subtree'
+      ? `${result.planned_nodes} initiative${result.planned_nodes === 1 ? '' : 's'} across ${result.planned_layers} layer${result.planned_layers === 1 ? '' : 's'} (up to ${result.concurrency} parallel)`
+      : `Narrow audit, attempt ${result.attempt}`;
+
+  function elapsedSec(iso: string | null): number {
+    if (!iso) return 0;
+    const t = new Date(iso + (iso.includes('T') ? '' : 'Z')).getTime();
+    return Math.max(0, Math.round((now - t) / 1000));
+  }
+
+  return (
+    <div className="px-5 py-4 flex flex-col gap-3">
+      <div className="text-sm text-mc-text">
+        <p className="leading-snug">
+          {summary}. Activity is now visible on the initiative&apos;s detail page,
+          so a refresh won&apos;t lose it.
+        </p>
+      </div>
+
+      <div className="rounded border border-mc-border/60 bg-mc-bg/40 px-3 py-2 text-xs text-mc-text-secondary leading-relaxed">
+        {runningCount === 0 && completeCount === 0 && failedCount === 0 ? (
+          <span className="opacity-70">Waiting for the run to register…</span>
+        ) : (
+          <ul className="space-y-1">
+            <li>
+              <strong className="text-mc-text">{runningCount}</strong> running
+              {runningCount > 0 && inFlight[0]?.started_at && (
+                <span className="opacity-70">
+                  {' '}
+                  · oldest {elapsedSec(inFlight[0].started_at)}s
+                </span>
+              )}
+            </li>
+            {completeCount > 0 && (
+              <li className="text-emerald-600 dark:text-emerald-400">
+                <strong>{completeCount}</strong> complete
+              </li>
+            )}
+            {failedCount > 0 && (
+              <li className="text-rose-600 dark:text-rose-400">
+                <strong>{failedCount}</strong> failed/cancelled
+              </li>
+            )}
+          </ul>
+        )}
+      </div>
+
+      <button
+        onClick={onRunAnother}
+        className="self-start text-xs underline text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
+      >
+        <ExternalLink className="w-3 h-3" />
+        Run another audit
+      </button>
+    </div>
+  );
+}
+
 type Reaudit = 'fresh' | 'build_on';
 
 const GUIDANCE_MAX = 2000;
+
+interface DispatchResult {
+  mode: 'narrow' | 'subtree';
+  scope_key?: string;
+  root_scope_key?: string;
+  attempt?: number;
+  planned_nodes?: number;
+  planned_layers?: number;
+  concurrency?: number;
+  dispatched_at: string;
+}
 
 export default function InvestigateModal({
   initiative,
@@ -65,6 +232,7 @@ export default function InvestigateModal({
   mode = 'narrow',
   onClose,
   onDispatched,
+  onViewActivity,
 }: InvestigateModalProps) {
   const [reaudit, setReaudit] = useState<Reaudit>('fresh');
   const [guidance, setGuidance] = useState('');
@@ -72,7 +240,10 @@ export default function InvestigateModal({
   const [err, setErr] = useState<string | null>(null);
   const [plan, setPlan] = useState<SubtreePlan | null>(null);
   const [planErr, setPlanErr] = useState<string | null>(null);
-  const { addToast } = useToast();
+  // After a successful dispatch, the modal swaps to a persistent
+  // confirmation panel instead of closing. Operator dismisses via
+  // "Done" or jumps to the Activity strip via "View activity".
+  const [dispatched, setDispatched] = useState<DispatchResult | null>(null);
 
   // Pre-flight: when opened in subtree mode, fetch the planned-nodes /
   // planned-layers / concurrency from the dryrun endpoint so we can
@@ -150,6 +321,7 @@ export default function InvestigateModal({
           (body as { error?: string }).error || `Investigate failed (${res.status})`,
         );
       }
+      const dispatchedAt = new Date().toISOString();
       if (mode === 'subtree') {
         const { root_scope_key, planned_nodes, planned_layers, concurrency } =
           body as {
@@ -158,32 +330,29 @@ export default function InvestigateModal({
             planned_layers: number;
             concurrency: number;
           };
-        addToast({
-          type: 'success',
-          title: 'Subtree audit dispatched',
-          message: `${planned_nodes} initiative${planned_nodes === 1 ? '' : 's'} across ${planned_layers} layer${planned_layers === 1 ? '' : 's'} (up to ${concurrency} parallel). Each node’s note will appear in its own initiative’s notes panel as it lands.`,
-          duration: 10000,
-        });
-        onDispatched({
+        const result: DispatchResult = {
           mode: 'subtree',
           root_scope_key,
           planned_nodes,
           planned_layers,
           concurrency,
-        });
+          dispatched_at: dispatchedAt,
+        };
+        setDispatched(result);
+        onDispatched(result);
       } else {
         const { scope_key, attempt } = body as {
           scope_key: string;
           attempt: number;
         };
-        addToast({
-          type: 'success',
-          title: 'Audit dispatched to researcher',
-          message:
-            'Note will appear in this initiative’s notes panel when the researcher finishes (typically 1–15 min).',
-          duration: 8000,
-        });
-        onDispatched({ mode: 'narrow', scope_key, attempt });
+        const result: DispatchResult = {
+          mode: 'narrow',
+          scope_key,
+          attempt,
+          dispatched_at: dispatchedAt,
+        };
+        setDispatched(result);
+        onDispatched(result);
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Investigate failed');
@@ -207,12 +376,20 @@ export default function InvestigateModal({
       >
         <header className="flex items-start justify-between gap-2 px-5 py-3 border-b border-mc-border">
           <div className="flex items-start gap-2">
-            <Search className="w-4 h-4 mt-0.5 text-mc-accent shrink-0" />
+            {dispatched ? (
+              <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-500 shrink-0" />
+            ) : (
+              <Search className="w-4 h-4 mt-0.5 text-mc-accent shrink-0" />
+            )}
             <div className="min-w-0">
               <h2 className="text-base font-semibold leading-tight">
-                {mode === 'subtree'
-                  ? 'Investigate subtree (bottom-up)'
-                  : 'Investigate initiative'}
+                {dispatched
+                  ? mode === 'subtree'
+                    ? 'Subtree audit dispatched'
+                    : 'Audit dispatched'
+                  : mode === 'subtree'
+                    ? 'Investigate subtree (bottom-up)'
+                    : 'Investigate initiative'}
               </h2>
               <p className="text-xs text-mc-text-secondary mt-0.5 truncate" title={initiative.title}>
                 {initiative.title}
@@ -229,6 +406,16 @@ export default function InvestigateModal({
           </button>
         </header>
 
+        {dispatched ? (
+          <DispatchedPanel
+            initiative={initiative}
+            result={dispatched}
+            onRunAnother={() => {
+              setDispatched(null);
+              setErr(null);
+            }}
+          />
+        ) : (
         <div className="px-5 py-4 flex flex-col gap-4">
           {err && (
             <div
@@ -333,30 +520,53 @@ export default function InvestigateModal({
             </p>
           )}
         </div>
+        )}
 
         <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={submitting}
-            className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={submitting}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Dispatching…
-              </>
-            ) : (
-              <>
-                <Search className="w-3.5 h-3.5" /> Investigate
-              </>
-            )}
-          </button>
+          {dispatched ? (
+            <>
+              <button
+                onClick={onClose}
+                className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
+              >
+                Done
+              </button>
+              <button
+                onClick={() => {
+                  if (onViewActivity) onViewActivity();
+                  else onClose();
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm"
+              >
+                <Activity className="w-3.5 h-3.5" /> View activity
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={onClose}
+                disabled={submitting}
+                className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submit}
+                disabled={submitting}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Dispatching…
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-3.5 h-3.5" /> Investigate
+                  </>
+                )}
+              </button>
+            </>
+          )}
         </footer>
       </div>
     </div>
