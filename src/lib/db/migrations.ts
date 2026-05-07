@@ -4312,6 +4312,96 @@ const migrations: Migration[] = [
       console.log('[Migration 079] audit_per_node_timeout_ms + audit_subtree_concurrency columns added to workspaces.');
     },
   },
+  {
+    id: '080',
+    name: 'extend_agent_runs',
+    up: (db) => {
+      // Jobs-in-Progress (PR 1): relax agent_runs.kind enum, extend
+      // source_kind to include 'fanout', and add scope/role/agent
+      // attribution + parent_run_id linkage. See specs/jobs-in-progress.md.
+      //
+      // SQLite has no ALTER CONSTRAINT, so we rebuild the table. The
+      // table itself must already exist (migration 075 created it); if a
+      // fresh-bootstrapped DB hasn't reached that yet we no-op.
+      const tableRow = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_runs'")
+        .get() as { sql: string } | undefined;
+      if (!tableRow) {
+        console.log('[Migration 080] agent_runs missing; nothing to extend, skipping.');
+        return;
+      }
+      // Idempotency: if we've already added the new columns, bail out.
+      const cols = db.prepare(`PRAGMA table_info(agent_runs)`).all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === 'scope_key')) {
+        console.log('[Migration 080] agent_runs already extended; skipping.');
+        return;
+      }
+
+      db.exec(`ALTER TABLE agent_runs RENAME TO _agent_runs_old_080`);
+      db.exec(`
+        CREATE TABLE agent_runs (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN (
+            'brief',
+            'pm_chat',
+            'plan',
+            'decompose',
+            'initiative_audit',
+            'recurring',
+            'task_coord',
+            'task_role'
+          )),
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+            'queued','running','complete','failed','cancelled'
+          )),
+          source_kind TEXT NOT NULL DEFAULT 'manual' CHECK (source_kind IN (
+            'manual','schedule','event','fanout'
+          )),
+          source_ref TEXT,
+          scope_key TEXT,
+          scope_type TEXT,
+          role TEXT,
+          agent_id TEXT,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL,
+          task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          parent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+          label TEXT,
+          openclaw_session_id TEXT,
+          model_used TEXT,
+          cost_cents INTEGER,
+          cost_ceiling_cents INTEGER,
+          error_md TEXT,
+          started_at TEXT,
+          completed_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      db.exec(`
+        INSERT INTO agent_runs (
+          id, workspace_id, kind, status, source_kind, source_ref,
+          openclaw_session_id, model_used, cost_cents, cost_ceiling_cents,
+          error_md, started_at, completed_at, created_at, updated_at
+        )
+        SELECT id, workspace_id, kind, status, source_kind, source_ref,
+               openclaw_session_id, model_used, cost_cents, cost_ceiling_cents,
+               error_md, started_at, completed_at, created_at, updated_at
+        FROM _agent_runs_old_080
+      `);
+      db.exec(`DROP TABLE _agent_runs_old_080`);
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_workspace_status ON agent_runs(workspace_id, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_kind_status     ON agent_runs(kind, status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_created         ON agent_runs(created_at)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_scope_key       ON agent_runs(scope_key) WHERE scope_key IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_initiative      ON agent_runs(initiative_id) WHERE initiative_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_task            ON agent_runs(task_id) WHERE task_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_parent          ON agent_runs(parent_run_id) WHERE parent_run_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_runs_active          ON agent_runs(status, started_at) WHERE status IN ('queued','running')`);
+      console.log('[Migration 080] agent_runs extended with scope/role/agent/parent attribution; kind enum relaxed.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
