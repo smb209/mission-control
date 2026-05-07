@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS workspaces (
   -- memory grounding (precursor to the memory-layer epic). NULL → no
   -- block prepended. See migration 056.
   context_md TEXT,
+  -- Per-node timeout (ms) for the initiative-audit subtree flow.
+  -- See specs/initiative-investigate.md §"Decisions" item 1. Migration 079.
+  audit_per_node_timeout_ms INTEGER NOT NULL DEFAULT 900000,
+  -- Max parallel researcher dispatches per layer in subtree-audit fan-out.
+  audit_subtree_concurrency INTEGER NOT NULL DEFAULT 4,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

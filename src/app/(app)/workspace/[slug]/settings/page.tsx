@@ -48,6 +48,9 @@ interface WorkspaceWithDefault {
    *  v0 of org-scope memory grounding — see docs/specs and the
    *  Ground-agents theme on the roadmap. */
   context_md?: string | null;
+  /** Initiative-audit knobs. Migration 079 / specs/initiative-investigate.md. */
+  audit_per_node_timeout_ms?: number | null;
+  audit_subtree_concurrency?: number | null;
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
   created_at: string;
@@ -175,6 +178,7 @@ export default function WorkspaceSettingsPage({
     { id: 'identity', label: 'Identity' },
     { id: 'project-root', label: 'Project root' },
     { id: 'conventions', label: 'Workspace conventions' },
+    { id: 'audit-defaults', label: 'Audit defaults' },
     { id: 'export', label: 'Export' },
     { id: 'danger-zone', label: 'Danger zone' },
   ];
@@ -318,6 +322,63 @@ export default function WorkspaceSettingsPage({
               label="Edit workspace conventions"
               onDraftChange={setConventionsDraft}
             />
+          </Field>
+        </Section>
+
+        {/* Audit defaults — workspace-scoped knobs for the initiative
+            Investigate flow's subtree mode. See
+            specs/initiative-investigate.md §"Decisions" item 1. */}
+        <Section
+          id="audit-defaults"
+          title="Audit defaults"
+          description={
+            <>
+              Knobs for the initiative <strong>Investigate ▾ → Whole subtree</strong>{' '}
+              flow. These values are read at dispatch time, so changing them
+              only affects subsequent audit runs.
+            </>
+          }
+        >
+          <Field label="Per-node timeout (minutes)">
+            <InlineText
+              value={String(
+                Math.round(
+                  (workspace.audit_per_node_timeout_ms ?? 15 * 60_000) / 60_000,
+                ),
+              )}
+              onSave={async (next) => {
+                const minutes = Number(next);
+                if (!Number.isFinite(minutes) || minutes < 1 || minutes > 60) {
+                  throw new Error('Enter a whole number of minutes between 1 and 60');
+                }
+                await patch({ audit_per_node_timeout_ms: Math.round(minutes) * 60_000 });
+              }}
+              placeholder="15"
+              label="Edit per-node timeout"
+            />
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              How long a single researcher is allowed before MC marks the
+              node failed and proceeds. Default 15 min. Range 1–60 min.
+            </p>
+          </Field>
+          <Field label="Subtree concurrency">
+            <InlineText
+              value={String(workspace.audit_subtree_concurrency ?? 4)}
+              onSave={async (next) => {
+                const n = Number(next);
+                if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 8) {
+                  throw new Error('Enter a whole number between 1 and 8');
+                }
+                await patch({ audit_subtree_concurrency: n });
+              }}
+              placeholder="4"
+              label="Edit subtree concurrency"
+            />
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              Max parallel researcher dispatches per layer. Default 4.
+              Range 1–8. Dial up if your runner can hose the LLM; dial
+              down to keep cost predictable.
+            </p>
           </Field>
         </Section>
 

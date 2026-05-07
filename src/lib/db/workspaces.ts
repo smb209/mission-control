@@ -32,6 +32,51 @@
 
 import { getDb } from './index';
 
+/**
+ * Defaults for the initiative-audit subtree flow. Match the values the
+ * spec describes (specs/initiative-investigate.md §"Decisions" item 1)
+ * and the column defaults applied by migration 079.
+ */
+export const AUDIT_PER_NODE_TIMEOUT_MS_DEFAULT = 15 * 60_000;
+export const AUDIT_SUBTREE_CONCURRENCY_DEFAULT = 4;
+export const AUDIT_PER_NODE_TIMEOUT_MS_MIN = 60_000; // 1 min
+export const AUDIT_PER_NODE_TIMEOUT_MS_MAX = 60 * 60_000; // 60 min
+export const AUDIT_SUBTREE_CONCURRENCY_MIN = 1;
+export const AUDIT_SUBTREE_CONCURRENCY_MAX = 8;
+
+export interface AuditSettings {
+  perNodeTimeoutMs: number;
+  subtreeConcurrency: number;
+}
+
+/**
+ * Read the workspace's audit knobs, falling back to spec defaults if
+ * the row is missing or the columns are NULL (shouldn't happen post
+ * migration 079, but defensive — older snapshots may not have run it).
+ */
+export function getAuditSettings(workspaceId: string): AuditSettings {
+  const db = getDb();
+  let row: { t: number | null; c: number | null } | undefined;
+  try {
+    row = db
+      .prepare(
+        `SELECT audit_per_node_timeout_ms as t, audit_subtree_concurrency as c
+           FROM workspaces WHERE id = ?`,
+      )
+      .get(workspaceId) as { t: number | null; c: number | null } | undefined;
+  } catch {
+    // Columns missing on a pre-079 DB; return defaults.
+    return {
+      perNodeTimeoutMs: AUDIT_PER_NODE_TIMEOUT_MS_DEFAULT,
+      subtreeConcurrency: AUDIT_SUBTREE_CONCURRENCY_DEFAULT,
+    };
+  }
+  return {
+    perNodeTimeoutMs: row?.t ?? AUDIT_PER_NODE_TIMEOUT_MS_DEFAULT,
+    subtreeConcurrency: row?.c ?? AUDIT_SUBTREE_CONCURRENCY_DEFAULT,
+  };
+}
+
 export interface WorkspaceCascadeCounts {
   tasks: number;
   agents: number;
