@@ -356,32 +356,49 @@ export function registerCoreTools(server: McpServer): void {
           .string()
           .min(1)
           .max(NOTE_BODY_MAX)
-          .describe('Concrete > aspirational. One thought per note. Reference file paths in attached_files.'),
+          .describe(
+            `REQUIRED. Concrete > aspirational. One thought per note. Hard limit ${NOTE_BODY_MAX} characters. If your finding doesn't fit (e.g. a multi-section audit report), attach the full report as a deliverable via register_deliverable and use this body for a tight summary + verdict + link only. Reference file paths in attached_files.`,
+          ),
         scope_key: z
           .string()
           .min(1)
-          .describe('The openclaw sessionKey you are running under. Take this verbatim from your dispatch briefing.'),
+          .describe(
+            'REQUIRED. The openclaw sessionKey you are running under. Take this verbatim from your dispatch briefing.',
+          ),
         role: z
           .string()
           .min(1)
-          .describe("Your role-of-the-moment ('builder', 'tester', 'pm', 'researcher', etc.). From the briefing."),
+          .describe(
+            "REQUIRED. Your role-of-the-moment ('builder', 'tester', 'pm', 'researcher', etc.). From the briefing.",
+          ),
         run_group_id: z
           .string()
           .min(1)
-          .describe('UUID minted at session start that groups all notes from one run/stage. From the briefing.'),
-        task_id: z.string().optional().describe('Set when the note relates to a specific task.'),
+          .describe(
+            'REQUIRED. UUID minted at session start that groups all notes from one run/stage. From the briefing.',
+          ),
+        task_id: z
+          .string()
+          .optional()
+          .describe('Optional. Set when the note relates to a specific task.'),
         initiative_id: z
           .string()
           .optional()
-          .describe('Set when the note relates to an initiative directly (no task scope).'),
+          .describe(
+            'Optional. Set when the note relates to an initiative directly (no task scope).',
+          ),
         audience: z
           .string()
           .optional()
-          .describe("Who this note is for: 'pm', 'reviewer', 'next-stage', 'tester', etc. Omit for anyone."),
+          .describe(
+            "Optional. Who this note is for: 'pm', 'reviewer', 'next-stage', 'tester', etc. Omit for anyone.",
+          ),
         attached_files: z
           .array(z.string())
           .optional()
-          .describe('File paths the note references. Helps the next session navigate without re-reading.'),
+          .describe(
+            'Optional. File paths the note references. Helps the next session navigate without re-reading.',
+          ),
         importance: noteImportanceArg.optional(),
       },
       annotations: { destructiveHint: false, openWorldHint: false },
