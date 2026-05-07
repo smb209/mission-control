@@ -233,9 +233,57 @@ export function NoteCard({
             )}
           </span>
         )}
-        <time dateTime={note.created_at} title={note.created_at} className="shrink-0">
-          {formatTime(note.created_at)}
-        </time>
+        <span className="flex items-center gap-1.5 shrink-0">
+          <time dateTime={note.created_at} title={note.created_at}>
+            {formatTime(note.created_at)}
+          </time>
+          {/* Compact icon-only action shortcuts — shown ONLY while
+              collapsed so operators can sweep-archive without expanding
+              every card. When expanded the labelled button row under
+              the body provides the same affordances; we don't double up. */}
+          {!isExpanded && !archived && onArchive && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onArchive(note);
+              }}
+              className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10"
+              aria-label="Archive note"
+              title="Archive — hides from default views; reversible"
+            >
+              <Archive className="w-3 h-3" />
+            </button>
+          )}
+          {!isExpanded && archived && onRestore && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRestore(note);
+              }}
+              className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10"
+              aria-label="Restore note"
+              title="Restore — return to active view"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
+          {!isExpanded && archived && onDelete && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(note);
+              }}
+              className="p-1 rounded text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/40"
+              aria-label="Delete note permanently"
+              title="Delete — permanent; cannot be undone"
+            >
+              <Trash2 className="w-3 h-3" />
+            </button>
+          )}
+        </span>
       </header>
       {isExpanded && (
         <p className="whitespace-pre-wrap leading-relaxed">{note.body}</p>
