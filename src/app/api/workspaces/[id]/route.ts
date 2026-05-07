@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getDb } from '@/lib/db';
 import {
   deleteWorkspaceCascade,
@@ -9,6 +13,44 @@ import {
   AUDIT_SUBTREE_CONCURRENCY_MAX,
 } from '@/lib/db/workspaces';
 import { resolveWorkspacePath } from '@/lib/config';
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Initialize a git repo at `workspacePath` if one isn't already there.
+ * Idempotent — when `.git/` already exists this is a silent no-op.
+ *
+ * Returns a structured result so the route can surface non-blocking
+ * warnings; failure does NOT abort the workspace save (the operator's
+ * primary intent — setting fields — has already succeeded by this point).
+ *
+ * See specs/workspace-conventions-structured.md §5.
+ */
+async function ensureLocalRepo(
+  workspacePath: string,
+): Promise<{ status: 'noop' | 'initialized' | 'error'; message?: string }> {
+  if (!workspacePath || !workspacePath.trim()) {
+    return { status: 'error', message: 'workspace_path is empty; cannot init git here' };
+  }
+  if (!existsSync(workspacePath)) {
+    return {
+      status: 'error',
+      message: `workspace_path '${workspacePath}' does not exist on disk`,
+    };
+  }
+  if (existsSync(join(workspacePath, '.git'))) {
+    return { status: 'noop' };
+  }
+  try {
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: workspacePath });
+    return { status: 'initialized' };
+  } catch (err) {
+    return {
+      status: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 export const dynamic = 'force-dynamic';
 // GET /api/workspaces/[id] - Get a single workspace
@@ -68,6 +110,7 @@ export async function PATCH(
       context_md,
       audit_per_node_timeout_ms,
       audit_subtree_concurrency,
+      local_repo_init,
     } = body;
 
     const db = getDb();
@@ -129,6 +172,11 @@ export async function PATCH(
       updates.push('audit_per_node_timeout_ms = ?');
       values.push(n);
     }
+    if (local_repo_init !== undefined) {
+      // Boolean stored as INTEGER (0/1) per the migration.
+      updates.push('local_repo_init = ?');
+      values.push(local_repo_init ? 1 : 0);
+    }
     if (audit_subtree_concurrency !== undefined) {
       const n = Number(audit_subtree_concurrency);
       if (!Number.isFinite(n) || !Number.isInteger(n)) {
@@ -160,8 +208,29 @@ export async function PATCH(
       UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?
     `).run(...values);
 
-    const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
-    return NextResponse.json(workspace);
+    const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as
+      | { workspace_path?: string | null; slug: string; local_repo_init?: number }
+      | undefined;
+
+    // Local-repo init: when the operator just flipped the checkbox on
+    // (or had it on already and is re-saving), ensure the working tree
+    // has a git repo. Idempotent. Failures surface as a non-blocking
+    // warning — the workspace save itself has already succeeded.
+    let localRepoInit: { status: string; message?: string } | undefined;
+    if (
+      local_repo_init !== undefined &&
+      local_repo_init &&
+      workspace
+    ) {
+      const effectivePath =
+        (workspace.workspace_path && workspace.workspace_path.trim()) ||
+        resolveWorkspacePath(workspace.slug, null);
+      localRepoInit = await ensureLocalRepo(effectivePath);
+    }
+
+    return NextResponse.json(
+      localRepoInit ? { ...workspace, local_repo_init_result: localRepoInit } : workspace,
+    );
   } catch (error) {
     console.error('Failed to update workspace:', error);
     return NextResponse.json({ error: 'Failed to update workspace' }, { status: 500 });

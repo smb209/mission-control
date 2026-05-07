@@ -23,9 +23,17 @@ import {
   AlertTriangle,
   Download,
   Folder,
+  GitBranch,
   Loader,
   Trash2,
+  FilePlus,
 } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import {
+  resolveVariables,
+  inventoryVariables,
+  type VariableSource,
+} from '@/lib/workspace-conventions/resolve-variables';
 import {
   InlineText,
   InlineTextarea,
@@ -53,8 +61,19 @@ interface WorkspaceWithDefault {
   audit_subtree_concurrency?: number | null;
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
+  /** When true, the PATCH route runs `git init` in workspace_path on save.
+   *  Idempotent. See specs/workspace-conventions-structured.md §5. */
+  local_repo_init?: number | null;
   created_at: string;
   updated_at: string;
+}
+
+interface WorkspaceTemplate {
+  slug: string;
+  title: string;
+  description: string;
+  intended_for: string;
+  body: string;
 }
 
 export default function WorkspaceSettingsPage({
@@ -77,6 +96,9 @@ export default function WorkspaceSettingsPage({
   // Live keystroke draft for the conventions textarea so the right-rail
   // preview updates as the operator types — `null` means "use saved value".
   const [conventionsDraft, setConventionsDraft] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<WorkspaceTemplate[]>([]);
+  const [pendingTemplate, setPendingTemplate] = useState<WorkspaceTemplate | null>(null);
+  const [localRepoInitNotice, setLocalRepoInitNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -104,6 +126,24 @@ export default function WorkspaceSettingsPage({
     refresh();
   }, [refresh]);
 
+  // One-shot fetch of starter templates so the dropdown isn't empty on
+  // first paint. The list is small and rarely-changes; no re-fetch.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workspace-templates')
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setTemplates(data.templates ?? []);
+      })
+      .catch((err) => {
+        console.warn('[settings] template list failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const patch = useCallback(
     async (body: Record<string, unknown>) => {
       if (!workspace) return;
@@ -115,6 +155,24 @@ export default function WorkspaceSettingsPage({
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `Update failed (${res.status})`);
+      }
+      // The PATCH route returns a `local_repo_init_result` envelope when
+      // a `git init` was attempted on save. Surface it as an inline
+      // notice — non-blocking; the field has already saved.
+      try {
+        const data = await res.json();
+        if (data?.local_repo_init_result) {
+          const r = data.local_repo_init_result as { status: string; message?: string };
+          if (r.status === 'initialized') {
+            setLocalRepoInitNotice('Initialized a local git repo in the working tree.');
+          } else if (r.status === 'noop') {
+            setLocalRepoInitNotice('Working tree already has a git repo — no init needed.');
+          } else {
+            setLocalRepoInitNotice(`git init skipped: ${r.message ?? 'unknown error'}`);
+          }
+        }
+      } catch {
+        /* response wasn't JSON — fine; field still saved */
       }
       await refresh();
     },
@@ -177,11 +235,23 @@ export default function WorkspaceSettingsPage({
   const sections = [
     { id: 'identity', label: 'Identity' },
     { id: 'project-root', label: 'Project root' },
+    { id: 'source-control', label: 'Source control' },
     { id: 'conventions', label: 'Workspace conventions' },
     { id: 'audit-defaults', label: 'Audit defaults' },
     { id: 'export', label: 'Export' },
     { id: 'danger-zone', label: 'Danger zone' },
   ];
+
+  // Effective working dir for variable substitution previews — same
+  // resolution the PATCH route uses on save.
+  const effectiveWorkingDir =
+    (workspace.workspace_path && workspace.workspace_path.trim()) ||
+    workspace.default_workspace_path;
+  const variableSrc: VariableSource = {
+    name: workspace.name,
+    working_dir: effectiveWorkingDir,
+    deliverables: effectiveWorkingDir,
+  };
 
   // No top header here: the Identity section below already shows the
   // workspace's name + icon + description, and the global left nav
@@ -202,6 +272,7 @@ export default function WorkspaceSettingsPage({
         <AgentPromptPreview
           contextMd={conventionsDraft ?? workspace.context_md ?? ''}
           dirty={conventionsDraft !== null && conventionsDraft !== (workspace.context_md ?? '')}
+          variableSrc={variableSrc}
         />
       }
       rightRailTitle="Agent prompt preview"
@@ -292,6 +363,45 @@ export default function WorkspaceSettingsPage({
           </Field>
         </Section>
 
+        {/* Source control — local-repo-init checkbox. The repo URL +
+            base-branch fields land in PR 2 of audit-actions structuring
+            (specs/workspace-conventions-structured.md). */}
+        <Section
+          id="source-control"
+          title="Source control"
+          description={
+            <>
+              Even non-code workspaces benefit from local git history — it lets
+              the orchestrator rewind if a thread goes off-track. Toggle
+              <strong className="text-mc-text"> &nbsp;Initialize local git repo&nbsp;</strong>
+              to have MC run <code className="text-mc-text">git init</code> in
+              the working tree on save (idempotent — no-op when{' '}
+              <code className="text-mc-text">.git/</code> is already there).
+            </>
+          }
+        >
+          <Field label="Initialize local git repo">
+            <label className="inline-flex items-center gap-2 text-sm text-mc-text cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!workspace.local_repo_init}
+                onChange={(e) => patch({ local_repo_init: e.target.checked })}
+                aria-label="Initialize local git repo"
+              />
+              <span>
+                <GitBranch className="w-3.5 h-3.5 inline-block mr-1 align-text-bottom" />
+                Run <code className="text-mc-text">git init</code> in{' '}
+                <code className="text-mc-text">{effectiveWorkingDir}</code> on save
+              </span>
+            </label>
+            {localRepoInitNotice && (
+              <p className="text-[11px] text-mc-text-secondary mt-1">
+                {localRepoInitNotice}
+              </p>
+            )}
+          </Field>
+        </Section>
+
         {/* Workspace conventions — rules-of-the-road prepended to every
             dispatched agent's task prompt. v0 of org-scope memory
             grounding (precursor to the memory-layer epic). Operator
@@ -305,25 +415,91 @@ export default function WorkspaceSettingsPage({
             <>
               Markdown that gets prepended to every dispatched task&apos;s
               prompt as a <code className="text-mc-text">## Workspace conventions</code>
-              {' '}block. Use this for repo URLs, testing patterns, push/PR rules,
-              package manager — whatever a fresh agent needs to ground its
-              work. Leave blank to skip the block entirely.
+              {' '}block. Use{' '}
+              <code className="text-mc-text">{`{{name}}`}</code>,{' '}
+              <code className="text-mc-text">{`{{working_dir}}`}</code>,{' '}
+              <code className="text-mc-text">{`{{deliverables}}`}</code>{' '}
+              (and once PR 2 lands,{' '}
+              <code className="text-mc-text">{`{{repo_url}}`}</code>,{' '}
+              <code className="text-mc-text">{`{{base_branch}}`}</code>) — they
+              expand at dispatch time. Leave blank to skip the block entirely.
             </>
           }
         >
+          {templates.length > 0 && (
+            <Field label="Start from a template">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="px-2 py-1 rounded border border-mc-border bg-mc-bg text-sm text-mc-text"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const slug = e.target.value;
+                    if (!slug) return;
+                    const tpl = templates.find((t) => t.slug === slug);
+                    if (!tpl) return;
+                    const current = (conventionsDraft ?? workspace.context_md ?? '').trim();
+                    if (current.length > 0) {
+                      // Confirm before overwriting hand-written content.
+                      setPendingTemplate(tpl);
+                    } else {
+                      patch({ context_md: tpl.body.length > 0 ? tpl.body : null });
+                      setConventionsDraft(tpl.body);
+                    }
+                    e.target.value = '';
+                  }}
+                  aria-label="Insert a starter template"
+                >
+                  <option value="" disabled>
+                    Choose a template…
+                  </option>
+                  {templates.map((tpl) => (
+                    <option key={tpl.slug} value={tpl.slug}>
+                      {tpl.title}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-mc-text-secondary">
+                  <FilePlus className="w-3 h-3 inline-block mr-1 align-text-bottom" />
+                  Templates are starter markdown — edit freely after inserting.
+                </span>
+              </div>
+            </Field>
+          )}
           <Field label="Conventions (markdown)">
             <InlineTextarea
               value={workspace.context_md ?? ''}
               onSave={next =>
                 patch({ context_md: next.length > 0 ? next : null })
               }
-              placeholder={`# Repos\n- ...\n\n# Testing\n- yarn test\n\n# Git rules\n- Never push to main\n- ...`}
+              placeholder={`## Repos\n- Working tree: {{working_dir}}\n\n## Testing\n- ...\n\n## Git rules\n- Never push to main\n`}
               minRows={8}
               label="Edit workspace conventions"
               onDraftChange={setConventionsDraft}
             />
           </Field>
         </Section>
+
+        <ConfirmDialog
+          open={pendingTemplate !== null}
+          title="Replace existing conventions?"
+          body={
+            <p className="text-sm text-mc-text">
+              Inserting <strong>{pendingTemplate?.title ?? 'this template'}</strong>{' '}
+              will replace the conventions you have written so far. The current
+              text isn&apos;t saved anywhere; it will be lost.
+            </p>
+          }
+          confirmLabel="Replace"
+          destructive
+          onConfirm={() => {
+            const tpl = pendingTemplate;
+            setPendingTemplate(null);
+            if (!tpl) return;
+            patch({ context_md: tpl.body.length > 0 ? tpl.body : null });
+            setConventionsDraft(tpl.body);
+          }}
+          onCancel={() => setPendingTemplate(null)}
+        />
 
         {/* Audit defaults — workspace-scoped knobs for the initiative
             Investigate flow's subtree mode. See
@@ -501,9 +677,11 @@ export default function WorkspaceSettingsPage({
 function AgentPromptPreview({
   contextMd,
   dirty = false,
+  variableSrc,
 }: {
   contextMd: string;
   dirty?: boolean;
+  variableSrc: VariableSource;
 }) {
   const trimmed = contextMd.trim();
   if (!trimmed) {
@@ -519,6 +697,10 @@ function AgentPromptPreview({
       </div>
     );
   }
+  // Expand `{{...}}` so the preview shows what the agent actually sees.
+  const resolved = resolveVariables(trimmed, variableSrc);
+  const variableUsage = inventoryVariables(trimmed, variableSrc);
+  const warnings = variableUsage.filter((v) => !v.known || v.empty);
   return (
     <div className="rounded-lg border border-mc-border/60 bg-mc-bg-secondary">
       <header className="px-4 py-2 border-b border-mc-border/60 flex items-center justify-between gap-2">
@@ -533,9 +715,26 @@ function AgentPromptPreview({
           </span>
         )}
       </header>
+      {warnings.length > 0 && (
+        <div className="px-4 py-2 border-b border-mc-border/60 text-[10px] flex flex-wrap gap-1.5 bg-amber-500/5">
+          {warnings.map((v) => (
+            <span
+              key={v.variable}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200"
+              title={
+                v.known
+                  ? `{{${v.variable}}} resolves to an empty value — set the field above to populate it.`
+                  : `{{${v.variable}}} is not a known variable — likely a typo.`
+              }
+            >
+              ⚠️ {`{{${v.variable}}}`} {v.known ? '(empty)' : '(unknown)'}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="p-4 mc-md text-xs text-mc-text break-words">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {`## Workspace conventions\n\n${trimmed}\n\n---`}
+          {`## Workspace conventions\n\n${resolved}\n\n---`}
         </ReactMarkdown>
       </div>
     </div>

@@ -4436,6 +4436,25 @@ const migrations: Migration[] = [
       console.log('[Migration 081] agent_runs.trigger_body + pm_proposal_id columns added.');
     },
   },
+  {
+    id: '082',
+    name: 'workspaces_local_repo_init',
+    up: (db) => {
+      // Workspace conventions structuring (PR 1): one boolean — when
+      // true, the PATCH /api/workspaces/:id route runs `git init` in
+      // the workspace_path on save (idempotent — no-op if `.git/` is
+      // already there). Lets operators wire up a folder-only workspace
+      // for local commit history without leaving the settings page.
+      // See specs/workspace-conventions-structured.md §5.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'local_repo_init')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN local_repo_init INTEGER NOT NULL DEFAULT 0`);
+        console.log('[Migration 082] workspaces.local_repo_init added.');
+      } else {
+        console.log('[Migration 082] workspaces.local_repo_init already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
