@@ -4493,6 +4493,28 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '085',
+    name: 'agent_runs_run_group_id',
+    up: (db) => {
+      // Link agent_runs back to the run_group_id minted by
+      // dispatch-scope. Lets tools (take_note first; later
+      // register_deliverable, log_activity, propose_changes) refuse
+      // writes from a worker whose run was already cancelled.
+      // See specs/dedupe-investigations.md.
+      const cols = db.prepare(`PRAGMA table_info(agent_runs)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'run_group_id')) {
+        db.exec(`ALTER TABLE agent_runs ADD COLUMN run_group_id TEXT`);
+        console.log('[Migration 085] agent_runs.run_group_id added (nullable).');
+      } else {
+        console.log('[Migration 085] agent_runs.run_group_id already present; skipping.');
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_run_group
+        ON agent_runs(run_group_id) WHERE run_group_id IS NOT NULL
+      `);
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
