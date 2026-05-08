@@ -132,58 +132,82 @@ export function inferTargetInitiativeId(diffs: PmDiff[]): string | null {
 
 /**
  * Kind chip — colored uppercase badge that says, at a glance, what
- * kind of change this row represents. Replaces the previous mix of
- * leading-bullet / "status_check X" / arrow forms with one consistent
- * column the operator can scan vertically.
+ * kind of change this row represents. The `tooltip` field gives the
+ * operator a one-line explainer on hover so non-obvious kinds (STATUS
+ * CHECK, REORDER, DEP+/-) don't require chasing docs.
  */
-const KIND_CHIP: Record<string, { label: string; cls: string } | undefined> = {
+const KIND_CHIP: Record<
+  string,
+  { label: string; cls: string; tooltip: string } | undefined
+> = {
   create_epic: {
     label: 'NEW EPIC',
     cls: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
+    tooltip: 'Creates a brand-new epic-kind initiative under the named parent.',
   },
   create_story: {
     label: 'NEW STORY',
     cls: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
+    tooltip: 'Creates a brand-new story-kind initiative under the named parent.',
   },
   create_initiative: {
     label: 'NEW',
     cls: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-200',
+    tooltip: 'Creates a brand-new initiative under the named parent.',
   },
   create_task_under_initiative: {
     label: 'NEW TASK',
     cls: 'border-violet-500/30 bg-violet-500/15 text-violet-200',
+    tooltip:
+      'Creates a brand-new task attached to the named initiative. Lands as a draft for the operator to dispatch.',
   },
   set_initiative_status: {
     label: 'STATUS',
     cls: 'border-sky-500/30 bg-sky-500/15 text-sky-200',
+    tooltip:
+      "Updates an existing initiative's status (e.g. planned → in_progress). PM-proposed updates can't flip to done/cancelled — those are operator-only.",
   },
   update_status_check: {
     label: 'STATUS CHECK',
     cls: 'border-indigo-500/30 bg-indigo-500/15 text-indigo-200',
+    tooltip:
+      "Rewrites an existing initiative's status_check_md (the freeform markdown shown on the initiative page summarizing status / linked PRs / waiting-on / demo plan). Hover the body for the proposed new content.",
   },
   shift_initiative_target: {
     label: 'TARGET',
     cls: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
+    tooltip:
+      "Updates an existing initiative's target_start / target_end window. Used when the operator says \"slip the launch by a week\".",
   },
   add_dependency: {
     label: 'DEP +',
     cls: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-200',
+    tooltip:
+      'Adds a dependency edge — A blocks on B. The schedule derivation engine respects these when computing derived dates.',
   },
   remove_dependency: {
     label: 'DEP −',
     cls: 'border-rose-500/30 bg-rose-500/15 text-rose-200',
+    tooltip:
+      'Removes an existing dependency edge by id. Inverse of DEP +.',
   },
   reorder_initiatives: {
     label: 'REORDER',
     cls: 'border-stone-500/30 bg-stone-500/15 text-stone-200',
+    tooltip:
+      'Re-orders sibling initiatives under a shared parent (sort_order column). Cosmetic — affects only display order, not scheduling.',
   },
   add_availability: {
     label: 'AVAIL',
     cls: 'border-amber-500/30 bg-amber-500/15 text-amber-200',
+    tooltip:
+      'Records that an agent is unavailable in a date window — vacation, PTO, on-call rotation. The schedule engine treats their velocity as 0 in that window.',
   },
   set_task_status: {
     label: 'TASK',
     cls: 'border-violet-500/30 bg-violet-500/15 text-violet-200',
+    tooltip:
+      "Updates an existing task's status. PM uses this only as the inverse of NEW TASK — task creation is the operator-driven path.",
   },
 };
 
@@ -191,10 +215,12 @@ function KindChip({ kind }: { kind: string }) {
   const def = KIND_CHIP[kind] ?? {
     label: kind.toUpperCase(),
     cls: 'border-mc-border bg-mc-bg-tertiary text-mc-text-secondary',
+    tooltip: `Diff kind: ${kind}`,
   };
   return (
     <span
-      className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono uppercase tracking-wide ${def.cls}`}
+      className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono uppercase tracking-wide cursor-help ${def.cls}`}
+      title={def.tooltip}
     >
       {def.label}
     </span>
@@ -232,14 +258,48 @@ interface DiffRowProps {
 }
 
 /**
- * Single-row renderer.
+ * Sub-card shell. All DiffRow renderings use this so every diff has
+ * the same border + spacing and the operator can scan the proposal
+ * vertically. `header` carries the kind chip + secondary chips +
+ * (right-aligned) target/arrow; `body` carries the full entity name
+ * + change details with no truncation.
+ */
+function DiffCard({
+  header,
+  body,
+  rightAccent,
+}: {
+  header: React.ReactNode;
+  body?: React.ReactNode;
+  rightAccent?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-sm border border-mc-border/60 bg-mc-bg/40 px-2 py-1.5 text-xs leading-relaxed">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {header}
+        {rightAccent && <div className="ml-auto shrink-0">{rightAccent}</div>}
+      </div>
+      {body && (
+        <div className="mt-1 text-mc-text break-words whitespace-normal">
+          {body}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Single-diff renderer. Each diff renders as its own bordered sub-card
+ * so rows have visible separation, the entity name + change details
+ * never truncate, and every kind chip carries a hover-explainer
+ * (see KIND_CHIP). Layout per card:
  *
- * Layout (left-to-right):
- *   [optional $N] [KIND chip] [optional 2nd chip e.g. complexity]
- *   <entity-or-title>  [— change-detail]  [→ arrow target / deps]
+ *   ┌────────────────────────────────────────────────┐
+ *   │ [$N] [KIND] [secondary chips]      [→ target]  │   ← header
+ *   │ <entity name + change content>                 │   ← body, wraps freely
+ *   └────────────────────────────────────────────────┘
  *
- * The kind chip is the operator's primary cue; the rest of the row
- * is "what entity is touched + what specifically changes".
+ * The kind chip is the operator's primary cue.
  */
 export function DiffRow({
   diff,
@@ -249,12 +309,19 @@ export function DiffRow({
 }: DiffRowProps) {
   const placeholderTag = showPlaceholder ? (
     <span
-      className="font-mono text-mc-text-secondary/60 shrink-0 w-6 text-right"
+      className="font-mono text-[10px] text-mc-text-secondary/70 shrink-0 px-1 py-0.5 rounded-sm border border-mc-border bg-mc-bg-tertiary"
       title="Placeholder slot — referenced by another diff in this proposal"
     >
       ${index}
     </span>
   ) : null;
+
+  const titleOrFallback = (title: string | undefined) =>
+    title ? (
+      <span>{title}</span>
+    ) : (
+      <em className="text-mc-text-secondary">(untitled)</em>
+    );
 
   switch (diff.kind) {
     case 'create_child_initiative': {
@@ -262,31 +329,36 @@ export function DiffRow({
       const childKind = diff.child_kind ?? 'initiative';
       const deps = diff.depends_on_initiative_ids ?? [];
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          {placeholderTag}
-          <KindChip kind={`create_${childKind}`} />
-          {diff.complexity && (
-            <span
-              className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono ${COMPLEXITY_BADGE[diff.complexity]}`}
-              title={`complexity: ${diff.complexity}`}
-            >
-              {diff.complexity}
-            </span>
-          )}
-          <span className="text-mc-text-secondary shrink-0">under</span>
-          <span className="text-mc-text-secondary truncate max-w-[14ch]" title={parentLabel}>
-            {parentLabel}
-          </span>
-          <span className="text-mc-text-secondary">—</span>
-          <span className="text-mc-text">
-            {diff.title || <em className="text-mc-text-secondary">(untitled)</em>}
-          </span>
-          {deps.length > 0 && (
-            <span className="text-mc-text-secondary/70 font-mono shrink-0 ml-auto">
-              ← {deps.map(formatInitiativeRef).join(', ')}
-            </span>
-          )}
-        </div>
+        <DiffCard
+          header={
+            <>
+              {placeholderTag}
+              <KindChip kind={`create_${childKind}`} />
+              {diff.complexity && (
+                <span
+                  className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono cursor-help ${COMPLEXITY_BADGE[diff.complexity]}`}
+                  title={`Complexity: ${diff.complexity} (rough effort sizing)`}
+                >
+                  {diff.complexity}
+                </span>
+              )}
+              <span className="text-mc-text-secondary">
+                under <span className="text-mc-text">{parentLabel}</span>
+              </span>
+            </>
+          }
+          rightAccent={
+            deps.length > 0 ? (
+              <span
+                className="text-mc-text-secondary/70 font-mono"
+                title="Dependencies — this initiative blocks on these"
+              >
+                ← {deps.map(formatInitiativeRef).join(', ')}
+              </span>
+            ) : null
+          }
+          body={titleOrFallback(diff.title)}
+        />
       );
     }
     case 'create_task_under_initiative': {
@@ -294,121 +366,166 @@ export function DiffRow({
         ? diff.initiative_id
         : labelFor(diff.initiative_id, resolveInitiativeTitle);
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          {placeholderTag}
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text-secondary shrink-0">under</span>
-          <span className="text-mc-text-secondary truncate max-w-[14ch]" title={targetLabel}>
-            {targetLabel}
-          </span>
-          <span className="text-mc-text-secondary">—</span>
-          <span className="text-mc-text">
-            {diff.title || <em className="text-mc-text-secondary">(untitled)</em>}
-          </span>
-        </div>
+        <DiffCard
+          header={
+            <>
+              {placeholderTag}
+              <KindChip kind={diff.kind} />
+              <span className="text-mc-text-secondary">
+                under <span className="text-mc-text">{targetLabel}</span>
+              </span>
+            </>
+          }
+          body={titleOrFallback(diff.title)}
+        />
       );
     }
     case 'set_initiative_status': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text truncate" title={labelFor(diff.initiative_id, resolveInitiativeTitle)}>
-            {labelFor(diff.initiative_id, resolveInitiativeTitle)}
-          </span>
-          <span className="text-mc-text-secondary">→</span>
-          <span className="font-mono text-mc-text">{diff.status}</span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          rightAccent={
+            <span
+              className="font-mono text-mc-text"
+              title="New status this proposal will set"
+            >
+              → {diff.status}
+            </span>
+          }
+          body={
+            <span className="text-mc-text">
+              {labelFor(diff.initiative_id, resolveInitiativeTitle)}
+            </span>
+          }
+        />
       );
     }
     case 'update_status_check': {
       const preview = statusCheckPreview(diff.status_check_md);
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text truncate" title={labelFor(diff.initiative_id, resolveInitiativeTitle)}>
-            {labelFor(diff.initiative_id, resolveInitiativeTitle)}
-          </span>
-          {preview && (
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          body={
             <>
-              <span className="text-mc-text-secondary">—</span>
-              <span className="text-mc-text-secondary/80 italic truncate" title={diff.status_check_md ?? undefined}>
-                {preview}
+              <span className="text-mc-text">
+                {labelFor(diff.initiative_id, resolveInitiativeTitle)}
               </span>
+              {preview && (
+                <p
+                  className="mt-0.5 text-mc-text-secondary/80 italic"
+                  title={diff.status_check_md ?? undefined}
+                >
+                  “{preview}”
+                </p>
+              )}
             </>
-          )}
-        </div>
+          }
+        />
       );
     }
     case 'shift_initiative_target': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text truncate" title={labelFor(diff.initiative_id, resolveInitiativeTitle)}>
-            {labelFor(diff.initiative_id, resolveInitiativeTitle)}
-          </span>
-          <span className="text-mc-text-secondary">→</span>
-          <span className="font-mono text-mc-text">
-            {diff.target_start ?? '∅'} → {diff.target_end ?? '∅'}
-          </span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          rightAccent={
+            <span
+              className="font-mono text-mc-text"
+              title="Proposed new target window"
+            >
+              → {diff.target_start ?? '∅'} → {diff.target_end ?? '∅'}
+            </span>
+          }
+          body={
+            <span className="text-mc-text">
+              {labelFor(diff.initiative_id, resolveInitiativeTitle)}
+            </span>
+          }
+        />
       );
     }
     case 'add_dependency': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text truncate">
-            {labelFor(diff.initiative_id, resolveInitiativeTitle)}
-          </span>
-          <span className="text-mc-text-secondary">blocks on</span>
-          <span className="text-mc-text truncate">
-            {labelFor(diff.depends_on_initiative_id, resolveInitiativeTitle)}
-          </span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          body={
+            <span>
+              <span className="text-mc-text">
+                {labelFor(diff.initiative_id, resolveInitiativeTitle)}
+              </span>{' '}
+              <span className="text-mc-text-secondary">blocks on</span>{' '}
+              <span className="text-mc-text">
+                {labelFor(diff.depends_on_initiative_id, resolveInitiativeTitle)}
+              </span>
+            </span>
+          }
+        />
       );
     }
     case 'remove_dependency': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="font-mono text-mc-text">{shortId(diff.dependency_id)}</span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          body={
+            <span className="font-mono text-mc-text-secondary">
+              dependency {shortId(diff.dependency_id)}
+            </span>
+          }
+        />
       );
     }
     case 'reorder_initiatives': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="text-mc-text-secondary">under</span>
-          <span className="text-mc-text">
-            {labelFor(diff.parent_id ?? null, resolveInitiativeTitle) || 'root'}
-          </span>
-          <span className="text-mc-text-secondary">
-            ({diff.child_ids_in_order?.length ?? 0})
-          </span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          rightAccent={
+            <span
+              className="font-mono text-mc-text-secondary"
+              title="Number of siblings being re-ordered"
+            >
+              {diff.child_ids_in_order?.length ?? 0} children
+            </span>
+          }
+          body={
+            <span className="text-mc-text-secondary">
+              under{' '}
+              <span className="text-mc-text">
+                {labelFor(diff.parent_id ?? null, resolveInitiativeTitle) || 'root'}
+              </span>
+            </span>
+          }
+        />
       );
     }
     case 'add_availability': {
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind} />
-          <span className="font-mono text-mc-text">{shortId(diff.agent_id)}</span>
-          <span className="text-mc-text-secondary">→</span>
-          <span className="font-mono text-mc-text">
-            {diff.start} – {diff.end}
-          </span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind} />}
+          rightAccent={
+            <span
+              className="font-mono text-mc-text"
+              title="Window during which the agent is unavailable"
+            >
+              {diff.start} – {diff.end}
+            </span>
+          }
+          body={
+            <span className="font-mono text-mc-text">
+              agent {shortId(diff.agent_id)}
+            </span>
+          }
+        />
       );
     }
     default:
       return (
-        <div className="flex items-baseline gap-2 text-xs leading-relaxed">
-          <KindChip kind={diff.kind ?? 'unknown'} />
-          <span className="font-mono text-mc-text-secondary">
-            {summarizeDiff(diff, resolveInitiativeTitle)}
-          </span>
-        </div>
+        <DiffCard
+          header={<KindChip kind={diff.kind ?? 'unknown'} />}
+          body={
+            <span className="font-mono text-mc-text-secondary">
+              {summarizeDiff(diff, resolveInitiativeTitle)}
+            </span>
+          }
+        />
       );
   }
 }
@@ -471,7 +588,7 @@ export function ProposalDiffsList({
   diffs,
   showAll = false,
   previewCap = DEFAULT_PREVIEW_CAP,
-  className = 'px-3 pb-3 space-y-1',
+  className = 'px-3 pb-3 space-y-1.5',
   resolveInitiativeTitle,
   selection,
 }: ProposalDiffsListProps) {
