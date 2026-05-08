@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
+  appendNoteProposalId,
   getNote,
   markNoteConsumed,
   type AgentNote,
@@ -125,16 +126,18 @@ export async function POST(
       allowFallback: false,
     });
 
-    // Mark notes consumed so the UI can fade the "Ask PM" button on a
-    // re-render. Idempotent — re-clicking still works, just no new
-    // bookkeeping.
+    // Mark notes consumed so the UI can fade the "Ask PM" button on
+    // a re-render. Also remember the resulting proposal id on each
+    // note so the UI can offer a persistent "View proposal" link
+    // (survives page reloads). Both operations are idempotent.
     for (const n of notes) {
       try {
         markNoteConsumed(n.id, CONSUMED_STAGE);
+        appendNoteProposalId(n.id, result.proposal.id);
       } catch (err) {
         // Best-effort; the dispatch already happened, this is housekeeping.
         console.warn(
-          `[ask-pm-from-notes] markNoteConsumed failed for ${n.id}:`,
+          `[ask-pm-from-notes] note bookkeeping failed for ${n.id}:`,
           (err as Error).message,
         );
       }

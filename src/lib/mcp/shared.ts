@@ -14,7 +14,11 @@ import { AuthzError } from '@/lib/authz/agent-task';
 import { authzErrorToToolResult, internalErrorToToolResult } from './errors';
 import { logMcpToolCall } from './debug';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
-import { parseAttachedFiles, type AgentNote } from '@/lib/db/agent-notes';
+import {
+  parseAttachedFiles,
+  parsePmProposalIds,
+  type AgentNote,
+} from '@/lib/db/agent-notes';
 
 // ─── shared zod fragments ────────────────────────────────────────────
 
@@ -186,6 +190,7 @@ export function noteToPayload(note: AgentNote): Record<string, unknown> {
     body: note.body,
     attached_files: parseAttachedFiles(note),
     importance: note.importance,
+    pm_proposal_ids: parsePmProposalIds(note),
     created_at: note.created_at,
   };
 }
