@@ -13,6 +13,7 @@ import {
   AUDIT_SUBTREE_CONCURRENCY_MAX,
 } from '@/lib/db/workspaces';
 import { resolveWorkspacePath } from '@/lib/config';
+import { isValidTimezone } from '@/lib/timestamps';
 import { hostPathToContainerPath } from '@/lib/deliverables/storage';
 
 const execFileAsync = promisify(execFile);
@@ -138,6 +139,7 @@ export async function PATCH(
       local_repo_init,
       repo_url,
       default_base_branch,
+      display_timezone,
     } = body;
 
     const db = getDb();
@@ -214,6 +216,22 @@ export async function PATCH(
       const trimmed = typeof default_base_branch === 'string' ? default_base_branch.trim() : null;
       updates.push('default_base_branch = ?');
       values.push(trimmed && trimmed.length > 0 ? trimmed : null);
+    }
+    if (display_timezone !== undefined) {
+      // Empty string / null clears the override (UI auto-detects via
+      // browser Intl). Any other value must be a valid IANA zone or
+      // we reject — see specs/timestamp-handling.md §PR-B.
+      const raw = typeof display_timezone === 'string' ? display_timezone.trim() : null;
+      if (raw && !isValidTimezone(raw)) {
+        return NextResponse.json(
+          {
+            error: 'display_timezone must be a valid IANA timezone (e.g. America/Los_Angeles, Europe/London) or empty to auto-detect',
+          },
+          { status: 400 },
+        );
+      }
+      updates.push('display_timezone = ?');
+      values.push(raw && raw.length > 0 ? raw : null);
     }
     if (audit_subtree_concurrency !== undefined) {
       const n = Number(audit_subtree_concurrency);

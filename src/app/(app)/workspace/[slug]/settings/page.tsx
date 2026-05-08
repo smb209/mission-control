@@ -73,6 +73,9 @@ interface WorkspaceWithDefault {
   repo_url?: string | null;
   /** Default base branch for PRs (e.g. main). */
   default_base_branch?: string | null;
+  /** Operator-overridden display timezone (IANA name). NULL means
+   *  "auto-detect from browser". See specs/timestamp-handling.md §PR-B. */
+  display_timezone?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -574,6 +577,53 @@ export default function WorkspaceSettingsPage({
             }}
           />
         )}
+
+        {/* Display — operator-facing presentation knobs. Most of MC
+            is timezone-aware via the browser's Intl auto-detect; this
+            override is for the cases where that's wrong (e.g. running
+            on a UTC server in a non-UTC location). See
+            specs/timestamp-handling.md §PR-B. */}
+        <Section
+          id="display"
+          title="Display"
+          description="How the operator sees timestamps. The default — auto-detect from your browser — is right for ~all cases; override only if it's wrong."
+        >
+          <Field label="Display timezone">
+            <InlineText
+              value={workspace.display_timezone ?? ''}
+              onSave={async (next) => {
+                // Empty / whitespace clears the override (revert to
+                // auto-detect). Server validates IANA names.
+                await patch({ display_timezone: next.trim() });
+              }}
+              placeholder={(() => {
+                try {
+                  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles';
+                } catch {
+                  return 'America/Los_Angeles';
+                }
+              })()}
+              label="Edit display timezone"
+            />
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              IANA name (e.g. <code className="text-mc-text">America/Los_Angeles</code>,{' '}
+              <code className="text-mc-text">America/New_York</code>,{' '}
+              <code className="text-mc-text">Europe/London</code>,{' '}
+              <code className="text-mc-text">Asia/Tokyo</code>). Leave
+              blank to use your browser&apos;s detected zone (
+              <code className="text-mc-text">
+                {(() => {
+                  try {
+                    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown';
+                  } catch {
+                    return 'unknown';
+                  }
+                })()}
+              </code>
+              ). Reload after saving for the change to apply everywhere.
+            </p>
+          </Field>
+        </Section>
 
         {/* Audit defaults — workspace-scoped knobs for the initiative
             Investigate flow's subtree mode. See

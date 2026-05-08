@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { ChevronUp, ChevronDown, Clock, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Event } from '@/lib/types';
-import { formatDistanceToNow } from 'date-fns';
+import { Time } from '@/components/Time';
 
 type FeedFilter = 'all' | 'tasks' | 'agents';
 
@@ -168,7 +168,7 @@ function EventItem({ event }: { event: Event }) {
         </p>
         <div className="flex items-center gap-1 mt-1 text-xs text-mc-text-secondary">
           <Clock className="w-3 h-3" />
-          {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
+          <Time iso={event.created_at} mode="relative" live />
         </div>
       </div>
     </div>
