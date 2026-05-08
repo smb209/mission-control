@@ -15,9 +15,11 @@ import { authzErrorToToolResult, internalErrorToToolResult } from './errors';
 import { logMcpToolCall } from './debug';
 import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import {
+  NOTE_KINDS,
   parseAttachedFiles,
   parsePmProposalIds,
   type AgentNote,
+  type NoteKind,
 } from '@/lib/db/agent-notes';
 
 // ─── shared zod fragments ────────────────────────────────────────────
@@ -167,8 +169,11 @@ export function deriveWorkspaceFromAgent(agentId: string): string {
 
 // ─── notes spine helpers (shared by core take/read + work consume/archive) ───
 
+// Single source of truth: NOTE_KINDS from the DB module. The Zod enum
+// picks up new kinds (e.g. audit_manifest / audit_proposal /
+// audit_synthesis) automatically — no schema duplication.
 export const noteKindArg = z
-  .enum(['discovery', 'blocker', 'uncertainty', 'decision', 'observation', 'question', 'breadcrumb'])
+  .enum(NOTE_KINDS as readonly [NoteKind, ...NoteKind[]])
   .describe('What kind of note this is. See agent-templates/_shared/notetaker.md for guidance.');
 
 export const noteImportanceArg = z

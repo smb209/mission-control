@@ -4533,6 +4533,65 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '087',
+    name: 'agent_notes_audit_kinds',
+    up: (db) => {
+      // Phase 1 of specs/subtree-audit-proposals-spec.md adds three new
+      // NoteKind values (audit_manifest, audit_proposal,
+      // audit_synthesis). The migration-065 CHECK constraint enumerates
+      // the allowed kinds, so we have to rebuild the table to extend
+      // it. Standard SQLite "table swap" recipe.
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec(`
+        CREATE TABLE agent_notes_new (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+          scope_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          run_group_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN (
+            'discovery','blocker','uncertainty','decision',
+            'observation','question','breadcrumb',
+            'audit_manifest','audit_proposal','audit_synthesis'
+          )),
+          audience TEXT,
+          body TEXT NOT NULL,
+          attached_files TEXT,
+          importance INTEGER NOT NULL DEFAULT 0 CHECK (importance IN (0,1,2)),
+          consumed_by_stages TEXT,
+          archived_at TEXT,
+          archived_reason TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          pm_proposal_ids TEXT
+        );
+      `);
+      db.exec(`
+        INSERT INTO agent_notes_new
+          (id, workspace_id, agent_id, task_id, initiative_id, scope_key, role,
+           run_group_id, kind, audience, body, attached_files, importance,
+           consumed_by_stages, archived_at, archived_reason, created_at,
+           pm_proposal_ids)
+        SELECT id, workspace_id, agent_id, task_id, initiative_id, scope_key, role,
+           run_group_id, kind, audience, body, attached_files, importance,
+           consumed_by_stages, archived_at, archived_reason, created_at,
+           pm_proposal_ids
+        FROM agent_notes;
+      `);
+      db.exec(`DROP TABLE agent_notes`);
+      db.exec(`ALTER TABLE agent_notes_new RENAME TO agent_notes`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_task ON agent_notes(task_id, created_at DESC) WHERE task_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_initiative ON agent_notes(initiative_id, created_at DESC) WHERE initiative_id IS NOT NULL`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_workspace ON agent_notes(workspace_id, created_at DESC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_run_group ON agent_notes(run_group_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_importance ON agent_notes(workspace_id, importance, created_at DESC) WHERE archived_at IS NULL`);
+      db.exec('PRAGMA foreign_keys = ON');
+      console.log('[Migration 087] agent_notes.kind extended with audit_manifest / audit_proposal / audit_synthesis.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

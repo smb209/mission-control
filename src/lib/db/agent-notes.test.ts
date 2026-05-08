@@ -143,6 +143,46 @@ test('listNotes: kinds filter', () => {
   assert.ok(blockerOrDiscovery.every((n) => n.kind === 'blocker' || n.kind === 'discovery'));
 });
 
+test('listNotes: exclude_kinds filter (audit kinds excluded by default cross-audit reads)', () => {
+  const ws = freshWorkspace();
+  createNote(baseInput(ws, { workspace_id: ws, body: 'd', kind: 'discovery' }));
+  createNote(baseInput(ws, { workspace_id: ws, body: 'o', kind: 'observation' }));
+  // Audit kinds — must be filtered out by default cross-audit readers
+  // (briefing builder, Notes Rail). See spec §4.1.
+  createNote(
+    baseInput(ws, {
+      workspace_id: ws,
+      body: JSON.stringify({ version: 1 }),
+      kind: 'audit_manifest',
+    }),
+  );
+  createNote(
+    baseInput(ws, {
+      workspace_id: ws,
+      body: JSON.stringify({ version: 1 }),
+      kind: 'audit_proposal',
+    }),
+  );
+  createNote(
+    baseInput(ws, {
+      workspace_id: ws,
+      body: JSON.stringify({ version: 1 }),
+      kind: 'audit_synthesis',
+    }),
+  );
+
+  const filtered = listNotes({
+    workspace_id: ws,
+    exclude_kinds: ['audit_manifest', 'audit_proposal', 'audit_synthesis'],
+  });
+  const kinds = filtered.map((n) => n.kind).sort();
+  assert.deepEqual(kinds, ['discovery', 'observation']);
+
+  // Sanity: without the filter all five are visible.
+  const all = listNotes({ workspace_id: ws });
+  assert.equal(all.length, 5);
+});
+
 test('listNotes: audience filter accepts NULL or exact match', () => {
   const ws = freshWorkspace();
   createNote(baseInput(ws, { body: 'public', audience: null }));
