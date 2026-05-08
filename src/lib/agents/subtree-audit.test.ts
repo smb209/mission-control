@@ -25,14 +25,26 @@ import {
 import { createInitiative } from '@/lib/db/initiatives';
 import { createNote, listNotes } from '@/lib/db/agent-notes';
 import { auditProposalBodySchema } from '@/lib/agents/audit-proposals/schemas';
-import { getAgentRun } from '@/lib/db/agent-runs';
 import type { SurveyorResult } from './audit-survey';
+import type { SynthesizerResult } from './audit-synthesizer';
 import {
   __setSendChatClientForTests,
   type ChatEvent,
   type SendChatClient,
 } from '@/lib/openclaw/send-chat';
 import type { Agent } from '@/lib/types';
+
+/**
+ * Default synthesizer stub for Phase 2/3 tests that only care about
+ * L1/L2 behavior. Returns 'no-synthesis' without dispatching, so the
+ * orchestrator records a failed root outcome but no agent_runs row is
+ * created for the root.
+ */
+const noopSynthesizer = async (): Promise<SynthesizerResult> => ({
+  synthesis: null,
+  synthesisNoteId: null,
+  dispatchOutcome: 'no-synthesis',
+});
 
 type Lite = Parameters<typeof enumerateLayersBottomUp>[1][number];
 
@@ -237,72 +249,10 @@ test.afterEach(() => {
   __setSendChatClientForTests(null);
 });
 
-test('runSubtreeAudit: creates synthetic parent + child rows linked by parent_run_id', async () => {
-  __setSendChatClientForTests(stubClient());
-  const ws = freshWorkspace();
-  // Tree: root -> 3 stories.
-  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Root epic' });
-  const c1 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 1', parent_initiative_id: root.id });
-  const c2 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 2', parent_initiative_id: root.id });
-  const c3 = createInitiative({ workspace_id: ws, kind: 'story', title: 'Story 3', parent_initiative_id: root.id });
-
-  const result = await runSubtreeAudit({
-    rootId: root.id,
-    workspaceId: ws,
-    guidance: null,
-    perNodeTimeoutMs: 10_000,
-    subtreeConcurrency: 2,
-    runner: fakeRunner(),
-  });
-
-  // Synthetic parent row exists with the expected shape.
-  assert.ok(result.parentRunId);
-  const parent = getAgentRun(result.parentRunId!)!;
-  assert.equal(parent.kind, 'initiative_audit');
-  assert.equal(parent.source_kind, 'fanout');
-  assert.equal(parent.parent_run_id, null);
-  assert.equal(parent.initiative_id, root.id);
-  assert.match(parent.label ?? '', /Subtree audit:/);
-
-  // Child rows: one per node (3 stories + 1 root re-audit at top layer = 4).
-  const children = queryAll<{ id: string; parent_run_id: string | null; initiative_id: string | null }>(
-    `SELECT id, parent_run_id, initiative_id FROM agent_runs
-       WHERE workspace_id = ? AND parent_run_id = ?
-       ORDER BY created_at`,
-    [ws, result.parentRunId],
-  );
-  assert.equal(children.length, 4, '3 stories + root self-audit');
-  const childInitiativeIds = new Set(children.map((c) => c.initiative_id));
-  for (const id of [root.id, c1.id, c2.id, c3.id]) {
-    assert.ok(childInitiativeIds.has(id), `child for initiative ${id} present`);
-  }
-  for (const c of children) {
-    assert.equal(c.parent_run_id, result.parentRunId);
-  }
-});
-
-test('runSubtreeAudit: parent rolls up to complete when all children succeed', async () => {
-  __setSendChatClientForTests(stubClient());
-  const ws = freshWorkspace();
-  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'OK epic' });
-  // No children — single-node fan-out (just the root).
-  const result = await runSubtreeAudit({
-    rootId: root.id,
-    workspaceId: ws,
-    guidance: null,
-    perNodeTimeoutMs: 10_000,
-    subtreeConcurrency: 1,
-    runner: fakeRunner(),
-  });
-  // The single-node dispatch lands but won't have a take_note row; the
-  // orchestrator records that as a failure outcome. With 1/1 failed
-  // (>50%), the parent rolls up to failed. That's expected behavior —
-  // see SUBTREE_FAILURE_THRESHOLD. Assert the rollup ran (parent is
-  // terminal, not stuck running) regardless of branch.
-  const parent = getAgentRun(result.parentRunId!)!;
-  assert.ok(['complete', 'failed'].includes(parent.status), 'parent rolled up');
-  assert.ok(parent.completed_at);
-});
+// NOTE: The original `mode: 'subtree'` (free-form observation output)
+// tests were deleted in Phase 4 — the mode no longer exists. Coverage
+// for the synthetic-parent rollup + child linkage is preserved by the
+// `subtree-proposal` tests below.
 
 // ─── runSubtreeAudit: mode='subtree-proposal' (Phase 2) ────────────
 
@@ -368,6 +318,7 @@ test('runSubtreeAudit (subtree-proposal): manifest skip → synthetic audit_prop
     runner: fakeRunner(),
     mode: 'subtree-proposal',
     surveyorOverride,
+    synthesizerOverride: noopSynthesizer,
   });
 
   // skipMe must NOT have an agent_runs child row (no dispatch).
@@ -433,6 +384,7 @@ test('runSubtreeAudit (subtree-proposal): surveyor failure → fallback dispatch
     runner: fakeRunner(),
     mode: 'subtree-proposal',
     surveyorOverride,
+    synthesizerOverride: noopSynthesizer,
   });
 
   // The two children are dispatched. The root is NOT dispatched in
@@ -576,6 +528,7 @@ test('runSubtreeAudit (subtree-proposal): happy path — auditor emits valid pro
     runner: fakeRunner(),
     mode: 'subtree-proposal',
     surveyorOverride,
+    synthesizerOverride: noopSynthesizer,
   });
 
   // Per-node outcome for leaf is ok; root is deferred.
@@ -591,15 +544,23 @@ test('runSubtreeAudit (subtree-proposal): happy path — auditor emits valid pro
   const parsed = JSON.parse(proposalsForLeaf[0].body);
   assert.equal(parsed.proposed_action, 'mark_done');
 
-  // Root outcome is the deferred placeholder; root was NOT dispatched.
+  // Root outcome reflects the L3 synthesizer stub (Phase 4). With the
+  // noopSynthesizer override, dispatchOutcome === 'no-synthesis', so
+  // the orchestrator records a failed root outcome with no agent_runs
+  // row (the override doesn't actually call dispatchScope).
   const rootOutcome = result.perNodeOutcomes.find((o) => o.initiativeId === root.id);
   assert.ok(rootOutcome);
-  assert.match(rootOutcome!.note ?? '', /root deferred to L3 synthesizer/);
+  assert.equal(rootOutcome!.status, 'failed');
+  assert.match(rootOutcome!.error ?? '', /synthesis no-synthesis/);
   const rootRuns = queryAll<{ id: string }>(
     `SELECT id FROM agent_runs WHERE workspace_id = ? AND initiative_id = ? AND parent_run_id = ?`,
     [ws, root.id, result.parentRunId],
   );
-  assert.equal(rootRuns.length, 0, 'root must NOT be dispatched in subtree-proposal mode');
+  assert.equal(
+    rootRuns.length,
+    0,
+    'noop synthesizer override means no dispatched agent_runs row for the root',
+  );
 });
 
 test('runSubtreeAudit (subtree-proposal): no proposal landed → synthetic fallback keep with low confidence', async () => {
@@ -666,6 +627,7 @@ test('runSubtreeAudit (subtree-proposal): no proposal landed → synthetic fallb
     runner: fakeRunner(),
     mode: 'subtree-proposal',
     surveyorOverride,
+    synthesizerOverride: noopSynthesizer,
   });
 
   const leafOutcome = result.perNodeOutcomes.find((o) => o.initiativeId === leaf.id);
@@ -729,4 +691,193 @@ test('summarizeProposalForBriefing: each proposed_action enum produces ≤6 line
     assert.match(out, /Evidence:/);
     assert.ok(out.split('\n').length <= 6, `too many lines for ${c.proposed_action}: ${out}`);
   }
+});
+
+// ─── Phase 4 — L3 synthesizer integration ───────────────────────────
+
+test('runSubtreeAudit (Phase 4): L3 happy path — synthesizer note threaded into root outcome', async () => {
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'L3 root' });
+  const leaf = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'L3 leaf',
+    parent_initiative_id: root.id,
+  });
+
+  // No live gateway dispatch — the surveyor + synthesizer overrides
+  // bypass openclaw entirely. The L2 leaf dispatch DOES fall through
+  // to the live path; default stubClient returns no proposal so the
+  // synthetic-fallback keep is emitted.
+  __setSendChatClientForTests(stubClient());
+
+  const surveyorOverride = async (): Promise<SurveyorResult> => ({
+    manifest: {
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 1,
+      previous_synthesis_run_group_id: null,
+      summary: 'L3 happy',
+      nodes: [
+        {
+          initiative_id: leaf.id,
+          title: leaf.title,
+          current_status: 'in_progress',
+          hypothesis: 'needs-deep-dive',
+          confidence: 'medium',
+          investigation_prompt: 'Dig.',
+          scoped_evidence_hints: [],
+          skip: false,
+        },
+      ],
+      cross_cutting_questions: [],
+    },
+    surveyorNoteId: null,
+    dispatchOutcome: 'ok',
+  });
+
+  const synthSentinel =
+    'Audit complete: 2 nodes — 1 keep, 1 modify_scope; epic dates +14d';
+
+  const synthesizerOverride = async (
+    args: Parameters<typeof import('./audit-synthesizer').runSynthesizer>[0],
+  ) => {
+    // Stand in for the gateway: write the audit_synthesis note that
+    // the orchestrator will read back. Routes through createNote so
+    // the body is the literal JSON string the read-back parses.
+    const body = JSON.stringify({
+      version: 1,
+      root_initiative_id: args.rootId,
+      attempt: args.attempt,
+      completion_sentinel: synthSentinel,
+      epic_proposals: [
+        {
+          proposed_action: 'modify_epic_dates',
+          proposed_changes: { target_end: '2026-05-27' },
+          rationale: 'two stories slipped',
+          confidence: 'medium',
+        },
+      ],
+      cross_node_proposals: [],
+    });
+    const note = createNote({
+      workspace_id: args.workspaceId,
+      agent_id: null,
+      initiative_id: args.rootId,
+      scope_key: `initiative-${args.rootId}:audit-synthesis:${args.attempt}`,
+      role: 'auditor',
+      run_group_id: uuidv4(),
+      kind: 'audit_synthesis',
+      audience: 'pm',
+      body,
+      importance: 2,
+    });
+    return {
+      synthesis: JSON.parse(body),
+      synthesisNoteId: note.id,
+      dispatchOutcome: 'ok' as const,
+    };
+  };
+
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 1,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride,
+    synthesizerOverride,
+  });
+
+  // The synthesis note exists on the root.
+  const synthNotes = listNotes({
+    initiative_id: root.id,
+    kinds: ['audit_synthesis'],
+    limit: 5,
+  });
+  assert.equal(synthNotes.length, 1);
+  const sb = JSON.parse(synthNotes[0].body);
+  assert.equal(sb.completion_sentinel, synthSentinel);
+  assert.equal(sb.epic_proposals.length, 1);
+
+  // Root outcome reflects L3 success — note carries the sentinel.
+  const rootOutcome = result.perNodeOutcomes.find((o) => o.initiativeId === root.id);
+  assert.ok(rootOutcome);
+  assert.equal(rootOutcome!.status, 'ok');
+  assert.equal(rootOutcome!.note, synthSentinel);
+});
+
+test('runSubtreeAudit (Phase 4): L3 failure → no synthetic fallback, root outcome failed', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'L3 sad root' });
+  const leaf = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'leaf',
+    parent_initiative_id: root.id,
+  });
+
+  const surveyorOverride = async (): Promise<SurveyorResult> => ({
+    manifest: {
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 1,
+      previous_synthesis_run_group_id: null,
+      summary: 'L3 sad',
+      nodes: [
+        {
+          initiative_id: leaf.id,
+          title: leaf.title,
+          current_status: 'in_progress',
+          hypothesis: 'needs-deep-dive',
+          confidence: 'low',
+          investigation_prompt: 'dig',
+          scoped_evidence_hints: [],
+          skip: false,
+        },
+      ],
+      cross_cutting_questions: [],
+    },
+    surveyorNoteId: null,
+    dispatchOutcome: 'ok',
+  });
+
+  const synthesizerOverride = async (): Promise<SynthesizerResult> => ({
+    synthesis: null,
+    synthesisNoteId: null,
+    dispatchOutcome: 'no-synthesis',
+    errorMessage: 'agent ghost-walked',
+  });
+
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 1,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride,
+    synthesizerOverride,
+  });
+
+  // No synthesis note landed.
+  const synthNotes = listNotes({
+    initiative_id: root.id,
+    kinds: ['audit_synthesis'],
+    limit: 5,
+  });
+  assert.equal(synthNotes.length, 0, 'no synthesis emitted');
+
+  // Per spec §5.5 — no synthetic fallback at the orchestrator (no
+  // synthesis note magically appears). Root outcome is `failed` with
+  // a marker referencing the dispatchOutcome.
+  const rootOutcome = result.perNodeOutcomes.find((o) => o.initiativeId === root.id);
+  assert.ok(rootOutcome);
+  assert.equal(rootOutcome!.status, 'failed');
+  assert.match(rootOutcome!.error ?? '', /synthesis no-synthesis/);
+  assert.match(rootOutcome!.error ?? '', /ghost-walked/);
 });

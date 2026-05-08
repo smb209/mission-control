@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 
 export interface InvestigateOption {
-  id: 'narrow' | 'subtree';
+  id: 'narrow' | 'subtree-proposal';
   label: string;
   description: string;
   disabled?: boolean;

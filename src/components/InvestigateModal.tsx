@@ -41,7 +41,7 @@ export interface InvestigateModalProps {
    */
   priorAuditCount: number;
   /** Audit scope. Drives radio visibility + endpoint mode. */
-  mode?: 'narrow' | 'subtree';
+  mode?: 'narrow' | 'subtree-proposal';
   onClose: () => void;
   /**
    * Called after a successful dispatch. The modal stays open and shows
@@ -50,7 +50,7 @@ export interface InvestigateModalProps {
    * View Activity).
    */
   onDispatched: (result: {
-    mode: 'narrow' | 'subtree';
+    mode: 'narrow' | 'subtree-proposal';
     scope_key?: string;
     root_scope_key?: string;
     attempt?: number;
@@ -153,7 +153,7 @@ function DispatchedPanel({
   const failedCount = justCompleted.filter((r) => r.status === 'failed' || r.status === 'cancelled').length;
 
   const summary =
-    result.mode === 'subtree'
+    result.mode === 'subtree-proposal'
       ? `${result.planned_nodes} initiative${result.planned_nodes === 1 ? '' : 's'} across ${result.planned_layers} layer${result.planned_layers === 1 ? '' : 's'} (up to ${result.concurrency} parallel)`
       : `Narrow audit, attempt ${result.attempt}`;
 
@@ -216,7 +216,7 @@ type Reaudit = 'fresh' | 'build_on';
 const GUIDANCE_MAX = 2000;
 
 interface DispatchResult {
-  mode: 'narrow' | 'subtree';
+  mode: 'narrow' | 'subtree-proposal';
   scope_key?: string;
   root_scope_key?: string;
   attempt?: number;
@@ -272,10 +272,10 @@ export default function InvestigateModal({
         const last = (body as { last_complete_audit?: { completed_at: string | null } | null })
           .last_complete_audit;
         setRecentAuditAt(last?.completed_at ?? null);
-        if (mode === 'subtree') setPlan(body as SubtreePlan);
+        if (mode === 'subtree-proposal') setPlan(body as SubtreePlan);
       })
       .catch((e) => {
-        if (!cancelled && mode === 'subtree') {
+        if (!cancelled && mode === 'subtree-proposal') {
           setPlanErr(e instanceof Error ? e.message : String(e));
         }
       });
@@ -316,8 +316,8 @@ export default function InvestigateModal({
       // Subtree mode is always 'fresh' in PR 4; reaudit field is ignored
       // server-side but harmless to omit. The route default keeps narrow
       // behavior unchanged.
-      const requestBody: Record<string, unknown> = mode === 'subtree'
-        ? { mode: 'subtree', guidance: baseBody.guidance }
+      const requestBody: Record<string, unknown> = mode === 'subtree-proposal'
+        ? { mode: 'subtree-proposal', guidance: baseBody.guidance }
         : { ...baseBody };
       if (opts?.supersede) requestBody.supersede = true;
       const res = await fetch(`/api/initiatives/${initiative.id}/investigate`, {
@@ -343,7 +343,7 @@ export default function InvestigateModal({
         );
       }
       const dispatchedAt = new Date().toISOString();
-      if (mode === 'subtree') {
+      if (mode === 'subtree-proposal') {
         const { root_scope_key, planned_nodes, planned_layers, concurrency } =
           body as {
             root_scope_key: string;
@@ -352,7 +352,7 @@ export default function InvestigateModal({
             concurrency: number;
           };
         const result: DispatchResult = {
-          mode: 'subtree',
+          mode: 'subtree-proposal',
           root_scope_key,
           planned_nodes,
           planned_layers,
@@ -405,10 +405,10 @@ export default function InvestigateModal({
             <div className="min-w-0">
               <h2 className="text-base font-semibold leading-tight">
                 {dispatched
-                  ? mode === 'subtree'
+                  ? mode === 'subtree-proposal'
                     ? 'Subtree audit dispatched'
                     : 'Audit dispatched'
-                  : mode === 'subtree'
+                  : mode === 'subtree-proposal'
                     ? 'Investigate subtree (bottom-up)'
                     : 'Investigate initiative'}
               </h2>
@@ -562,7 +562,7 @@ export default function InvestigateModal({
             </span>
           </label>
 
-          {mode === 'subtree' ? (
+          {mode === 'subtree-proposal' ? (
             <div className="text-xs text-mc-text-secondary leading-relaxed border border-mc-border/60 rounded p-3 bg-mc-bg/40">
               {planErr ? (
                 <span className="text-red-300">Couldn&apos;t plan subtree: {planErr}</span>

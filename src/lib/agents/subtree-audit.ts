@@ -47,8 +47,13 @@ import {
   auditProposalBodySchema,
   type AuditManifestBody,
   type AuditManifestNode,
-  type AuditProposalBody,
 } from '@/lib/agents/audit-proposals/schemas';
+import { summarizeProposalForBriefing } from './subtree-audit-summarize';
+import {
+  runSynthesizer,
+  loadProposalsForSubtree,
+  type SynthesizerResult,
+} from '@/lib/agents/audit-synthesizer';
 
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
@@ -60,43 +65,12 @@ const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 export const SUBTREE_FAILURE_THRESHOLD = 0.5;
 
 /**
- * Render a parsed `audit_proposal` body as ~3-5 lines of prose for use
- * as childFindings input to a parent-layer briefing in
- * `mode: 'subtree-proposal'`. Pure / exported for tests.
+ * Re-export of `summarizeProposalForBriefing` — moved to
+ * `subtree-audit-summarize.ts` in Phase 4 to break a cycle between
+ * `audit-prompt.ts` (which now also renders proposal summaries in the
+ * synthesizer briefing) and this file.
  */
-export function summarizeProposalForBriefing(body: AuditProposalBody): string {
-  const lines: string[] = [];
-  lines.push(
-    `Proposed action: **${body.proposed_action}** (confidence: ${body.confidence}).`,
-  );
-  if (body.proposed_action === 'mark_done') {
-    lines.push(`Completion note: ${body.proposed_changes.note}`);
-  } else if (body.proposed_action === 'cancel') {
-    lines.push(`Cancel reason: ${body.proposed_changes.reason}`);
-  } else if (body.proposed_action === 'modify_scope') {
-    const parts: string[] = [];
-    if (body.proposed_changes.title) parts.push(`title→"${body.proposed_changes.title}"`);
-    if (body.proposed_changes.description) parts.push('description updated');
-    lines.push(`Scope change: ${parts.join(', ')}`);
-  } else if (body.proposed_action === 'modify_dates') {
-    const parts: string[] = [];
-    if (body.proposed_changes.target_start)
-      parts.push(`target_start→${body.proposed_changes.target_start}`);
-    if (body.proposed_changes.target_end)
-      parts.push(`target_end→${body.proposed_changes.target_end}`);
-    lines.push(`Date change: ${parts.join(', ')}`);
-  }
-  // Rationale — keep first ~240 chars; the parent briefing has many of
-  // these and we don't want to blow the context budget.
-  const r = body.rationale.trim();
-  lines.push(`Rationale: ${r.length > 240 ? r.slice(0, 240) + '…' : r}`);
-  if (body.would_confirm_by && body.would_confirm_by.trim()) {
-    lines.push(`Would confirm by: ${body.would_confirm_by.trim()}`);
-  }
-  const evCount = body.repo_evidence.length;
-  lines.push(`Evidence: ${evCount} ref${evCount === 1 ? '' : 's'}.`);
-  return lines.join('\n');
-}
+export { summarizeProposalForBriefing };
 
 /** Initiative shape we need internally — kept narrow on purpose. */
 type LiteInitiative = Pick<
@@ -254,14 +228,16 @@ export interface RunSubtreeAuditInput {
   runner: Agent;
   /**
    * Output mode for the subtree audit.
-   * - 'subtree' — today's free-form per-node `observation` notes (PR 4
-   *   shape, default).
-   * - 'subtree-proposal' — Phase 2 of the structured-proposals spec:
-   *   adds an L1 surveyor + manifest-driven filter; L2 still emits
-   *   free-form notes (Phase 3 will switch them to typed proposals).
-   * Defaults to 'subtree' for back-compat with existing call sites.
+   * - 'subtree-proposal' — the only supported subtree shape (Phase 4
+   *   hard cutover). L1 surveyor + manifest-driven filter; L2 typed
+   *   `audit_proposal` per node; L3 synthesizer emits `audit_synthesis`
+   *   on the root.
+   *
+   * The legacy 'subtree' mode (free-form per-node `observation` notes)
+   * was removed in Phase 4 — see specs/subtree-audit-proposals-spec.md
+   * §6.3.
    */
-  mode?: 'subtree' | 'subtree-proposal';
+  mode?: 'subtree-proposal';
   /**
    * Test seam — overrides the surveyor function so tests can stub
    * dispatch + manifest readback without exercising openclaw.
@@ -269,6 +245,13 @@ export interface RunSubtreeAuditInput {
   surveyorOverride?: (
     args: Parameters<typeof runSurveyor>[0],
   ) => Promise<SurveyorResult>;
+  /**
+   * Test seam — overrides the synthesizer function so tests can stub
+   * dispatch + synthesis-note readback. Parallels `surveyorOverride`.
+   */
+  synthesizerOverride?: (
+    args: Parameters<typeof runSynthesizer>[0],
+  ) => Promise<SynthesizerResult>;
 }
 
 export interface SubtreeAuditResult {
@@ -322,8 +305,9 @@ export async function runSubtreeAudit(
     perNodeTimeoutMs,
     subtreeConcurrency,
     runner,
-    mode = 'subtree',
+    mode = 'subtree-proposal',
     surveyorOverride,
+    synthesizerOverride,
   } = input;
   const { layers } = planSubtreeAudit(rootId, workspaceId);
 
@@ -367,14 +351,17 @@ export async function runSubtreeAudit(
   const findingsByInitiative = new Map<string, { body: string; failed: boolean }>();
   const perNodeOutcomes: SubtreeAuditResult['perNodeOutcomes'] = [];
 
-  // ─── L1 surveyor + manifest filter (mode: 'subtree-proposal') ──────
+  // ─── L1 surveyor + manifest filter ────────────────────────────────
   // Skipped nodes (manifest.skip === true && confidence === 'high') are
   // not dispatched; instead we emit a synthetic `audit_proposal` note
   // and record an 'ok' outcome so the synthesized body flows up to
   // parent layers via the existing childFindings path.
+  // (Phase 4: `mode` is always 'subtree-proposal' at this point.)
   let manifest: AuditManifestBody | null = null;
   let manifestNoteId: string | null = null;
-  if (mode === 'subtree-proposal') {
+  // Eagerly bind `mode` so callers reading deeper-down still see it.
+  void mode;
+  {
     const surveyAttempt = nextAuditAttempt(rootId);
     const surveyorFn = surveyorOverride ?? runSurveyor;
     let surveyResult: SurveyorResult;
@@ -544,24 +531,17 @@ export async function runSubtreeAudit(
         ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:${sessionSuffix}`
         : sessionSuffix;
 
-      // Root deferred to L3 synthesizer (Phase 4). For now, no L2
-      // dispatch happens for the root in subtree-proposal mode — record
-      // a placeholder outcome so the rollup math still has full coverage.
-      if (mode === 'subtree-proposal' && isRootLayer && node.id === rootId) {
-        perNodeOutcomes.push({
-          initiativeId: node.id,
-          layerIndex: layerIdx,
-          scopeKey,
-          status: 'ok',
-          note: '(root deferred to L3 synthesizer; not implemented in Phase 3)',
-        });
+      // Root deferred to L3 synthesizer. The L3 dispatch lands AFTER
+      // the layer loop completes, and updates the root's outcome at
+      // that point. For now, skip the L2 dispatch.
+      if (isRootLayer && node.id === rootId) {
         return;
       }
 
       // Manifest-driven skip: don't dispatch — emit a synthetic keep
       // proposal and record the outcome so the parent layer's
       // childFindings includes a synthesized body.
-      if (mode === 'subtree-proposal') {
+      {
         const m = manifestNodeFor(node.id);
         if (m && isManifestSkip(node.id)) {
           const synth = emitSyntheticKeepProposal(node, m);
@@ -599,7 +579,7 @@ export async function runSubtreeAudit(
             // In subtree-proposal mode, child findings are JSON
             // audit_proposal bodies — summarize them as prose for the
             // parent auditor.
-            if (mode === 'subtree-proposal' && f?.body && !f.failed) {
+            if (f?.body && !f.failed) {
               try {
                 const parsed = auditProposalBodySchema.safeParse(JSON.parse(f.body));
                 if (parsed.success) {
@@ -644,8 +624,7 @@ export async function runSubtreeAudit(
         [node.id],
       );
 
-      const manifestEntryForNode =
-        mode === 'subtree-proposal' ? manifestNodeFor(node.id) : null;
+      const manifestEntryForNode = manifestNodeFor(node.id);
       const triggerBody = buildAuditPrompt({
         initiative: node,
         tasks: tasksForNode,
@@ -653,27 +632,23 @@ export async function runSubtreeAudit(
         guidance: guidance ?? null,
         priorFindings: [],
         childFindings,
-        mode: mode === 'subtree-proposal' ? 'subtree-proposal' : 'subtree',
-        proposalInput:
-          mode === 'subtree-proposal'
-            ? {
-                rootId,
-                attempt,
-                manifestNode: {
-                  hypothesis: manifestEntryForNode?.hypothesis ?? 'needs-deep-dive',
-                  confidence: manifestEntryForNode?.confidence ?? 'low',
-                  investigation_prompt:
-                    manifestEntryForNode?.investigation_prompt ??
-                    `Audit ${node.title} against repo + MC reality and emit a structured proposal.`,
-                  scoped_evidence_hints:
-                    manifestEntryForNode?.scoped_evidence_hints ?? [],
-                },
-              }
-            : undefined,
+        mode: 'subtree-proposal',
+        proposalInput: {
+          rootId,
+          attempt,
+          manifestNode: {
+            hypothesis: manifestEntryForNode?.hypothesis ?? 'needs-deep-dive',
+            confidence: manifestEntryForNode?.confidence ?? 'low',
+            investigation_prompt:
+              manifestEntryForNode?.investigation_prompt ??
+              `Audit ${node.title} against repo + MC reality and emit a structured proposal.`,
+            scoped_evidence_hints:
+              manifestEntryForNode?.scoped_evidence_hints ?? [],
+          },
+        },
       });
 
-      const dispatchRole: 'researcher' | 'auditor' =
-        mode === 'subtree-proposal' ? 'auditor' : 'researcher';
+      const dispatchRole = 'auditor' as const;
 
       try {
         await dispatchScope({
@@ -693,78 +668,45 @@ export async function runSubtreeAudit(
           label: `Audit: ${node.title}`,
         });
 
-        if (mode === 'subtree-proposal') {
-          // Look for the most recent audit_proposal note on this node.
-          // The MCP take_note validator from Phase 1 has already
-          // enforced schema validity at write time — if a row exists,
-          // it parses cleanly.
-          const propNotes = listNotes({
-            initiative_id: node.id,
-            kinds: ['audit_proposal'],
-            limit: 1,
-            order: 'desc',
-          });
-          const propBody = propNotes[0]?.body?.trim();
-          if (propBody) {
-            findingsByInitiative.set(node.id, { body: propBody, failed: false });
-            perNodeOutcomes.push({
-              initiativeId: node.id,
-              layerIndex: layerIdx,
-              scopeKey,
-              status: 'ok',
-              note: propBody,
-            });
-          } else {
-            // No audit_proposal landed — emit synthetic fallback.
-            const synth = emitFallbackKeepProposal(node);
-            const fallbackBody =
-              synth?.body ??
-              `(audit failed: invalid proposal body after retries; synthetic fallback createNote also failed for ${node.id})`;
-            findingsByInitiative.set(node.id, {
-              body: fallbackBody,
-              failed: true,
-            });
-            perNodeOutcomes.push({
-              initiativeId: node.id,
-              layerIndex: layerIdx,
-              scopeKey,
-              status: 'failed',
-              error: 'no audit_proposal landed; synthetic fallback emitted',
-            });
-          }
-          return;
-        }
-
-        // mode === 'subtree' — original prose-observation flow.
-        const notes = listNotes({
+        // Look for the most recent audit_proposal note on this node.
+        // The MCP take_note validator from Phase 1 has already
+        // enforced schema validity at write time — if a row exists,
+        // it parses cleanly.
+        const propNotes = listNotes({
           initiative_id: node.id,
-          audience: 'pm',
-          min_importance: 2,
+          kinds: ['audit_proposal'],
           limit: 1,
           order: 'desc',
         });
-        const body = notes[0]?.body?.trim();
-        if (body) {
-          findingsByInitiative.set(node.id, { body, failed: false });
+        const propBody = propNotes[0]?.body?.trim();
+        if (propBody) {
+          findingsByInitiative.set(node.id, { body: propBody, failed: false });
           perNodeOutcomes.push({
             initiativeId: node.id,
             layerIndex: layerIdx,
             scopeKey,
             status: 'ok',
-            note: body,
+            note: propBody,
           });
         } else {
-          // Researcher returned but didn't take_note — treat as failure.
-          const placeholder = `(audit failed: researcher reply received but no take_note(initiative_id=${node.id}, audience='pm', importance=2) row landed)`;
-          findingsByInitiative.set(node.id, { body: placeholder, failed: true });
+          // No audit_proposal landed — emit synthetic fallback.
+          const synth = emitFallbackKeepProposal(node);
+          const fallbackBody =
+            synth?.body ??
+            `(audit failed: invalid proposal body after retries; synthetic fallback createNote also failed for ${node.id})`;
+          findingsByInitiative.set(node.id, {
+            body: fallbackBody,
+            failed: true,
+          });
           perNodeOutcomes.push({
             initiativeId: node.id,
             layerIndex: layerIdx,
             scopeKey,
             status: 'failed',
-            error: 'no take_note row',
+            error: 'no audit_proposal landed; synthetic fallback emitted',
           });
         }
+        return;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const placeholder = `(audit failed: ${message})`;
@@ -784,6 +726,64 @@ export async function runSubtreeAudit(
     });
 
     await boundedAll(tasks, subtreeConcurrency);
+  }
+
+  // ─── L3 synthesizer dispatch (root layer replacement) ─────────────
+  // Pre-load every L2 audit_proposal across the descendant subtree —
+  // synthetic-keep + synthetic-fallback rows are valid proposals and
+  // MUST be included so the synthesizer sees full coverage.
+  // The result is recorded as the root's per-node outcome. On failure
+  // / no-synthesis we do NOT emit a synthetic fallback (spec §5.5);
+  // the queue UI surfaces a "synthesis missing — re-run synth only"
+  // affordance instead.
+  {
+    const synthAttempt = nextAuditAttempt(rootId);
+    const proposalSummaries = loadProposalsForSubtree(rootId, workspaceId);
+    const synthFn = synthesizerOverride ?? runSynthesizer;
+    const rootScopeKey = (runner as { session_key_prefix?: string | null })
+      .session_key_prefix
+      ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:initiative-${rootId}:audit-synthesis:${synthAttempt}`
+      : `initiative-${rootId}:audit-synthesis:${synthAttempt}`;
+    let synthResult: SynthesizerResult;
+    try {
+      synthResult = await synthFn({
+        rootId,
+        workspaceId,
+        attempt: synthAttempt,
+        runner,
+        parentRunId,
+        manifest,
+        proposalSummaries,
+        guidance: guidance ?? null,
+        timeoutMs: perNodeTimeoutMs,
+      });
+    } catch (err) {
+      synthResult = {
+        synthesis: null,
+        synthesisNoteId: null,
+        dispatchOutcome: 'failed',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      };
+    }
+    const rootLayerIdx = Math.max(0, layers.length - 1);
+    if (synthResult.dispatchOutcome === 'ok' && synthResult.synthesis) {
+      perNodeOutcomes.push({
+        initiativeId: rootId,
+        layerIndex: rootLayerIdx,
+        scopeKey: rootScopeKey,
+        status: 'ok',
+        note: synthResult.synthesis.completion_sentinel,
+      });
+    } else {
+      perNodeOutcomes.push({
+        initiativeId: rootId,
+        layerIndex: rootLayerIdx,
+        scopeKey: rootScopeKey,
+        status: 'failed',
+        error: `(synthesis ${synthResult.dispatchOutcome}: ${synthResult.errorMessage ?? 'no error message'})`,
+      });
+    }
+    void manifestNoteId; // reference kept for traceability; not surfaced in outcome.
   }
 
   const failedCount = perNodeOutcomes.filter((o) => o.status === 'failed').length;

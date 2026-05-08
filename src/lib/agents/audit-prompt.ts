@@ -22,6 +22,11 @@
 
 import type { Initiative } from '@/lib/db/initiatives';
 import type { AgentNote } from '@/lib/db/agent-notes';
+import type {
+  AuditManifestBody,
+  AuditProposalBody,
+} from '@/lib/agents/audit-proposals/schemas';
+import { summarizeProposalForBriefing } from './subtree-audit-summarize';
 
 export interface BuildAuditPromptInput {
   initiative: Pick<
@@ -71,8 +76,17 @@ export interface BuildAuditPromptInput {
     /** True when the child's audit failed/timed out — render with a banner. */
     failed?: boolean;
   }>;
-  /** Subtree-vs-narrow flavor. Defaults to 'narrow'. PR 4. */
-  mode?: 'narrow' | 'subtree' | 'survey' | 'subtree-proposal';
+  /**
+   * Audit flavor. Defaults to 'narrow'.
+   * - 'narrow' — single-node audit (PR 2 / unchanged).
+   * - 'survey' — L1 surveyor (Phase 2).
+   * - 'subtree-proposal' — L2 per-node typed proposal (Phase 3).
+   * - 'synthesis' — L3 synthesizer (Phase 4).
+   *
+   * The legacy 'subtree' mode was removed in Phase 4 (hard cutover —
+   * see specs/subtree-audit-proposals-spec.md §6.3).
+   */
+  mode?: 'narrow' | 'survey' | 'subtree-proposal' | 'synthesis';
   /**
    * Per-node briefing inputs for `mode: 'subtree-proposal'` (Phase 3).
    * The orchestrator threads in the manifest entry so the auditor sees
@@ -109,6 +123,24 @@ export interface BuildAuditPromptInput {
     /** Most recent prior `audit_synthesis` body (verbatim) or null. */
     priorSynthesisBody?: string | null;
   };
+  /**
+   * L3 synthesizer briefing inputs (mode: 'synthesis'). The orchestrator
+   * pre-loads the manifest + every L2 proposal body so the synthesizer
+   * agent doesn't need tree-walk tools. See spec §3.3 / §4.4.
+   */
+  synthesisInput?: {
+    rootId: string;
+    attempt: number;
+    /** Verbatim L1 manifest body, or null if surveyor failed/fallback. */
+    manifest: AuditManifestBody | null;
+    /** Per-node L2 proposal summaries (synthetic + real). */
+    proposalSummaries: ReadonlyArray<{
+      noteId: string;
+      initiativeId: string;
+      initiativeTitle: string;
+      body: AuditProposalBody;
+    }>;
+  };
 }
 
 /**
@@ -128,6 +160,7 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
     mode = 'narrow',
     surveyInput,
     proposalInput,
+    synthesisInput,
   } = input;
 
   if (mode === 'survey') {
@@ -142,6 +175,14 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
       guidance: guidance ?? null,
       childFindings,
       proposalInput,
+    });
+  }
+
+  if (mode === 'synthesis') {
+    return buildSynthesisPrompt({
+      initiative,
+      guidance: guidance ?? null,
+      synthesisInput,
     });
   }
 
@@ -598,5 +639,187 @@ queue retains full coverage.
 - If the node has no associated code (planned-only), emit a \`keep\`
   proposal with \`confidence: 'low'\` and a one-line rationale +
   \`would_confirm_by\`. Don't burn ten minutes greenfield-grepping.
+`;
+}
+
+/**
+ * Build the L3 synthesizer briefing (mode: 'synthesis'). The orchestrator
+ * pre-loads the L1 manifest + every L2 audit_proposal body, summarizes
+ * the proposals via `summarizeProposalForBriefing`, and lays out the §4.4
+ * audit_synthesis schema with a concrete example.
+ *
+ * Spec: specs/subtree-audit-proposals-spec.md §3.3, §4.4.
+ */
+function buildSynthesisPrompt(args: {
+  initiative: BuildAuditPromptInput['initiative'];
+  guidance: string | null;
+  synthesisInput?: BuildAuditPromptInput['synthesisInput'];
+}): string {
+  const { initiative, guidance, synthesisInput } = args;
+  if (!synthesisInput) {
+    throw new Error('buildAuditPrompt(mode=synthesis): synthesisInput is required');
+  }
+  const { rootId, attempt, manifest, proposalSummaries } = synthesisInput;
+
+  const targetWindow =
+    initiative.target_start || initiative.target_end
+      ? `${initiative.target_start ?? '?'} → ${initiative.target_end ?? '?'}`
+      : '_(no target window set)_';
+
+  const description = initiative.description?.trim()
+    ? initiative.description.trim()
+    : '_(no description)_';
+
+  const statusCheck = initiative.status_check_md?.trim()
+    ? initiative.status_check_md.trim()
+    : '_(none)_';
+
+  const guidanceBlock = guidance?.trim()
+    ? `\n## Operator focus\n\n${guidance.trim()}\n`
+    : '';
+
+  const manifestBlock = manifest
+    ? `\n## L1 Manifest (verbatim)\n\n\`\`\`json\n${JSON.stringify(manifest, null, 2)}\n\`\`\`\n`
+    : '\n## L1 Manifest\n\n_(manifest unavailable — surveyor used fallback or failed; reason in operator focus if any)_\n';
+
+  const proposalsBlock =
+    proposalSummaries.length === 0
+      ? '\n## L2 Proposals\n\n_(no L2 proposals were emitted — empty or unaudited subtree)_\n'
+      : `\n## L2 Proposals (one per descendant node)\n\nEach summary below comes from a per-node \`audit_proposal\` note. Read across them — your job is *cross-cutting* reasoning, not re-deriving the per-node verdicts.\n\n${proposalSummaries
+          .map(
+            (p, i) =>
+              `### Proposal ${i + 1} — ${p.initiativeTitle} (id=${p.initiativeId}, note=${p.noteId})\n\n${summarizeProposalForBriefing(p.body)}\n`,
+          )
+          .join('\n---\n\n')}\n`;
+
+  const exampleBody = `{
+  "version": 1,
+  "root_initiative_id": "${rootId}",
+  "attempt": ${attempt},
+  "completion_sentinel": "Audit complete: 7 nodes — 1 done, 2 cancel, 1 keep, 2 modify_scope, 1 new_story; epic dates +14d",
+  "epic_proposals": [
+    {
+      "proposed_action": "modify_epic_dates",
+      "proposed_changes": { "target_end": "2026-05-27" },
+      "rationale": "Two stories slipped; realistic finish is 2 weeks out.",
+      "confidence": "medium"
+    },
+    {
+      "proposed_action": "modify_epic_scope",
+      "proposed_changes": { "description": "…revised body…" },
+      "rationale": "Body still references the old shim path that was removed.",
+      "confidence": "high"
+    }
+  ],
+  "cross_node_proposals": [
+    {
+      "proposed_action": "merge_stories",
+      "subject_initiative_ids": ["6379b104-…", "9ab40f1f-…"],
+      "rationale": "Both reference the same alert-shim; one PR closes both.",
+      "confidence": "medium"
+    },
+    {
+      "proposed_action": "new_story",
+      "proposed_new_node": {
+        "kind": "story",
+        "title": "Audit + remove dead alert hook in extensions/browser",
+        "description": "…",
+        "estimated_effort_hours": 2
+      },
+      "rationale": "Found in repo grep but absent from the epic.",
+      "confidence": "medium"
+    }
+  ]
+}`;
+
+  const takeNoteCall = `take_note({
+  agent_id: '<your agent_id>',
+  kind: 'audit_synthesis',
+  initiative_id: '${rootId}',
+  scope_key: '<from briefing>',
+  role: 'auditor',
+  run_group_id: '<from briefing>',
+  audience: 'pm',
+  importance: 2,
+  body: JSON.stringify(<the JSON object above>),
+})`;
+
+  return `**Initiative audit — L3 SYNTHESIZER (mode: synthesis)**
+
+You are running the *synthesis* stage. The L1 surveyor produced a
+manifest; the L2 per-node auditors produced one \`audit_proposal\` each.
+Your only job is to emit ONE \`audit_synthesis\` note carrying the
+cross-cutting + epic-level reasoning the per-node auditors couldn't see.
+
+Target root: ${initiative.title}  (kind=${initiative.kind}, status=${initiative.status}, id=${initiative.id})
+Attempt: ${attempt}
+
+Description:
+> ${description.replace(/\n/g, '\n> ')}
+
+Status check:
+${statusCheck}
+
+Target window: ${targetWindow}
+${guidanceBlock}${manifestBlock}${proposalsBlock}
+## Contract
+
+- Slice: cross-cutting + epic-level reasoning across the L2 proposals.
+- Expected deliverable: exactly ONE \`take_note\` call:
+  - kind: 'audit_synthesis'
+  - initiative_id: '${rootId}'
+  - audience: 'pm'
+  - importance: 2
+  - body: JSON.stringify of an object conforming to the audit_synthesis v1 schema.
+- Acceptance criteria:
+  * Body parses as the audit_synthesis v1 schema.
+  * \`completion_sentinel\` is the FIRST line of the body's narrative — required, single line, ≥1 char, summary of audit results across nodes (e.g., "Audit complete: 7 nodes — 1 done, 2 cancel, 1 keep, 2 modify_scope, 1 new_story; epic dates +14d").
+  * \`epic_proposals\` carries only \`modify_epic_dates\` and \`modify_epic_scope\`. No other actions.
+  * \`cross_node_proposals\` carries only \`merge_stories\` (≥2 subjects), \`split_story\` (exactly 1 subject), and \`new_story\` (no existing node). Per-node verdicts (keep/mark_done/cancel/modify_scope/modify_dates) are NOT duplicated here — the queue UI derives them from the L2 proposals.
+- Expected duration: < 5 minutes wall clock. You're synthesizing; you're not re-grepping the repo.
+
+## Schema (audit_synthesis v1)
+
+Top-level fields:
+- \`version\`: literal \`1\`.
+- \`root_initiative_id\`: this root's initiative id (\`${rootId}\`).
+- \`attempt\`: the L3 attempt number (\`${attempt}\`).
+- \`completion_sentinel\`: required single-line summary; the queue UI surfaces this in feed views.
+- \`epic_proposals\`: array (may be empty) of \`{ proposed_action: 'modify_epic_dates' | 'modify_epic_scope', proposed_changes, rationale, confidence }\`.
+- \`cross_node_proposals\`: array (may be empty) of \`{ proposed_action: 'merge_stories' | 'split_story' | 'new_story', ..., rationale, confidence }\`.
+
+Example body:
+
+\`\`\`jsonc
+${exampleBody}
+\`\`\`
+
+## How to emit
+
+\`\`\`
+${takeNoteCall}
+\`\`\`
+
+## Retries on validation failure
+
+The MCP \`take_note\` handler validates the body against the schema +
+the 3000-char cap. On failure it returns a structured error naming the
+failing field. **Retry up to 2 times** with a tightened body (drop a
+weak proposal, shorten a rationale). After 2 failures, give up — the
+operator still has the L2 proposal queue and a "synthesis missing"
+affordance to re-run just L3.
+
+## Discipline
+
+- ONE \`audit_synthesis\` note. No \`breadcrumb\` / \`discovery\` /
+  \`question\` chatter during the synthesis.
+- Auditors are read-only. Do **not** call \`update_task_status\`,
+  \`update_initiative\`, or \`register_deliverable\`.
+- Do **not** re-derive per-node verdicts here. If a per-node proposal
+  looks wrong, that's a queue-review concern, not a synthesis concern.
+- Stay under ~2900 chars in the body so a tightening retry has room.
+- It is OK to emit empty \`epic_proposals\` and \`cross_node_proposals\`
+  arrays if the subtree shows no cross-cutting drift — but the
+  \`completion_sentinel\` must still summarize the overall verdict.
 `;
 }
