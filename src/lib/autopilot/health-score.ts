@@ -14,7 +14,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { queryOne, queryAll, run, transaction } from '@/lib/db';
+import { queryOne, queryAll, run, transaction, toSqliteUtc } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import type {
   HealthWeightConfig,
@@ -130,7 +130,7 @@ function computePipelineDepth(productId: string): { score: number; rawValue: num
  * 0   = no swipes
  */
 function computeSwipeVelocity(productId: string): { score: number; rawValue: number; hasData: boolean } {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const sevenDaysAgo = toSqliteUtc(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const result = queryOne<{ count: number }>(
     `SELECT COUNT(*) as count FROM swipe_history WHERE product_id = ? AND created_at >= ?`,
     [productId, sevenDaysAgo]
@@ -176,7 +176,7 @@ function computeBuildSuccess(productId: string): { score: number; rawValue: numb
  * Inverse relationship — lower cost = higher score
  */
 function computeCostEfficiency(productId: string): { score: number; rawValue: number; hasData: boolean } {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = toSqliteUtc(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
 
   const totalCost = queryOne<{ total: number }>(
     `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE product_id = ? AND created_at >= ?`,

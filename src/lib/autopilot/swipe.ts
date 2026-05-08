@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { queryOne, queryAll, run, transaction } from '@/lib/db';
+import { queryOne, queryAll, run, transaction, toSqliteUtc } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { rebuildPreferenceModel } from './preferences';
@@ -307,7 +307,7 @@ function createTaskFromIdea(idea: Idea, opts?: { urgent?: boolean; notes?: strin
     const monthlySpend = queryOne<{ total: number }>(
       `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events
        WHERE product_id = ? AND created_at >= ?`,
-      [idea.product_id, monthStart.toISOString()]
+      [idea.product_id, toSqliteUtc(monthStart)]
     );
     if (monthlySpend && monthlySpend.total >= product.cost_cap_monthly) {
       // Cap exceeded — queue to inbox instead of auto-dispatching

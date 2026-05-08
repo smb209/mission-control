@@ -1,4 +1,4 @@
-import { queryOne, queryAll } from '@/lib/db';
+import { queryOne, queryAll, toSqliteUtc } from '@/lib/db';
 
 interface CostOverview {
   today: number;
@@ -22,14 +22,14 @@ interface PerFeatureStats {
 
 export function getCostOverview(workspaceId: string): CostOverview {
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const todayStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
 
   // Start of week (Monday)
   const dayOfWeek = now.getDay();
   const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday).toISOString();
+  const weekStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday));
 
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const monthStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), 1));
 
   const today = queryOne<{ total: number }>(
     `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE workspace_id = ? AND created_at >= ?`,
