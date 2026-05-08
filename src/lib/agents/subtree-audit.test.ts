@@ -22,7 +22,9 @@ import {
   runSubtreeAudit,
 } from './subtree-audit';
 import { createInitiative } from '@/lib/db/initiatives';
+import { listNotes } from '@/lib/db/agent-notes';
 import { getAgentRun } from '@/lib/db/agent-runs';
+import type { SurveyorResult } from './audit-survey';
 import {
   __setSendChatClientForTests,
   type ChatEvent,
@@ -298,4 +300,153 @@ test('runSubtreeAudit: parent rolls up to complete when all children succeed', a
   const parent = getAgentRun(result.parentRunId!)!;
   assert.ok(['complete', 'failed'].includes(parent.status), 'parent rolled up');
   assert.ok(parent.completed_at);
+});
+
+// ─── runSubtreeAudit: mode='subtree-proposal' (Phase 2) ────────────
+
+test('runSubtreeAudit (subtree-proposal): manifest skip → synthetic audit_proposal, no dispatch', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'SP root' });
+  const skipMe = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'Skip me',
+    parent_initiative_id: root.id,
+  });
+  const auditMe = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'Audit me',
+    parent_initiative_id: root.id,
+  });
+
+  // Stub the surveyor: skipMe gets skip:true / high; auditMe needs-deep-dive.
+  const surveyorOverride = async (): Promise<SurveyorResult> => ({
+    manifest: {
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 1,
+      previous_synthesis_run_group_id: null,
+      summary: 'test manifest',
+      nodes: [
+        {
+          initiative_id: skipMe.id,
+          title: skipMe.title,
+          current_status: 'in_progress',
+          hypothesis: 'likely-done',
+          confidence: 'high',
+          investigation_prompt: 'No need to dig further.',
+          scoped_evidence_hints: [],
+          skip: true,
+        },
+        {
+          initiative_id: auditMe.id,
+          title: auditMe.title,
+          current_status: 'in_progress',
+          hypothesis: 'needs-deep-dive',
+          confidence: 'medium',
+          investigation_prompt: 'Do dig.',
+          scoped_evidence_hints: [],
+          skip: false,
+        },
+      ],
+      cross_cutting_questions: [],
+    },
+    surveyorNoteId: null,
+    dispatchOutcome: 'ok',
+  });
+
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 2,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride,
+  });
+
+  // skipMe must NOT have an agent_runs child row (no dispatch).
+  const skipChildRuns = queryAll<{ id: string }>(
+    `SELECT id FROM agent_runs WHERE workspace_id = ? AND initiative_id = ? AND parent_run_id = ?`,
+    [ws, skipMe.id, result.parentRunId],
+  );
+  assert.equal(skipChildRuns.length, 0, 'skipped node was not dispatched');
+
+  // auditMe SHOULD have a dispatched child run.
+  const auditChildRuns = queryAll<{ id: string }>(
+    `SELECT id FROM agent_runs WHERE workspace_id = ? AND initiative_id = ? AND parent_run_id = ?`,
+    [ws, auditMe.id, result.parentRunId],
+  );
+  assert.equal(auditChildRuns.length, 1, 'non-skipped node was dispatched');
+
+  // Synthetic audit_proposal note exists for skipMe.
+  const proposals = listNotes({
+    initiative_id: skipMe.id,
+    kinds: ['audit_proposal'],
+    limit: 5,
+  });
+  assert.equal(proposals.length, 1);
+  const body = JSON.parse(proposals[0].body);
+  assert.equal(body.proposed_action, 'keep');
+  assert.equal(body.confidence, 'high');
+  assert.equal(body.node_initiative_id, skipMe.id);
+
+  // Per-node outcome includes the manifest-skip marker.
+  const skipOutcome = result.perNodeOutcomes.find((o) => o.initiativeId === skipMe.id);
+  assert.ok(skipOutcome);
+  assert.equal(skipOutcome!.status, 'ok');
+  assert.match(skipOutcome!.note ?? '', /manifest-skip/);
+});
+
+test('runSubtreeAudit (subtree-proposal): surveyor failure → fallback dispatches all nodes', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Fallback root' });
+  const c1 = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'C1',
+    parent_initiative_id: root.id,
+  });
+  const c2 = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'C2',
+    parent_initiative_id: root.id,
+  });
+
+  const surveyorOverride = async () => {
+    throw new Error('boom');
+  };
+
+  const result = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 2,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride,
+  });
+
+  // All three nodes (root + 2 children) get dispatched (no skips in fallback).
+  const childRuns = queryAll<{ initiative_id: string }>(
+    `SELECT initiative_id FROM agent_runs WHERE workspace_id = ? AND parent_run_id = ?`,
+    [ws, result.parentRunId],
+  );
+  const dispatchedIds = new Set(childRuns.map((r) => r.initiative_id));
+  for (const id of [root.id, c1.id, c2.id]) {
+    assert.ok(dispatchedIds.has(id), `expected dispatch for ${id}`);
+  }
+  // No synthetic audit_proposal notes because nothing was skipped.
+  const propNotes = listNotes({
+    initiative_id: c1.id,
+    kinds: ['audit_proposal'],
+    limit: 5,
+  });
+  assert.equal(propNotes.length, 0);
 });

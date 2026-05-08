@@ -48,7 +48,7 @@ import type { AgentRun } from '@/lib/db/agent-runs';
 export const dynamic = 'force-dynamic';
 
 const InvestigateSchema = z.object({
-  mode: z.enum(['narrow', 'subtree']).default('narrow'),
+  mode: z.enum(['narrow', 'subtree', 'subtree-proposal']).default('narrow'),
   guidance: z.string().max(2000).nullish(),
   reaudit: z.enum(['fresh', 'build_on']).default('fresh'),
   /**
@@ -241,7 +241,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    if (mode === 'subtree') {
+    if (mode === 'subtree' || mode === 'subtree-proposal') {
       // Subtree mode: reject terminal-status roots — auditing a
       // done/cancelled initiative's whole subtree is meaningless.
       if (TERMINAL_STATUSES.has(initiative.status)) {
@@ -273,16 +273,17 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         perNodeTimeoutMs: settings.perNodeTimeoutMs,
         subtreeConcurrency: settings.subtreeConcurrency,
         runner,
+        mode,
       }).catch((err) => {
         console.error(
-          `[investigate] subtree run failed for initiative ${id}:`,
+          `[investigate] ${mode} run failed for initiative ${id}:`,
           (err as Error).message,
         );
       });
 
       return NextResponse.json({
         ok: true,
-        mode: 'subtree',
+        mode,
         root_scope_key: rootScopeKey,
         planned_nodes: plan.plannedNodes,
         planned_layers: plan.plannedLayers,

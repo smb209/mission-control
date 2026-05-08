@@ -31,12 +31,23 @@
  */
 
 import { listInitiatives, type Initiative } from '@/lib/db/initiatives';
-import { listNotes } from '@/lib/db/agent-notes';
+import { createNote, listNotes } from '@/lib/db/agent-notes';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { buildAuditPrompt } from '@/lib/agents/audit-prompt';
 import type { Agent } from '@/lib/types';
 import { queryAll } from '@/lib/db';
 import { markRunRollup, startAgentRun } from '@/lib/db/agent-runs';
+import { v4 as uuidv4 } from 'uuid';
+import {
+  runSurveyor,
+  buildFallbackManifest,
+  type SurveyorResult,
+} from '@/lib/agents/audit-survey';
+import {
+  auditProposalBodySchema,
+  type AuditManifestBody,
+  type AuditManifestNode,
+} from '@/lib/agents/audit-proposals/schemas';
 
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
@@ -201,6 +212,23 @@ export interface RunSubtreeAuditInput {
   perNodeTimeoutMs: number;
   subtreeConcurrency: number;
   runner: Agent;
+  /**
+   * Output mode for the subtree audit.
+   * - 'subtree' — today's free-form per-node `observation` notes (PR 4
+   *   shape, default).
+   * - 'subtree-proposal' — Phase 2 of the structured-proposals spec:
+   *   adds an L1 surveyor + manifest-driven filter; L2 still emits
+   *   free-form notes (Phase 3 will switch them to typed proposals).
+   * Defaults to 'subtree' for back-compat with existing call sites.
+   */
+  mode?: 'subtree' | 'subtree-proposal';
+  /**
+   * Test seam — overrides the surveyor function so tests can stub
+   * dispatch + manifest readback without exercising openclaw.
+   */
+  surveyorOverride?: (
+    args: Parameters<typeof runSurveyor>[0],
+  ) => Promise<SurveyorResult>;
 }
 
 export interface SubtreeAuditResult {
@@ -247,8 +275,16 @@ function nextAuditAttempt(initiativeId: string): number {
 export async function runSubtreeAudit(
   input: RunSubtreeAuditInput,
 ): Promise<SubtreeAuditResult> {
-  const { rootId, workspaceId, guidance, perNodeTimeoutMs, subtreeConcurrency, runner } =
-    input;
+  const {
+    rootId,
+    workspaceId,
+    guidance,
+    perNodeTimeoutMs,
+    subtreeConcurrency,
+    runner,
+    mode = 'subtree',
+    surveyorOverride,
+  } = input;
   const { layers } = planSubtreeAudit(rootId, workspaceId);
 
   // Synthetic root agent_runs row — exists purely so the /jobs UI can
@@ -291,6 +327,119 @@ export async function runSubtreeAudit(
   const findingsByInitiative = new Map<string, { body: string; failed: boolean }>();
   const perNodeOutcomes: SubtreeAuditResult['perNodeOutcomes'] = [];
 
+  // ─── L1 surveyor + manifest filter (mode: 'subtree-proposal') ──────
+  // Skipped nodes (manifest.skip === true && confidence === 'high') are
+  // not dispatched; instead we emit a synthetic `audit_proposal` note
+  // and record an 'ok' outcome so the synthesized body flows up to
+  // parent layers via the existing childFindings path.
+  let manifest: AuditManifestBody | null = null;
+  let manifestNoteId: string | null = null;
+  if (mode === 'subtree-proposal') {
+    const surveyAttempt = nextAuditAttempt(rootId);
+    const surveyorFn = surveyorOverride ?? runSurveyor;
+    let surveyResult: SurveyorResult;
+    try {
+      surveyResult = await surveyorFn({
+        rootId,
+        workspaceId,
+        attempt: surveyAttempt,
+        runner,
+        parentRunId,
+        guidance: guidance ?? null,
+        timeoutMs: perNodeTimeoutMs,
+        gitActivity: null,
+      });
+    } catch (err) {
+      surveyResult = {
+        manifest: null,
+        surveyorNoteId: null,
+        dispatchOutcome: 'failed',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (surveyResult.dispatchOutcome === 'ok' && surveyResult.manifest) {
+      manifest = surveyResult.manifest;
+      manifestNoteId = surveyResult.surveyorNoteId;
+    } else {
+      console.warn(
+        `[subtree-audit] surveyor outcome=${surveyResult.dispatchOutcome}; ` +
+          `falling back to full-fanout manifest. error=${surveyResult.errorMessage ?? '(none)'}`,
+      );
+      manifest = buildFallbackManifest(rootId, layers, surveyAttempt);
+      manifestNoteId = surveyResult.surveyorNoteId;
+    }
+  }
+
+  /** Returns the manifest entry for a node, or null if not in manifest. */
+  const manifestNodeFor = (id: string): AuditManifestNode | null => {
+    if (!manifest) return null;
+    return manifest.nodes.find((n) => n.initiative_id === id) ?? null;
+  };
+
+  /** Should the orchestrator skip dispatch for this node (manifest-driven)? */
+  const isManifestSkip = (id: string): boolean => {
+    const m = manifestNodeFor(id);
+    return !!m && m.skip === true && m.confidence === 'high';
+  };
+
+  /**
+   * Emit a synthetic `audit_proposal` note for a manifest-skipped node.
+   * Direct DB write — bypasses the MCP take_note validator path because
+   * this is server-side. We still validate the body against the Zod
+   * schema as a sanity check.
+   */
+  const emitSyntheticKeepProposal = (
+    node: LiteInitiative,
+    manifestEntry: AuditManifestNode,
+  ): { noteId: string; body: string } | null => {
+    const bodyObj = {
+      version: 1 as const,
+      node_initiative_id: node.id,
+      current_mc_status: node.status,
+      current_mc_target_end: node.target_end ?? null,
+      proposed_action: 'keep' as const,
+      proposed_changes: {},
+      repo_evidence: [
+        {
+          kind: 'note' as const,
+          ref: manifestNoteId ?? `manifest:fallback:initiative-${rootId}`,
+        },
+      ],
+      rationale: `Skipped by manifest hypothesis: ${manifestEntry.hypothesis} (high confidence). ${manifestEntry.investigation_prompt.slice(0, 240)}`,
+      confidence: 'high' as const,
+      would_confirm_by: null,
+      continuation_note_id: null,
+    };
+    const parsed = auditProposalBodySchema.safeParse(bodyObj);
+    if (!parsed.success) {
+      console.warn(
+        `[subtree-audit] synthetic keep proposal failed schema check for ${node.id}: ${parsed.error.message}`,
+      );
+      return null;
+    }
+    const body = JSON.stringify(parsed.data);
+    try {
+      const created = createNote({
+        workspace_id: workspaceId,
+        agent_id: null,
+        initiative_id: node.id,
+        scope_key: `initiative-${rootId}:audit-subtree:synthetic-keep:${node.id}`,
+        role: 'orchestrator',
+        run_group_id: uuidv4(),
+        kind: 'audit_proposal',
+        audience: 'pm',
+        body,
+        importance: 1,
+      });
+      return { noteId: created.id, body };
+    } catch (err) {
+      console.warn(
+        `[subtree-audit] createNote(synthetic keep) failed for ${node.id}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  };
+
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
     const tasks = layer.map((node) => async () => {
@@ -300,6 +449,28 @@ export async function runSubtreeAudit(
         .session_key_prefix
         ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:${sessionSuffix}`
         : sessionSuffix;
+
+      // Manifest-driven skip: don't dispatch — emit a synthetic keep
+      // proposal and record the outcome so the parent layer's
+      // childFindings includes a synthesized body.
+      if (mode === 'subtree-proposal') {
+        const m = manifestNodeFor(node.id);
+        if (m && isManifestSkip(node.id)) {
+          const synth = emitSyntheticKeepProposal(node, m);
+          const body =
+            synth?.body ??
+            `(synthetic keep proposal for ${node.id} — manifest-skipped, but createNote failed)`;
+          findingsByInitiative.set(node.id, { body, failed: false });
+          perNodeOutcomes.push({
+            initiativeId: node.id,
+            layerIndex: layerIdx,
+            scopeKey,
+            status: 'ok',
+            note: `manifest-skip: ${m.hypothesis} (${m.confidence})`,
+          });
+          return;
+        }
+      }
 
       // Pull the immediate children's findings (only those that are
       // in our included set — terminal children are skipped). We

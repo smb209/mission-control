@@ -72,7 +72,28 @@ export interface BuildAuditPromptInput {
     failed?: boolean;
   }>;
   /** Subtree-vs-narrow flavor. Defaults to 'narrow'. PR 4. */
-  mode?: 'narrow' | 'subtree';
+  mode?: 'narrow' | 'subtree' | 'survey';
+  /**
+   * Surveyor-only inputs (mode: 'survey'). Carried in the briefing so
+   * the L1 surveyor doesn't have to walk the tree itself. See
+   * specs/subtree-audit-proposals-spec.md §3.1.
+   */
+  surveyInput?: {
+    rootId: string;
+    attempt: number;
+    /** Bottom-up flattened descendants the surveyor should consider. */
+    descendants: ReadonlyArray<{
+      id: string;
+      title: string;
+      kind: string;
+      status: string;
+      parent_initiative_id: string | null;
+    }>;
+    /** Pre-pulled `git log --oneline -20` excerpt or empty string. */
+    gitActivity?: string | null;
+    /** Most recent prior `audit_synthesis` body (verbatim) or null. */
+    priorSynthesisBody?: string | null;
+  };
 }
 
 /**
@@ -90,7 +111,12 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
     priorFindings = [],
     childFindings = [],
     mode = 'narrow',
+    surveyInput,
   } = input;
+
+  if (mode === 'survey') {
+    return buildSurveyPrompt({ initiative, guidance: guidance ?? null, surveyInput });
+  }
 
   const targetWindow =
     initiative.target_start || initiative.target_end
@@ -208,5 +234,133 @@ Don't call propose_changes; you don't have it on your mount. The PM will pick up
 - The audit-trail accumulates by virtue of each summary being its own row; the operator reads them newest-first. Multiple breadcrumbs per dispatch fragment that trail and make it harder to compare audit passes.
 
 If the initiative has no associated code yet (planned-only, no tasks, nothing in the repo to point at), early-exit with a short verdict ("never built — planned-only, no audit work to do"). Don't burn ten minutes of exec on greenfield.
+`;
+}
+
+/**
+ * Build the L1 surveyor briefing. The surveyor reads the supplied
+ * subtree summary + git activity hints + (optional) prior synthesis,
+ * then emits exactly one `audit_manifest` note whose JSON-string body
+ * conforms to `auditManifestBodySchema`.
+ *
+ * Spec: specs/subtree-audit-proposals-spec.md §3.1, §4.2.
+ */
+function buildSurveyPrompt(args: {
+  initiative: BuildAuditPromptInput['initiative'];
+  guidance: string | null;
+  surveyInput?: BuildAuditPromptInput['surveyInput'];
+}): string {
+  const { initiative, guidance, surveyInput } = args;
+  if (!surveyInput) {
+    throw new Error('buildAuditPrompt(mode=survey): surveyInput is required');
+  }
+  const { rootId, attempt, descendants, gitActivity, priorSynthesisBody } = surveyInput;
+
+  const descBlock =
+    descendants.length === 0
+      ? '_(no non-terminal descendants — root is the only audit target)_'
+      : descendants
+          .map(
+            (d) =>
+              `- [${d.kind}] ${d.title} (status=${d.status}, id=${d.id}, parent=${d.parent_initiative_id ?? 'none'})`,
+          )
+          .join('\n');
+
+  const gitBlock = gitActivity?.trim()
+    ? `\n## Recent repo activity (cheap skim)\n\n\`\`\`\n${gitActivity.trim()}\n\`\`\`\n`
+    : '\n## Recent repo activity\n\n_(none provided — surveyor briefing did not include a git-log excerpt; do not greenfield git work)_\n';
+
+  const priorBlock = priorSynthesisBody?.trim()
+    ? `\n## Prior synthesis (most recent audit on this root)\n\n\`\`\`\n${priorSynthesisBody.trim()}\n\`\`\`\n\nUse this to bias toward delta-style narrowing — nodes with no signal change since the prior synthesis are good \`skip: true\` candidates.\n`
+    : '';
+
+  const guidanceBlock = guidance?.trim()
+    ? `\n## Operator focus\n\n${guidance.trim()}\n`
+    : '';
+
+  // Schema example, kept short. The auditor benefits from seeing the
+  // exact JSON shape; the Zod validator will reject anything off.
+  const schemaExample = `{
+  "version": 1,
+  "root_initiative_id": "${rootId}",
+  "attempt": ${attempt},
+  "previous_synthesis_run_group_id": null,
+  "summary": "1-paragraph framing of the epic's intent and current state",
+  "nodes": [
+    {
+      "initiative_id": "<descendant-id>",
+      "title": "<descendant-title>",
+      "current_status": "in_progress",
+      "hypothesis": "needs-deep-dive",
+      "confidence": "medium",
+      "investigation_prompt": "<scoped per-node ask for the L2 auditor>",
+      "scoped_evidence_hints": ["git log --oneline -- <path>", "rg <symbol> <dir>"],
+      "skip": false
+    }
+  ],
+  "cross_cutting_questions": []
+}`;
+
+  const takeNoteCall = `take_note({
+  agent_id: '<your agent_id>',
+  kind: 'audit_manifest',
+  initiative_id: '${rootId}',
+  scope_key: '<from briefing>',
+  role: 'auditor',
+  run_group_id: '<from briefing>',
+  audience: 'pm',
+  importance: 1,
+  body: JSON.stringify(<the JSON object above>),
+})`;
+
+  return `**Initiative audit — L1 SURVEYOR (mode: survey)**
+
+You are running the *survey* stage. Your only job is to emit one
+\`audit_manifest\` note whose JSON-string body plans the per-node
+fan-out the orchestrator will run next. Do **not** deeply audit
+anything yourself — the surveyor reads, doesn't grep-storm.
+
+Target root: ${initiative.title} (kind=${initiative.kind}, status=${initiative.status}, id=${initiative.id})
+Attempt: ${attempt}
+
+## Subtree (non-terminal descendants)
+
+${descBlock}
+${gitBlock}${priorBlock}${guidanceBlock}
+## Contract
+
+- Slice: emit a manifest that narrows the per-node fan-out for this audit.
+- Expected deliverable: exactly ONE \`take_note\` call:
+  - kind: 'audit_manifest'
+  - initiative_id: '${rootId}'
+  - audience: 'pm'
+  - importance: 1
+  - body: JSON.stringify of an object conforming to the schema below.
+- Acceptance criteria:
+  * Body parses as JSON and matches the audit_manifest v1 schema.
+  * \`nodes\` covers each non-terminal descendant listed above (one entry each).
+  * Each node has a \`hypothesis\` ∈ {likely-done, likely-drifted, likely-cancelled, no-evidence, needs-deep-dive}.
+  * Each node has a \`confidence\` ∈ {low, medium, high}.
+  * \`skip: true\` is used sparingly — only when you're highly confident the node needs no deeper audit (e.g. obvious "already done with PR" or "obviously orphaned"). Combined with \`confidence: 'high'\`, the orchestrator will NOT dispatch an auditor for that node and will instead emit a synthetic \`keep\` proposal.
+- Expected duration: < 60s wall clock. You are the *plan*; the audit is the layers that follow.
+
+## Schema (audit_manifest v1)
+
+\`\`\`jsonc
+${schemaExample}
+\`\`\`
+
+## How to emit
+
+\`\`\`
+${takeNoteCall}
+\`\`\`
+
+## Discipline
+
+- One note. No \`breadcrumb\`/\`discovery\`/\`question\` chatter.
+- Do **not** call \`update_task_status\`, \`update_initiative\`, or \`register_deliverable\` — auditors are read-only.
+- The body MUST be a JSON string (\`JSON.stringify(...)\`). The MCP \`take_note\` handler validates it; off-shape bodies are rejected and you'll have to retry.
+- If the subtree above is empty, still emit the manifest with \`nodes: []\` and a one-line \`summary\`.
 `;
 }
