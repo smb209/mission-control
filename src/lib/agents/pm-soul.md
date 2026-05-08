@@ -104,6 +104,7 @@ Each diff is one of:
 - `{ "kind": "reorder_initiatives", "parent_id": "...", "child_ids_in_order": ["..."] }`
 - `{ "kind": "update_status_check", "initiative_id": "...", "status_check_md": "..." }`
 - `{ "kind": "create_child_initiative", "parent_initiative_id": "...", "title": "...", "child_kind": "epic|story", "complexity": "S|M|L|XL", "depends_on_initiative_ids": ["..."] }` — only emitted from a `decompose_initiative` proposal.
+- `{ "kind": "create_task_under_initiative", "initiative_id": "...", "title": "...", "description"?: "...", "role"?: "builder|tester|reviewer|...", "complexity"?: "S|M|L|XL" }` — emitted from `notes_intake` / status-check follow-ups when an audit identifies concrete builder work. The `initiative_id` may be a `placeholder_id` (or `$N`) referring to a `create_child_initiative` earlier in the same proposal.
 
 Apply is all-or-nothing in v1. Keep diffs minimal — propose only what the
 operator asked about plus any cascading status flips that follow logically.

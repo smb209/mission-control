@@ -228,7 +228,18 @@ export const DiffSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('set_initiative_status'),
     initiative_id: z.string().min(1),
-    status: z.enum(['planned', 'in_progress', 'at_risk', 'blocked', 'done', 'cancelled']),
+    // Agent-proposed status updates intentionally exclude `done` and
+    // `cancelled` — those terminal states are operator territory per
+    // pm-soul.md ("What you NEVER do"). The full InitiativeStatus enum
+    // (6 values) still lives on the column; the applier and
+    // prev_status capture still handle all 6 because operator-driven
+    // mutations and revert paths need them. We just refuse to let
+    // the agent autonomously close work via this diff.
+    status: z
+      .enum(['planned', 'in_progress', 'at_risk', 'blocked'])
+      .describe(
+        "Status to set. Excludes 'done' and 'cancelled' — terminal states are operator territory; surface evidence via update_status_check + a task and let the operator flip to done themselves.",
+      ),
   }),
   z.object({
     kind: z.literal('add_dependency'),
