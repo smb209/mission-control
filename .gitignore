@@ -75,3 +75,4 @@ Autensa_v2.mp4
 backups/
 *.db.backup
 *.db.backup-*
+.claude/worktrees/

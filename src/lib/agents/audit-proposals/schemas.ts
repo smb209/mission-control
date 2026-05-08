@@ -73,6 +73,7 @@ export const auditManifestBodySchema = z.object({
 });
 
 export type AuditManifestBody = z.infer<typeof auditManifestBodySchema>;
+export type AuditManifestNode = z.infer<typeof manifestNodeSchema>;
 
 // ─── §4.3 — audit_proposal body schema (L2 + synthetic skip-keeps) ──
 

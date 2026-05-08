@@ -31,6 +31,7 @@ const ROLE_DEFAULT: Record<BriefingRole, SubagentContextMode> = {
   reviewer: 'isolated',
   writer: 'isolated',
   learner: 'isolated',
+  auditor: 'isolated',
 };
 
 interface OverrideRow {

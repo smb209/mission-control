@@ -35,7 +35,8 @@ export type BriefingRole =
   | 'tester'
   | 'reviewer'
   | 'writer'
-  | 'learner';
+  | 'learner'
+  | 'auditor';
 
 export interface BuildBriefingInput {
   workspace_id: string;
