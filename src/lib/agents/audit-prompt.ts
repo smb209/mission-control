@@ -72,7 +72,22 @@ export interface BuildAuditPromptInput {
     failed?: boolean;
   }>;
   /** Subtree-vs-narrow flavor. Defaults to 'narrow'. PR 4. */
-  mode?: 'narrow' | 'subtree' | 'survey';
+  mode?: 'narrow' | 'subtree' | 'survey' | 'subtree-proposal';
+  /**
+   * Per-node briefing inputs for `mode: 'subtree-proposal'` (Phase 3).
+   * The orchestrator threads in the manifest entry so the auditor sees
+   * the surveyor's hypothesis + scoped investigation prompt.
+   */
+  proposalInput?: {
+    rootId: string;
+    attempt: number;
+    manifestNode: {
+      hypothesis: string;
+      confidence: 'low' | 'medium' | 'high';
+      investigation_prompt: string;
+      scoped_evidence_hints: ReadonlyArray<string>;
+    };
+  };
   /**
    * Surveyor-only inputs (mode: 'survey'). Carried in the briefing so
    * the L1 surveyor doesn't have to walk the tree itself. See
@@ -112,10 +127,22 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
     childFindings = [],
     mode = 'narrow',
     surveyInput,
+    proposalInput,
   } = input;
 
   if (mode === 'survey') {
     return buildSurveyPrompt({ initiative, guidance: guidance ?? null, surveyInput });
+  }
+
+  if (mode === 'subtree-proposal') {
+    return buildSubtreeProposalPrompt({
+      initiative,
+      tasks,
+      childInitiatives,
+      guidance: guidance ?? null,
+      childFindings,
+      proposalInput,
+    });
   }
 
   const targetWindow =
@@ -362,5 +389,214 @@ ${takeNoteCall}
 - Do **not** call \`update_task_status\`, \`update_initiative\`, or \`register_deliverable\` — auditors are read-only.
 - The body MUST be a JSON string (\`JSON.stringify(...)\`). The MCP \`take_note\` handler validates it; off-shape bodies are rejected and you'll have to retry.
 - If the subtree above is empty, still emit the manifest with \`nodes: []\` and a one-line \`summary\`.
+`;
+}
+
+/**
+ * Build the L2 per-node briefing for `mode: 'subtree-proposal'` (Phase 3
+ * of specs/subtree-audit-proposals-spec.md). Mirrors the
+ * Delegation-Contract shape from §3.2 of
+ * specs/coordinator-delegation-via-convoy-spec.md: slice / deliverables /
+ * acceptance criteria. Includes the §4.3 audit_proposal schema reminder
+ * + retry guidance.
+ */
+function buildSubtreeProposalPrompt(args: {
+  initiative: BuildAuditPromptInput['initiative'];
+  tasks: BuildAuditPromptInput['tasks'];
+  childInitiatives: NonNullable<BuildAuditPromptInput['childInitiatives']>;
+  guidance: string | null;
+  childFindings: NonNullable<BuildAuditPromptInput['childFindings']>;
+  proposalInput?: BuildAuditPromptInput['proposalInput'];
+}): string {
+  const { initiative, tasks, childInitiatives, guidance, childFindings, proposalInput } = args;
+  if (!proposalInput) {
+    throw new Error('buildAuditPrompt(mode=subtree-proposal): proposalInput is required');
+  }
+  const { manifestNode } = proposalInput;
+
+  const targetWindow =
+    initiative.target_start || initiative.target_end
+      ? `${initiative.target_start ?? '?'} → ${initiative.target_end ?? '?'}`
+      : '_(no target window set)_';
+
+  const description = initiative.description?.trim()
+    ? initiative.description.trim()
+    : '_(no description)_';
+
+  const statusCheck = initiative.status_check_md?.trim()
+    ? initiative.status_check_md.trim()
+    : '_(none)_';
+
+  const tasksBlock =
+    tasks.length === 0
+      ? '_(this initiative has no direct child tasks)_'
+      : tasks.map((t) => `- ${t.title} (${t.status}) [task ${t.id}]`).join('\n');
+
+  const childInitiativesBlock =
+    childInitiatives.length === 0
+      ? '_(this initiative has no direct child initiatives)_'
+      : childInitiatives
+          .map((c) => `- [${c.kind}] ${c.title} (${c.status}) [initiative ${c.id}]`)
+          .join('\n');
+
+  const guidanceBlock = guidance?.trim()
+    ? `\n## Operator focus\n\n${guidance.trim()}\n`
+    : '';
+
+  const childBlock =
+    childFindings.length === 0
+      ? ''
+      : `\n## Findings from child initiatives (already audited)\n\nThese summaries came from per-node auditors we dispatched against this initiative's children in a prior layer. Synthesize them — don't re-audit each child from scratch — and roll their signal into your proposal for THIS node.\n\n${childFindings
+          .map((f, i) => {
+            const banner = f.failed
+              ? '> **Audit failed for this child.** Treat as an explicit gap.\n\n'
+              : '';
+            return `### Child ${i + 1}: ${f.childTitle} (id=${f.childId})\n\n${banner}${f.body.trim()}\n`;
+          })
+          .join('\n---\n\n')}\n`;
+
+  const hintsBlock =
+    manifestNode.scoped_evidence_hints.length === 0
+      ? '_(none)_'
+      : manifestNode.scoped_evidence_hints.map((h) => `- \`${h}\``).join('\n');
+
+  const exampleBody = `{
+  "version": 1,
+  "node_initiative_id": "${initiative.id}",
+  "current_mc_status": "${initiative.status}",
+  "current_mc_target_end": ${initiative.target_end ? `"${initiative.target_end}"` : 'null'},
+  "proposed_action": "keep",
+  "proposed_changes": {},
+  "repo_evidence": [
+    { "kind": "file", "ref": "path/to/file.ts:42" },
+    { "kind": "git",  "ref": "0cc50ce" }
+  ],
+  "rationale": "1-paragraph narrative — why this action.",
+  "confidence": "medium",
+  "would_confirm_by": "Reading X to confirm Y.",
+  "continuation_note_id": null
+}`;
+
+  const takeNoteCall = `take_note({
+  agent_id: '<your agent_id>',
+  kind: 'audit_proposal',
+  initiative_id: '${initiative.id}',
+  scope_key: '<from briefing>',
+  role: 'auditor',
+  run_group_id: '<from briefing>',
+  audience: 'pm',
+  importance: 2,
+  body: JSON.stringify(<the JSON object above>),
+})`;
+
+  const fallbackCall = `take_note({
+  agent_id: '<your agent_id>',
+  kind: 'observation',
+  initiative_id: '${initiative.id}',
+  scope_key: '<from briefing>',
+  role: 'auditor',
+  run_group_id: '<from briefing>',
+  audience: 'pm',
+  importance: 2,
+  body: '<short reason — what you found, why no clean proposal>',
+})`;
+
+  return `**Initiative audit — L2 PER-NODE (mode: subtree-proposal)**
+
+You are auditing ONE node of a subtree. The L1 surveyor has already
+narrowed the slice for you (see Contract below). Your job is to emit
+exactly one structured \`audit_proposal\` note for this node.
+
+Target: ${initiative.title}  (kind=${initiative.kind}, status=${initiative.status}, id=${initiative.id})
+
+Description:
+> ${description.replace(/\n/g, '\n> ')}
+
+Status check:
+${statusCheck}
+
+Target window: ${targetWindow}
+
+## Direct child initiatives (decomposed scope)
+
+${childInitiativesBlock}
+
+## Direct child tasks
+
+${tasksBlock}
+${guidanceBlock}${childBlock}
+## Contract
+
+- Slice: ${manifestNode.investigation_prompt}
+- Hypothesis: ${manifestNode.hypothesis} (confidence: ${manifestNode.confidence})
+- Expected deliverables: 1 \`take_note(kind='audit_proposal', initiative_id='${initiative.id}')\`, body matches the audit_proposal v1 schema (§4.3).
+- Acceptance criteria:
+  * Body parses as the audit_proposal v1 schema.
+  * \`repo_evidence\` has ≥1 entry of kind ∈ {file, git, pr, note}.
+  * If \`confidence\` is \`low\` or \`medium\`, \`would_confirm_by\` is non-empty.
+  * If \`proposed_action\` is \`keep\`, \`proposed_changes\` is the empty object \`{}\`.
+- Expected duration: ≤ 5 minutes. You are scoped to this node — don't audit siblings.
+
+## Scoped evidence hints (from surveyor)
+
+${hintsBlock}
+
+## Schema reminder (audit_proposal v1)
+
+Top-level fields:
+- \`version\`: literal \`1\`.
+- \`node_initiative_id\`: this node's initiative id (\`${initiative.id}\`).
+- \`current_mc_status\`: current MC status string.
+- \`current_mc_target_end\`: ISO \`YYYY-MM-DD\` or \`null\`.
+- \`proposed_action\`: one of \`keep\` | \`mark_done\` | \`cancel\` | \`modify_scope\` | \`modify_dates\`.
+- \`proposed_changes\`: shape depends on action:
+  * \`keep\` → \`{}\`
+  * \`mark_done\` → \`{ note: string }\`
+  * \`cancel\` → \`{ reason: string }\`
+  * \`modify_scope\` → \`{ title?: string, description?: string }\` (≥1 required)
+  * \`modify_dates\` → \`{ target_start?: 'YYYY-MM-DD', target_end?: 'YYYY-MM-DD' }\` (≥1 required)
+- \`repo_evidence\`: array (min 1) of \`{ kind: 'file'|'git'|'pr'|'note', ref: string }\`.
+- \`rationale\`: 1-paragraph string.
+- \`confidence\`: \`low\` | \`medium\` | \`high\`.
+- \`would_confirm_by\`: required (non-empty string) when confidence is \`low\` or \`medium\`; may be \`null\` when high.
+- \`continuation_note_id\`: \`null\` unless overflow splitting (rare).
+
+Example body:
+
+\`\`\`jsonc
+${exampleBody}
+\`\`\`
+
+## How to emit
+
+\`\`\`
+${takeNoteCall}
+\`\`\`
+
+## Retries on validation failure
+
+The MCP \`take_note\` handler validates the body against the schema +
+the 3000-char cap. On failure it returns a structured error naming the
+failing field. **Retry up to 2 times** with a tightened body. After 2
+failures, fall back to:
+
+\`\`\`
+${fallbackCall}
+\`\`\`
+
+The orchestrator will detect the missing \`audit_proposal\` row and emit
+a synthetic \`keep\` proposal with \`confidence: 'low'\` so the proposal
+queue retains full coverage.
+
+## Discipline
+
+- ONE \`audit_proposal\` note for this node. No \`breadcrumb\` /
+  \`discovery\` / \`question\` chatter during the audit.
+- Auditors are read-only. Do **not** call \`update_task_status\`,
+  \`update_initiative\`, or \`register_deliverable\`.
+- Stay under ~2900 chars in the body so a tightening retry has room.
+- If the node has no associated code (planned-only), emit a \`keep\`
+  proposal with \`confidence: 'low'\` and a one-line rationale +
+  \`would_confirm_by\`. Don't burn ten minutes greenfield-grepping.
 `;
 }

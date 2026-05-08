@@ -47,6 +47,7 @@ import {
   auditProposalBodySchema,
   type AuditManifestBody,
   type AuditManifestNode,
+  type AuditProposalBody,
 } from '@/lib/agents/audit-proposals/schemas';
 
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
@@ -57,6 +58,45 @@ const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
  * display semantic — orchestration always finishes the layered fan-out.
  */
 export const SUBTREE_FAILURE_THRESHOLD = 0.5;
+
+/**
+ * Render a parsed `audit_proposal` body as ~3-5 lines of prose for use
+ * as childFindings input to a parent-layer briefing in
+ * `mode: 'subtree-proposal'`. Pure / exported for tests.
+ */
+export function summarizeProposalForBriefing(body: AuditProposalBody): string {
+  const lines: string[] = [];
+  lines.push(
+    `Proposed action: **${body.proposed_action}** (confidence: ${body.confidence}).`,
+  );
+  if (body.proposed_action === 'mark_done') {
+    lines.push(`Completion note: ${body.proposed_changes.note}`);
+  } else if (body.proposed_action === 'cancel') {
+    lines.push(`Cancel reason: ${body.proposed_changes.reason}`);
+  } else if (body.proposed_action === 'modify_scope') {
+    const parts: string[] = [];
+    if (body.proposed_changes.title) parts.push(`title→"${body.proposed_changes.title}"`);
+    if (body.proposed_changes.description) parts.push('description updated');
+    lines.push(`Scope change: ${parts.join(', ')}`);
+  } else if (body.proposed_action === 'modify_dates') {
+    const parts: string[] = [];
+    if (body.proposed_changes.target_start)
+      parts.push(`target_start→${body.proposed_changes.target_start}`);
+    if (body.proposed_changes.target_end)
+      parts.push(`target_end→${body.proposed_changes.target_end}`);
+    lines.push(`Date change: ${parts.join(', ')}`);
+  }
+  // Rationale — keep first ~240 chars; the parent briefing has many of
+  // these and we don't want to blow the context budget.
+  const r = body.rationale.trim();
+  lines.push(`Rationale: ${r.length > 240 ? r.slice(0, 240) + '…' : r}`);
+  if (body.would_confirm_by && body.would_confirm_by.trim()) {
+    lines.push(`Would confirm by: ${body.would_confirm_by.trim()}`);
+  }
+  const evCount = body.repo_evidence.length;
+  lines.push(`Evidence: ${evCount} ref${evCount === 1 ? '' : 's'}.`);
+  return lines.join('\n');
+}
 
 /** Initiative shape we need internally — kept narrow on purpose. */
 type LiteInitiative = Pick<
@@ -440,8 +480,62 @@ export async function runSubtreeAudit(
     }
   };
 
+  /**
+   * Emit a synthetic fallback `audit_proposal` (proposed_action: 'keep',
+   * confidence: 'low') for an L2 node where the auditor returned but
+   * didn't land a valid proposal. Spec §5.5.
+   */
+  const emitFallbackKeepProposal = (
+    node: LiteInitiative,
+  ): { noteId: string; body: string } | null => {
+    const bodyObj = {
+      version: 1 as const,
+      node_initiative_id: node.id,
+      current_mc_status: node.status,
+      current_mc_target_end: node.target_end ?? null,
+      proposed_action: 'keep' as const,
+      proposed_changes: {},
+      repo_evidence: [
+        { kind: 'note' as const, ref: `audit-fallback:initiative-${node.id}` },
+      ],
+      rationale: '(audit failed: invalid proposal body after retries)',
+      confidence: 'low' as const,
+      would_confirm_by: 'Re-running the audit on this node specifically.',
+      continuation_note_id: null,
+    };
+    const parsed = auditProposalBodySchema.safeParse(bodyObj);
+    if (!parsed.success) {
+      console.warn(
+        `[subtree-audit] synthetic fallback proposal failed schema check for ${node.id}: ${parsed.error.message}`,
+      );
+      return null;
+    }
+    const body = JSON.stringify(parsed.data);
+    try {
+      const created = createNote({
+        workspace_id: workspaceId,
+        agent_id: null,
+        initiative_id: node.id,
+        scope_key: `initiative-${rootId}:audit-subtree:fallback-keep:${node.id}`,
+        role: 'orchestrator',
+        run_group_id: uuidv4(),
+        kind: 'audit_proposal',
+        audience: 'pm',
+        body,
+        importance: 1,
+      });
+      return { noteId: created.id, body };
+    } catch (err) {
+      console.warn(
+        `[subtree-audit] createNote(fallback keep) failed for ${node.id}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  };
+
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
+    const isRootLayer = layerIdx === layers.length - 1;
     const tasks = layer.map((node) => async () => {
       const attempt = nextAuditAttempt(node.id);
       const sessionSuffix = `initiative-${node.id}:audit:${attempt}`;
@@ -449,6 +543,20 @@ export async function runSubtreeAudit(
         .session_key_prefix
         ? `${(runner as { session_key_prefix?: string | null }).session_key_prefix}:${sessionSuffix}`
         : sessionSuffix;
+
+      // Root deferred to L3 synthesizer (Phase 4). For now, no L2
+      // dispatch happens for the root in subtree-proposal mode — record
+      // a placeholder outcome so the rollup math still has full coverage.
+      if (mode === 'subtree-proposal' && isRootLayer && node.id === rootId) {
+        perNodeOutcomes.push({
+          initiativeId: node.id,
+          layerIndex: layerIdx,
+          scopeKey,
+          status: 'ok',
+          note: '(root deferred to L3 synthesizer; not implemented in Phase 3)',
+        });
+        return;
+      }
 
       // Manifest-driven skip: don't dispatch — emit a synthetic keep
       // proposal and record the outcome so the parent layer's
@@ -486,10 +594,26 @@ export async function runSubtreeAudit(
         for (const candidate of layers[prior]) {
           if (candidate.parent_initiative_id === node.id) {
             const f = findingsByInitiative.get(candidate.id);
+            let renderedBody =
+              f?.body ?? '_(no finding recorded — child audit did not run)_';
+            // In subtree-proposal mode, child findings are JSON
+            // audit_proposal bodies — summarize them as prose for the
+            // parent auditor.
+            if (mode === 'subtree-proposal' && f?.body && !f.failed) {
+              try {
+                const parsed = auditProposalBodySchema.safeParse(JSON.parse(f.body));
+                if (parsed.success) {
+                  renderedBody = summarizeProposalForBriefing(parsed.data);
+                }
+              } catch {
+                // Leave renderedBody as-is; the parent briefing will
+                // still see the raw JSON or placeholder.
+              }
+            }
             childFindings.push({
               childId: candidate.id,
               childTitle: candidate.title,
-              body: f?.body ?? '_(no finding recorded — child audit did not run)_',
+              body: renderedBody,
               failed: f?.failed ?? true,
             });
           }
@@ -520,6 +644,8 @@ export async function runSubtreeAudit(
         [node.id],
       );
 
+      const manifestEntryForNode =
+        mode === 'subtree-proposal' ? manifestNodeFor(node.id) : null;
       const triggerBody = buildAuditPrompt({
         initiative: node,
         tasks: tasksForNode,
@@ -527,13 +653,32 @@ export async function runSubtreeAudit(
         guidance: guidance ?? null,
         priorFindings: [],
         childFindings,
-        mode: 'subtree',
+        mode: mode === 'subtree-proposal' ? 'subtree-proposal' : 'subtree',
+        proposalInput:
+          mode === 'subtree-proposal'
+            ? {
+                rootId,
+                attempt,
+                manifestNode: {
+                  hypothesis: manifestEntryForNode?.hypothesis ?? 'needs-deep-dive',
+                  confidence: manifestEntryForNode?.confidence ?? 'low',
+                  investigation_prompt:
+                    manifestEntryForNode?.investigation_prompt ??
+                    `Audit ${node.title} against repo + MC reality and emit a structured proposal.`,
+                  scoped_evidence_hints:
+                    manifestEntryForNode?.scoped_evidence_hints ?? [],
+                },
+              }
+            : undefined,
       });
+
+      const dispatchRole: 'researcher' | 'auditor' =
+        mode === 'subtree-proposal' ? 'auditor' : 'researcher';
 
       try {
         await dispatchScope({
           workspace_id: workspaceId,
-          role: 'researcher',
+          role: dispatchRole,
           agent: runner,
           session_suffix: sessionSuffix,
           scope_type: 'initiative_audit',
@@ -548,9 +693,49 @@ export async function runSubtreeAudit(
           label: `Audit: ${node.title}`,
         });
 
-        // Pull the most recent observation/pm/importance=2 note for
-        // this initiative — the researcher's report. listNotes orders
-        // by created_at desc by default.
+        if (mode === 'subtree-proposal') {
+          // Look for the most recent audit_proposal note on this node.
+          // The MCP take_note validator from Phase 1 has already
+          // enforced schema validity at write time — if a row exists,
+          // it parses cleanly.
+          const propNotes = listNotes({
+            initiative_id: node.id,
+            kinds: ['audit_proposal'],
+            limit: 1,
+            order: 'desc',
+          });
+          const propBody = propNotes[0]?.body?.trim();
+          if (propBody) {
+            findingsByInitiative.set(node.id, { body: propBody, failed: false });
+            perNodeOutcomes.push({
+              initiativeId: node.id,
+              layerIndex: layerIdx,
+              scopeKey,
+              status: 'ok',
+              note: propBody,
+            });
+          } else {
+            // No audit_proposal landed — emit synthetic fallback.
+            const synth = emitFallbackKeepProposal(node);
+            const fallbackBody =
+              synth?.body ??
+              `(audit failed: invalid proposal body after retries; synthetic fallback createNote also failed for ${node.id})`;
+            findingsByInitiative.set(node.id, {
+              body: fallbackBody,
+              failed: true,
+            });
+            perNodeOutcomes.push({
+              initiativeId: node.id,
+              layerIndex: layerIdx,
+              scopeKey,
+              status: 'failed',
+              error: 'no audit_proposal landed; synthetic fallback emitted',
+            });
+          }
+          return;
+        }
+
+        // mode === 'subtree' — original prose-observation flow.
         const notes = listNotes({
           initiative_id: node.id,
           audience: 'pm',
