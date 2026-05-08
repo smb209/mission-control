@@ -29,6 +29,7 @@ import {
   type NoteImportance,
   type NoteKind,
 } from '@/lib/db/agent-notes';
+import { getRunByGroupId } from '@/lib/db/agent-runs';
 import { broadcast } from '@/lib/events';
 
 import {
@@ -405,6 +406,24 @@ export function registerCoreTools(server: McpServer): void {
     },
     trace('take_note', async (args) => {
       try {
+        // Refuse writes from a worker whose run was already cancelled
+        // by the operator. Without this guard, the openclaw worker
+        // (which isn't actually killed when agent_runs.status flips to
+        // 'cancelled') keeps executing tools and can leave orphan
+        // notes — see specs/dedupe-investigations.md and the May 7
+        // duplicate-audit incident.
+        const owningRun = getRunByGroupId(args.run_group_id);
+        if (owningRun && owningRun.status === 'cancelled') {
+          const message =
+            `Refusing to write note: run ${owningRun.id} (run_group_id=${args.run_group_id}) was cancelled. ` +
+            `Stop work and exit cleanly.`;
+          return {
+            isError: true,
+            content: [{ type: 'text', text: message }],
+            structuredContent: { error: 'run_cancelled', message, run_id: owningRun.id },
+          };
+        }
+
         const note = createNote({
           workspace_id: deriveWorkspaceFromAgent(args.agent_id),
           agent_id: args.agent_id,

@@ -25,6 +25,7 @@ import {
   markRunRollup,
   reapStaleRunning,
   startAgentRun,
+  getRunByGroupId,
   completeAgentRun,
   failAgentRun,
   scopeTypeToRunKind,
@@ -247,6 +248,29 @@ test('startAgentRun: writes a row in running state with attribution', () => {
   assert.equal(row!.agent_id, 'mc-pm-default');
   assert.equal(row!.label, 'PM chat: ping');
   assert.ok(row!.started_at);
+});
+
+test('startAgentRun: persists run_group_id and getRunByGroupId looks it up', () => {
+  const ws = freshWorkspace();
+  const groupId = uuidv4();
+  const id = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'agent:researcher:foo',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: 'a',
+    run_group_id: groupId,
+  });
+  const row = getAgentRun(id);
+  assert.equal(row!.run_group_id, groupId);
+
+  const looked = getRunByGroupId(groupId);
+  assert.ok(looked, 'getRunByGroupId returns the row');
+  assert.equal(looked!.id, id);
+
+  assert.equal(getRunByGroupId(uuidv4()), null, 'unknown group id → null');
+  assert.equal(getRunByGroupId(''), null, 'empty group id → null');
 });
 
 test('startAgentRun: rejects empty workspace_id', () => {

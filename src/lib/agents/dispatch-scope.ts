@@ -239,6 +239,11 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
         // trigger_body) so the operator sees the full system context.
         trigger_body: briefing,
         pm_proposal_id: input.pm_proposal_id ?? null,
+        // Persist the briefing's run_group_id on the agent_runs row so
+        // downstream tools (take_note, …) can map a worker's
+        // run_group_id back to its run and refuse writes after cancel.
+        // See specs/dedupe-investigations.md.
+        run_group_id,
       });
     } catch (err) {
       // Don't let an agent_runs write failure break dispatch. Log and

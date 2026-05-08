@@ -589,3 +589,96 @@ test('propose_changes rejects an unknown diff kind', async () => {
   }
   assert.ok(rejected || isError, 'unknown diff kind must not silently pass schema validation');
 });
+
+// ─── take_note: cancelled-run guard ─────────────────────────────────
+//
+// Regression: a worker whose agent_runs row was already cancelled used
+// to be able to keep calling take_note (the openclaw worker isn't
+// actually killed when status flips to 'cancelled'). That left orphan
+// observation notes — see specs/dedupe-investigations.md and the
+// May 7 duplicate-audit incident.
+
+test('take_note refuses to write when the owning run is cancelled', async () => {
+  // Avoid a circular import at module top; pull from the DAO at call time.
+  const { startAgentRun, cancelAgentRun } = await import('@/lib/db/agent-runs');
+  const { client } = await makePair();
+  const me = seedAgent();
+  const groupId = crypto.randomUUID();
+  const runId = startAgentRun({
+    workspace_id: 'default',
+    kind: 'initiative_audit',
+    scope_key: 'agent:researcher:cancel-test',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: me,
+    run_group_id: groupId,
+  });
+  cancelAgentRun(runId);
+
+  const before = (queryOne<{ n: number }>('SELECT COUNT(*) as n FROM agent_notes')?.n) ?? 0;
+
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'observation',
+      body: 'should not land',
+      scope_key: 'agent:researcher:cancel-test',
+      role: 'researcher',
+      run_group_id: groupId,
+    },
+  });
+
+  assert.equal(res.isError, true, 'take_note must error');
+  const payload = parseStructured<{ error: string }>(res);
+  assert.equal(payload.error, 'run_cancelled');
+
+  const after = (queryOne<{ n: number }>('SELECT COUNT(*) as n FROM agent_notes')?.n) ?? 0;
+  assert.equal(after, before, 'agent_notes row count unchanged');
+});
+
+test('take_note succeeds when the owning run is still running', async () => {
+  const { startAgentRun } = await import('@/lib/db/agent-runs');
+  const { client } = await makePair();
+  const me = seedAgent();
+  const groupId = crypto.randomUUID();
+  startAgentRun({
+    workspace_id: 'default',
+    kind: 'initiative_audit',
+    scope_key: 'agent:researcher:running-test',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: me,
+    run_group_id: groupId,
+  });
+
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'observation',
+      body: 'live note',
+      scope_key: 'agent:researcher:running-test',
+      role: 'researcher',
+      run_group_id: groupId,
+    },
+  });
+  assert.equal(res.isError, undefined);
+});
+
+test('take_note fails open when run_group_id is unknown (legacy / brief dispatch)', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'observation',
+      body: 'no run row exists for this group',
+      scope_key: 'agent:legacy:scope',
+      role: 'builder',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, undefined);
+});

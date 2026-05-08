@@ -56,6 +56,11 @@ export interface AgentRun {
    *  row, this points at that proposal so the cancel cascade can flip
    *  it to `synth_only` (PR 5). */
   pm_proposal_id: string | null;
+  /** UUID minted by dispatch-scope; matches the `run_group_id` baked
+   *  into the agent's briefing and tagged on every `agent_notes` row
+   *  this run produces. Nullable for pre-085 rows and brief dispatches
+   *  that skip the agent_runs row. */
+  run_group_id: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -291,6 +296,12 @@ export interface StartAgentRunInput {
    *  the cancel cascade to flip `pending_agent` → `synth_only` when
    *  an in-flight PM chat is killed before the agent replies. */
   pm_proposal_id?: string | null;
+  /** UUID minted by dispatch-scope and baked into the agent's
+   *  briefing. Persisted here so tools (e.g. take_note) can map a
+   *  caller's run_group_id back to its agent_runs row and refuse
+   *  writes from a worker whose run was already cancelled.
+   *  See specs/dedupe-investigations.md. */
+  run_group_id?: string | null;
 }
 
 /**
@@ -309,9 +320,9 @@ export function startAgentRun(input: StartAgentRunInput): string {
        id, workspace_id, kind, status, source_kind, source_ref,
        scope_key, scope_type, role, agent_id,
        initiative_id, task_id, parent_run_id, label,
-       trigger_body, pm_proposal_id,
+       trigger_body, pm_proposal_id, run_group_id,
        cost_ceiling_cents, started_at, created_at, updated_at
-     ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
+     ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
     [
       id,
       input.workspace_id,
@@ -328,10 +339,31 @@ export function startAgentRun(input: StartAgentRunInput): string {
       input.label ?? null,
       input.trigger_body ?? null,
       input.pm_proposal_id ?? null,
+      input.run_group_id ?? null,
       input.cost_ceiling_cents ?? null,
     ],
   );
   return id;
+}
+
+/**
+ * Look up an agent_run by its dispatch-time `run_group_id`. Returns
+ * the matching row, or null if none. Used by MCP tools (currently
+ * `take_note`) to gate writes on run status — a worker whose run was
+ * cancelled while it was mid-flight should not be able to persist
+ * orphan rows. See specs/dedupe-investigations.md.
+ */
+export function getRunByGroupId(run_group_id: string): AgentRun | null {
+  if (!run_group_id) return null;
+  return (
+    queryOne<AgentRun>(
+      `SELECT * FROM agent_runs
+       WHERE run_group_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [run_group_id],
+    ) ?? null
+  );
 }
 
 export interface CompleteAgentRunInput {
