@@ -17,6 +17,7 @@
  */
 
 import * as React from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 export interface PmDiff {
   kind: string;
@@ -262,26 +263,67 @@ interface DiffRowProps {
  * the same border + spacing and the operator can scan the proposal
  * vertically. `header` carries the kind chip + secondary chips +
  * (right-aligned) target/arrow; `body` carries the full entity name
- * + change details with no truncation.
+ * + change details with no truncation. When `expandedContent` is
+ * non-null, a chevron toggle appears in the header that reveals the
+ * extra block under the body — used to surface full
+ * `status_check_md`, descriptions, reasons, etc. that don't fit in
+ * the always-visible body row.
  */
 function DiffCard({
   header,
   body,
   rightAccent,
+  expandedContent,
 }: {
   header: React.ReactNode;
   body?: React.ReactNode;
   rightAccent?: React.ReactNode;
+  expandedContent?: React.ReactNode;
 }) {
+  const [expanded, setExpanded] = React.useState(false);
+  const expandable = expandedContent != null;
   return (
     <div className="rounded-sm border border-mc-border/60 bg-mc-bg/40 px-2 py-1.5 text-xs leading-relaxed">
       <div className="flex items-center gap-1.5 flex-wrap">
         {header}
-        {rightAccent && <div className="ml-auto shrink-0">{rightAccent}</div>}
+        {rightAccent && (
+          <div className={`shrink-0 ${expandable ? '' : 'ml-auto'}`}>
+            {rightAccent}
+          </div>
+        )}
+        {expandable && (
+          <button
+            type="button"
+            onClick={(e) => {
+              // Don't bubble — outer label/checkbox would otherwise
+              // toggle selection when the operator just wanted to
+              // peek at details.
+              e.preventDefault();
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Hide details' : 'Show details'}
+            className="ml-auto shrink-0 inline-flex items-center gap-1 px-1 py-0.5 rounded text-[10px] text-mc-text-secondary hover:text-mc-text hover:bg-black/10 dark:hover:bg-white/10"
+            title={expanded ? 'Hide full details' : 'Show full details'}
+          >
+            {expanded ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+            {expanded ? 'Less' : 'More'}
+          </button>
+        )}
       </div>
       {body && (
         <div className="mt-1 text-mc-text break-words whitespace-normal">
           {body}
+        </div>
+      )}
+      {expandable && expanded && (
+        <div className="mt-2 pt-2 border-t border-mc-border/40 text-mc-text-secondary break-words whitespace-normal">
+          {expandedContent}
         </div>
       )}
     </div>
@@ -328,6 +370,7 @@ export function DiffRow({
       const parentLabel = labelFor(diff.parent_initiative_id, resolveInitiativeTitle);
       const childKind = diff.child_kind ?? 'initiative';
       const deps = diff.depends_on_initiative_ids ?? [];
+      const hasExpand = !!(diff.description?.trim());
       return (
         <DiffCard
           header={
@@ -358,6 +401,18 @@ export function DiffRow({
             ) : null
           }
           body={titleOrFallback(diff.title)}
+          expandedContent={
+            hasExpand ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Description
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {diff.description}
+                </p>
+              </>
+            ) : null
+          }
         />
       );
     }
@@ -365,6 +420,15 @@ export function DiffRow({
       const targetLabel = diff.initiative_id?.startsWith('$')
         ? diff.initiative_id
         : labelFor(diff.initiative_id, resolveInitiativeTitle);
+      const expandFields = [
+        ['Description', diff.description],
+        ['Status check', diff.status_check_md],
+      ].filter(([, v]) => typeof v === 'string' && v.trim()) as [string, string][];
+      const hasMeta = !!(
+        diff.priority ||
+        (diff.assigned_agent_id && diff.assigned_agent_id !== null)
+      );
+      const hasExpand = expandFields.length > 0 || hasMeta;
       return (
         <DiffCard
           header={
@@ -377,6 +441,32 @@ export function DiffRow({
             </>
           }
           body={titleOrFallback(diff.title)}
+          expandedContent={
+            hasExpand ? (
+              <div className="space-y-2">
+                {expandFields.map(([label, value]) => (
+                  <div key={label}>
+                    <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                      {label}
+                    </div>
+                    <p className="whitespace-pre-wrap leading-relaxed">
+                      {value}
+                    </p>
+                  </div>
+                ))}
+                {hasMeta && (
+                  <div className="text-[10px] text-mc-text-secondary/80 flex flex-wrap gap-3">
+                    {diff.priority && <span>priority: {diff.priority}</span>}
+                    {diff.assigned_agent_id && (
+                      <span>
+                        assigned: <code>{shortId(diff.assigned_agent_id)}</code>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : null
+          }
         />
       );
     }
@@ -397,11 +487,24 @@ export function DiffRow({
               {labelFor(diff.initiative_id, resolveInitiativeTitle)}
             </span>
           }
+          expandedContent={
+            diff.reason?.trim() ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Reason
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {diff.reason}
+                </p>
+              </>
+            ) : null
+          }
         />
       );
     }
     case 'update_status_check': {
       const preview = statusCheckPreview(diff.status_check_md);
+      const fullMd = diff.status_check_md?.trim() ?? '';
       return (
         <DiffCard
           header={<KindChip kind={diff.kind} />}
@@ -411,14 +514,26 @@ export function DiffRow({
                 {labelFor(diff.initiative_id, resolveInitiativeTitle)}
               </span>
               {preview && (
-                <p
-                  className="mt-0.5 text-mc-text-secondary/80 italic"
-                  title={diff.status_check_md ?? undefined}
-                >
+                <p className="mt-0.5 text-mc-text-secondary/80 italic">
                   “{preview}”
                 </p>
               )}
             </>
+          }
+          expandedContent={
+            // Always offer expand when there's content longer than the
+            // 60-char preview — operators routinely want to read the
+            // whole proposed status check before accepting.
+            fullMd && fullMd.length > preview.length ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Proposed status_check_md
+                </div>
+                <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed bg-mc-bg/50 rounded p-2 border border-mc-border/40 text-mc-text">
+                  {fullMd}
+                </pre>
+              </>
+            ) : null
           }
         />
       );
@@ -440,6 +555,18 @@ export function DiffRow({
               {labelFor(diff.initiative_id, resolveInitiativeTitle)}
             </span>
           }
+          expandedContent={
+            diff.reason?.trim() ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Reason
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {diff.reason}
+                </p>
+              </>
+            ) : null
+          }
         />
       );
     }
@@ -458,6 +585,18 @@ export function DiffRow({
               </span>
             </span>
           }
+          expandedContent={
+            diff.note?.trim() ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Note
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {diff.note}
+                </p>
+              </>
+            ) : null
+          }
         />
       );
     }
@@ -474,6 +613,7 @@ export function DiffRow({
       );
     }
     case 'reorder_initiatives': {
+      const ids = diff.child_ids_in_order ?? [];
       return (
         <DiffCard
           header={<KindChip kind={diff.kind} />}
@@ -482,7 +622,7 @@ export function DiffRow({
               className="font-mono text-mc-text-secondary"
               title="Number of siblings being re-ordered"
             >
-              {diff.child_ids_in_order?.length ?? 0} children
+              {ids.length} children
             </span>
           }
           body={
@@ -492,6 +632,22 @@ export function DiffRow({
                 {labelFor(diff.parent_id ?? null, resolveInitiativeTitle) || 'root'}
               </span>
             </span>
+          }
+          expandedContent={
+            ids.length > 0 ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Order
+                </div>
+                <ol className="list-decimal pl-5 space-y-0.5 leading-relaxed">
+                  {ids.map((id) => (
+                    <li key={id} className="font-mono text-[11px]">
+                      {labelFor(id, resolveInitiativeTitle)}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            ) : null
           }
         />
       );
@@ -512,6 +668,18 @@ export function DiffRow({
             <span className="font-mono text-mc-text">
               agent {shortId(diff.agent_id)}
             </span>
+          }
+          expandedContent={
+            diff.reason?.trim() ? (
+              <>
+                <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                  Reason
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {diff.reason}
+                </p>
+              </>
+            ) : null
           }
         />
       );
