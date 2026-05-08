@@ -497,13 +497,24 @@ export default function PmChatPage() {
   // and the server applies the suggestions atomically.
   const [planAcceptProposal, setPlanAcceptProposal] = useState<PmProposal | null>(null);
 
-  const onAccept = async (proposal: PmProposal) => {
+  const onAccept = async (
+    proposal: PmProposal,
+    options?: { accepted_indexes?: number[] },
+  ) => {
     if (proposal.trigger_kind === 'plan_initiative') {
       setPlanAcceptProposal(proposal);
       return;
     }
     try {
-      const res = await fetch(`/api/pm/proposals/${proposal.id}/accept`, { method: 'POST' });
+      const body: Record<string, unknown> = {};
+      if (options?.accepted_indexes) {
+        body.accepted_indexes = options.accepted_indexes;
+      }
+      const res = await fetch(`/api/pm/proposals/${proposal.id}/accept`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       if (!res.ok) throw new Error('Accept failed');
       await loadMessages();
       await loadRecent();
@@ -1134,7 +1145,12 @@ interface ChatMessageRowProps {
   proposal?: PmProposal;
   // Pass the full proposal so the parent can branch on trigger_kind
   // (e.g. plan_initiative routes to the Apply-to-initiative picker).
-  onAccept: (proposal: PmProposal) => void;
+  // The optional `options.accepted_indexes` lets the operator accept
+  // a subset of the diffs (per-diff checkbox flow).
+  onAccept: (
+    proposal: PmProposal,
+    options?: { accepted_indexes?: number[] },
+  ) => void;
   onReject: (id: string) => void;
   refining: string | null;
   refineText: string;
@@ -1167,6 +1183,32 @@ function ChatMessageRow({
   resolveInitiativeTitle,
 }: ChatMessageRowProps) {
   const isUser = message.role === 'user';
+
+  // Per-diff selection state. Initialized to "all selected" (the
+  // legacy behavior) and reset whenever the proposal id changes —
+  // operator's selection on one card shouldn't leak across when SSE
+  // brings a fresh proposal in. Decompose flows (any
+  // create_child_initiative present) lock to all-selected because
+  // partial-accept on placeholders doesn't compose cleanly.
+  const decomposeLocked =
+    !!proposal &&
+    proposal.proposed_changes.some((c) => c.kind === 'create_child_initiative');
+  const allIndexes = useMemo(() => {
+    if (!proposal) return new Set<number>();
+    return new Set(proposal.proposed_changes.map((_, i) => i));
+  }, [proposal?.id, proposal?.proposed_changes.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [selectedIndexes, setSelectedIndexes] = useState<Set<number>>(
+    () => allIndexes,
+  );
+  // Reset when the proposal id flips (refine swaps in a new card).
+  const lastProposalIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!proposal) return;
+    if (lastProposalIdRef.current !== proposal.id) {
+      lastProposalIdRef.current = proposal.id;
+      setSelectedIndexes(allIndexes);
+    }
+  }, [proposal?.id, allIndexes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bare chat bubble for messages that aren't proposal cards.
   if (!proposal) {
@@ -1246,9 +1288,26 @@ function ChatMessageRow({
         <ProposalDiffsList
           diffs={proposal.proposed_changes}
           resolveInitiativeTitle={resolveInitiativeTitle}
+          selection={
+            proposal.status === 'draft'
+              ? {
+                  selected: selectedIndexes,
+                  onToggle: (idx) =>
+                    setSelectedIndexes((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(idx)) next.delete(idx);
+                      else next.add(idx);
+                      return next;
+                    }),
+                  disabledReason: decomposeLocked
+                    ? 'This proposal links its diffs together (decompose flow); accept-all or reject-all only.'
+                    : undefined,
+                }
+              : undefined
+          }
         />
         {proposal.status === 'draft' && (
-          <div className="px-3 py-2 border-t border-amber-500/30 bg-amber-500/5 flex items-center gap-2">
+          <div className="px-3 py-2 border-t border-amber-500/30 bg-amber-500/5 flex flex-wrap items-center gap-2">
             {refining === proposal.id ? (
               <>
                 <input
@@ -1274,31 +1333,80 @@ function ChatMessageRow({
                   className="text-xs px-2 py-1 text-mc-text-secondary hover:text-mc-text"
                 >Cancel</button>
               </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onRefineStart(proposal.id)}
-                  className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 flex items-center gap-1"
-                >
-                  <RefreshCw className="w-3 h-3" /> Refine
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAccept(proposal)}
-                  className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1"
-                >
-                  <Check className="w-3 h-3" /> Accept
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onReject(proposal.id)}
-                  className="text-xs px-2 py-1 bg-red-500/20 border border-red-500/40 text-red-200 rounded-sm hover:bg-red-500/30 flex items-center gap-1"
-                >
-                  <X className="w-3 h-3" /> Reject
-                </button>
-              </>
-            )}
+            ) : (() => {
+              const total = proposal.proposed_changes.length;
+              const sel = selectedIndexes.size;
+              const allSelected = sel === total;
+              const noneSelected = sel === 0;
+              const applyLabel = decomposeLocked
+                ? 'Apply all'
+                : allSelected
+                  ? `Apply all ${total}`
+                  : noneSelected
+                    ? 'Reject (none selected)'
+                    : `Apply ${sel} of ${total}`;
+              return (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onRefineStart(proposal.id)}
+                    className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 flex items-center gap-1"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Refine
+                  </button>
+                  {!decomposeLocked && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedIndexes(
+                            new Set(proposal.proposed_changes.map((_, i) => i)),
+                          )
+                        }
+                        disabled={allSelected}
+                        className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 disabled:opacity-40 disabled:hover:bg-transparent flex items-center gap-1"
+                      >
+                        <Check className="w-3 h-3" /> Accept all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedIndexes(new Set())}
+                        disabled={noneSelected}
+                        className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 disabled:opacity-40 disabled:hover:bg-transparent flex items-center gap-1"
+                      >
+                        <X className="w-3 h-3" /> Reject all
+                      </button>
+                    </>
+                  )}
+                  {/* Apply: when all selected, hits /accept with no
+                      filter (back-compat). When none, hits /reject.
+                      Otherwise, /accept with accepted_indexes. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (noneSelected) {
+                        onReject(proposal.id);
+                        return;
+                      }
+                      const indexes = Array.from(selectedIndexes).sort(
+                        (a, b) => a - b,
+                      );
+                      onAccept(
+                        proposal,
+                        allSelected ? undefined : { accepted_indexes: indexes },
+                      );
+                    }}
+                    className={`text-xs px-2 py-1 rounded-sm flex items-center gap-1 ${
+                      noneSelected
+                        ? 'bg-red-500/20 border border-red-500/40 text-red-200 hover:bg-red-500/30'
+                        : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/30'
+                    }`}
+                  >
+                    <Check className="w-3 h-3" /> {applyLabel}
+                  </button>
+                </>
+              );
+            })()}
           </div>
         )}
       </div>

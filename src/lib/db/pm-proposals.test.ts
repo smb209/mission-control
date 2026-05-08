@@ -777,3 +777,103 @@ test('createProposal accepts reverts_proposal_id and rowToProposal surfaces it',
   assert.equal(revert.reverts_proposal_id, original.id);
   assert.equal(revert.trigger_kind, 'revert');
 });
+
+// ─── partial accept (per-diff selection) ───────────────────────────
+
+test('acceptProposal: accepted_indexes filter applies only listed diffs', () => {
+  const ws = freshWorkspace();
+  const a = createInitiative({ workspace_id: ws, kind: 'story', title: 'A' });
+  const b = createInitiative({ workspace_id: ws, kind: 'story', title: 'B' });
+  const c = createInitiative({ workspace_id: ws, kind: 'story', title: 'C' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: a.id, status: 'in_progress' },
+      { kind: 'set_initiative_status', initiative_id: b.id, status: 'in_progress' },
+      { kind: 'set_initiative_status', initiative_id: c.id, status: 'in_progress' },
+    ],
+  });
+  // Accept only index 0 and 2 — skip B.
+  const result = acceptProposal(p.id, null, { accepted_indexes: [0, 2] });
+  assert.equal(result.changes_applied, 2);
+  assert.deepEqual(result.rejected_indexes, [1]);
+
+  const after = (id: string) =>
+    queryOne<{ status: string }>('SELECT status FROM initiatives WHERE id = ?', [id])?.status;
+  assert.equal(after(a.id), 'in_progress', 'A accepted');
+  assert.equal(after(b.id), 'planned', 'B skipped — still planned');
+  assert.equal(after(c.id), 'in_progress', 'C accepted');
+});
+
+test('acceptProposal: empty accepted_indexes applies nothing', () => {
+  const ws = freshWorkspace();
+  const a = createInitiative({ workspace_id: ws, kind: 'story', title: 'A' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: a.id, status: 'in_progress' },
+    ],
+  });
+  const result = acceptProposal(p.id, null, { accepted_indexes: [] });
+  assert.equal(result.changes_applied, 0);
+  assert.deepEqual(result.rejected_indexes, [0]);
+  // Status unchanged.
+  const after = queryOne<{ status: string }>(
+    'SELECT status FROM initiatives WHERE id = ?',
+    [a.id],
+  );
+  assert.equal(after?.status, 'planned');
+});
+
+test('acceptProposal: rejects partial-accept when create_task_under_initiative references unselected placeholder', () => {
+  const ws = freshWorkspace();
+  const parent = createInitiative({ workspace_id: ws, kind: 'milestone', title: 'P' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      // index 0: creates the placeholder $0
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'Child',
+        child_kind: 'epic',
+      },
+      // index 1: task hung off $0 — depends on index 0 being selected
+      {
+        kind: 'create_task_under_initiative',
+        initiative_id: '$0',
+        title: 'Task on the new child',
+      },
+    ],
+  });
+  // Selecting only the task without its placeholder owner is invalid.
+  assert.throws(
+    () => acceptProposal(p.id, null, { accepted_indexes: [1] }),
+    /create_child_initiative at index 0 is not in the accepted set/,
+  );
+  // Selecting both is fine.
+  const ok = acceptProposal(p.id, null, { accepted_indexes: [0, 1] });
+  assert.equal(ok.changes_applied, 2);
+});
+
+test('acceptProposal: omitting accepted_indexes is back-compat (full accept)', () => {
+  const ws = freshWorkspace();
+  const a = createInitiative({ workspace_id: ws, kind: 'story', title: 'A' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 't',
+    impact_md: 'm',
+    proposed_changes: [
+      { kind: 'set_initiative_status', initiative_id: a.id, status: 'blocked' },
+    ],
+  });
+  const result = acceptProposal(p.id);
+  assert.equal(result.changes_applied, 1);
+  assert.deepEqual(result.rejected_indexes, []);
+});

@@ -32,6 +32,12 @@ export const dynamic = 'force-dynamic';
 const Body = z.object({
   applied_by_agent_id: z.string().min(1).nullish(),
   target_initiative_id: z.string().min(1).nullish(),
+  /**
+   * Subset of `proposed_changes` indexes to apply. When omitted, every
+   * diff applies (back-compat). Used by the per-diff selection UI on
+   * the proposal review card.
+   */
+  accepted_indexes: z.array(z.number().int().min(0)).optional(),
 });
 
 interface RouteParams {
@@ -144,15 +150,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const result = acceptProposal(id, parsed.data.applied_by_agent_id ?? null);
+    const result = acceptProposal(
+      id,
+      parsed.data.applied_by_agent_id ?? null,
+      { accepted_indexes: parsed.data.accepted_indexes },
+    );
 
     // Best-effort: post a confirmation chat message so the operator sees
     // "Applied — N changes" inline. Silent on failure.
     if (!result.idempotent_noop) {
       try {
         const proposal = result.proposal;
+        const skipped = result.rejected_indexes.length;
+        const skippedSuffix = skipped > 0 ? ` (${skipped} skipped)` : '';
         const text =
-          `Applied — ${result.changes_applied} change${result.changes_applied === 1 ? '' : 's'}. ` +
+          `Applied — ${result.changes_applied} change${result.changes_applied === 1 ? '' : 's'}${skippedSuffix}. ` +
           `[View affected initiatives](/roadmap?workspace=${encodeURIComponent(proposal.workspace_id)})`;
         // Need workspace_id from the proposal to find the PM agent.
         const w = queryOne<{ workspace_id: string }>(
