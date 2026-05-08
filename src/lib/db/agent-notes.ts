@@ -57,6 +57,10 @@ export interface AgentNote {
   archived_at: string | null;
   archived_reason: string | null;
   created_at: string;
+  /** Stored as JSON string array. Holds pm_proposals.id values created
+   *  from this note via the Ask-PM-from-notes flow. Multiple ids are
+   *  possible because the operator can re-ask on the same note. */
+  pm_proposal_ids: string | null;
 }
 
 /** Maximum body length per note (matches the role-soul guidance). */
@@ -354,4 +358,39 @@ export function parseAttachedFiles(note: Pick<AgentNote, 'attached_files'>): str
 export function parseConsumedStages(note: Pick<AgentNote, 'consumed_by_stages'>): string[] {
   if (!note.consumed_by_stages) return [];
   return safeParseStringArray(note.consumed_by_stages);
+}
+
+/**
+ * Convenience: parse the JSON `pm_proposal_ids` field into a string[].
+ * Returns [] for null/invalid.
+ */
+export function parsePmProposalIds(
+  note: Pick<AgentNote, 'pm_proposal_ids'>,
+): string[] {
+  if (!note.pm_proposal_ids) return [];
+  return safeParseStringArray(note.pm_proposal_ids);
+}
+
+/**
+ * Append a `pm_proposals.id` to the note's `pm_proposal_ids` JSON
+ * array. Idempotent — already-present ids aren't duplicated. Returns
+ * the updated note, or null if the note doesn't exist.
+ *
+ * Used by the Ask-PM-from-notes route after a successful PM dispatch
+ * so the UI can render a persistent "View proposal" link.
+ */
+export function appendNoteProposalId(
+  noteId: string,
+  proposalId: string,
+): AgentNote | null {
+  const existing = getNote(noteId);
+  if (!existing) return null;
+  const current = parsePmProposalIds(existing);
+  if (current.includes(proposalId)) return existing;
+  current.push(proposalId);
+  run(
+    `UPDATE agent_notes SET pm_proposal_ids = ? WHERE id = ?`,
+    [JSON.stringify(current), noteId],
+  );
+  return getNote(noteId);
 }

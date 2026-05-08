@@ -301,6 +301,24 @@ export function NoteCard({
           </Link>
         </p>
       )}
+      {isExpanded && (note.pm_proposal_ids?.length ?? 0) > 0 && (
+        <p className="text-[11px] opacity-80">
+          <Link
+            href={`/pm?proposal=${encodeURIComponent((note.pm_proposal_ids ?? []).at(-1)!)}`}
+            className="inline-flex items-center gap-1 underline-offset-2 hover:underline"
+            title="Open the most recent PM proposal created from this note"
+          >
+            <Sparkles className="w-3 h-3" />
+            View proposal in PM chat
+            {note.pm_proposal_ids!.length > 1 && (
+              <span className="opacity-70">
+                {' '}
+                (latest of {note.pm_proposal_ids!.length})
+              </span>
+            )}
+          </Link>
+        </p>
+      )}
       {isExpanded && note.attached_files.length > 0 && (
         <ul className="mt-1 flex flex-wrap gap-1">
           {note.attached_files.map((f) => (

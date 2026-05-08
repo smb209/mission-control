@@ -65,6 +65,10 @@ export interface AgentNoteRecord {
   attached_files: string[];
   importance: 0 | 1 | 2;
   consumed_by_stages?: string[];
+  /** pm_proposals.id values created from this note via Ask-PM-from-notes.
+   *  Hydrated server-side; SSE-pushed `agent_note_created` events
+   *  initialize empty until refresh. */
+  pm_proposal_ids?: string[];
   archived_at: string | null;
   created_at: string;
   /** Hydrated by /api/agent-notes; null on SSE-pushed notes. */

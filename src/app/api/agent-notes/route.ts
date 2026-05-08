@@ -15,6 +15,7 @@ import {
   listNotes,
   parseAttachedFiles,
   parseConsumedStages,
+  parsePmProposalIds,
   type AgentNote,
   type NoteImportance,
   type NoteKind,
@@ -82,6 +83,7 @@ function notePayload(
     attached_files: parseAttachedFiles(note),
     importance: note.importance,
     consumed_by_stages: parseConsumedStages(note),
+    pm_proposal_ids: parsePmProposalIds(note),
     archived_at: note.archived_at,
     created_at: note.created_at,
     /**

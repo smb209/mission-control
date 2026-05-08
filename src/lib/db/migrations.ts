@@ -4474,6 +4474,25 @@ const migrations: Migration[] = [
       console.log('[Migration 083] workspaces.repo_url + default_base_branch added (nullable).');
     },
   },
+  {
+    id: '084',
+    name: 'agent_notes_pm_proposal_ids',
+    up: (db) => {
+      // Persistent note → proposal association. When the operator
+      // clicks "Ask PM" on a note, the route dispatches the PM and
+      // gets back a pm_proposals.id. We need to remember that mapping
+      // so the UI can offer a "View proposal" link that survives
+      // reload. Stored as a JSON array because re-asking on the same
+      // note creates additional proposals over time.
+      const cols = db.prepare(`PRAGMA table_info(agent_notes)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'pm_proposal_ids')) {
+        db.exec(`ALTER TABLE agent_notes ADD COLUMN pm_proposal_ids TEXT`);
+        console.log('[Migration 084] agent_notes.pm_proposal_ids added (nullable JSON array).');
+      } else {
+        console.log('[Migration 084] agent_notes.pm_proposal_ids already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
