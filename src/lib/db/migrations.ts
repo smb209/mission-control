@@ -4515,6 +4515,24 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    id: '086',
+    name: 'workspaces_display_timezone',
+    up: (db) => {
+      // Per-workspace display timezone. NULL means "auto-detect from
+      // browser via Intl.DateTimeFormat().resolvedOptions().timeZone".
+      // The operator can override on the workspace settings page when
+      // auto-detect is wrong (e.g. running on a UTC server but
+      // located in PT). See specs/timestamp-handling.md §PR-B.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'display_timezone')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN display_timezone TEXT`);
+        console.log('[Migration 086] workspaces.display_timezone added (nullable; NULL = auto-detect).');
+      } else {
+        console.log('[Migration 086] workspaces.display_timezone already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

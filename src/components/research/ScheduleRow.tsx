@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Calendar as CalendarIcon, Loader2, Pause, Play, Trash2, Zap } from 'lucide-react';
-import { formatDistanceToNow } from 'date-fns';
+import { Time } from '@/components/Time';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { formatCadence } from './ScheduleDrawer';
 
@@ -161,11 +161,11 @@ export function ScheduleRow({ schedule, topicName, onChanged }: ScheduleRowProps
               <span className="text-mc-accent">Queued — running on next sweep</span>
             ) : (
               <span>
-                Next: {formatDistanceToNow(new Date(schedule.next_run_at), { addSuffix: true })}
+                Next: <Time iso={schedule.next_run_at} mode="relative" />
               </span>
             )}
             {schedule.last_run_at && (
-              <span>· Last: {formatDistanceToNow(new Date(schedule.last_run_at), { addSuffix: true })}</span>
+              <span>· Last: <Time iso={schedule.last_run_at} mode="relative" /></span>
             )}
             <span>· Run count: {schedule.run_count}</span>
             {lastBriefId && (
