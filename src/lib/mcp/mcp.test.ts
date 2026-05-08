@@ -682,3 +682,123 @@ test('take_note fails open when run_group_id is unknown (legacy / brief dispatch
   });
   assert.equal(res.isError, undefined);
 });
+
+// ─── take_note: audit-kind body validation ──────────────────────────
+//
+// Phase 1 of specs/subtree-audit-proposals-spec.md adds three new note
+// kinds (audit_manifest, audit_proposal, audit_synthesis) whose bodies
+// must JSON-parse and conform to a Zod schema. Validation runs in the
+// MCP handler so auditor agents get structured feedback in the same
+// dispatch and can recover.
+
+test('take_note rejects audit_proposal with malformed body and returns structured error', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      // Missing required fields (proposed_action, repo_evidence, …).
+      kind: 'audit_proposal',
+      body: JSON.stringify({ version: 1, node_initiative_id: 'n', current_mc_status: 'done' }),
+      scope_key: 'agent:auditor:scope',
+      role: 'auditor',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, true, 'malformed audit_proposal body must error');
+  const payload = parseStructured<{ error: string; message: string; kind: string }>(res);
+  assert.equal(payload.error, 'audit_body_invalid');
+  assert.equal(payload.kind, 'audit_proposal');
+  assert.match(payload.message, /audit_proposal/);
+});
+
+test('take_note rejects audit_manifest with non-JSON body', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'audit_manifest',
+      body: 'not even close to JSON',
+      scope_key: 'agent:auditor:scope',
+      role: 'auditor',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, true);
+  const payload = parseStructured<{ error: string; message: string }>(res);
+  assert.equal(payload.error, 'audit_body_invalid');
+  assert.match(payload.message, /JSON\.parse/);
+});
+
+test('take_note rejects audit body that exceeds the orchestrator pre-cap budget', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  // 2950 chars — under the DB cap (3000) but over the audit pre-cap (2900).
+  const oversized = 'x'.repeat(2950);
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'audit_synthesis',
+      body: oversized,
+      scope_key: 'agent:auditor:scope',
+      role: 'auditor',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, true);
+  const payload = parseStructured<{ error: string; message: string; limit: number }>(res);
+  assert.equal(payload.error, 'audit_body_too_large');
+  assert.equal(payload.limit, 2900);
+  assert.match(payload.message, /Tighten the rationale/);
+});
+
+test('take_note accepts a schema-conformant audit_proposal body', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  const validBody = {
+    version: 1,
+    node_initiative_id: 'init-x',
+    current_mc_status: 'done',
+    current_mc_target_end: null,
+    proposed_action: 'keep',
+    proposed_changes: {},
+    repo_evidence: [{ kind: 'file', ref: 'src/x.ts:1' }],
+    rationale: 'No drift detected.',
+    confidence: 'high',
+    would_confirm_by: null,
+    continuation_note_id: null,
+  };
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'audit_proposal',
+      body: JSON.stringify(validBody),
+      scope_key: 'agent:auditor:scope',
+      role: 'auditor',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, undefined, JSON.stringify(res));
+});
+
+test('take_note leaves non-audit kinds untouched (no JSON requirement on observation)', async () => {
+  const { client } = await makePair();
+  const me = seedAgent();
+  const res = await client.callTool({
+    name: 'take_note',
+    arguments: {
+      agent_id: me,
+      kind: 'observation',
+      body: 'a perfectly normal prose observation',
+      scope_key: 'agent:researcher:scope',
+      role: 'researcher',
+      run_group_id: crypto.randomUUID(),
+    },
+  });
+  assert.equal(res.isError, undefined);
+});

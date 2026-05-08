@@ -29,6 +29,11 @@ import {
   type NoteImportance,
   type NoteKind,
 } from '@/lib/db/agent-notes';
+import {
+  isAuditNoteKind,
+  validateAuditNoteBody,
+  MAX_AUDIT_NOTE_BODY_CHARS,
+} from '@/lib/agents/audit-proposals/schemas';
 import { getRunByGroupId } from '@/lib/db/agent-runs';
 import { broadcast } from '@/lib/events';
 
@@ -422,6 +427,45 @@ export function registerCoreTools(server: McpServer): void {
             content: [{ type: 'text', text: message }],
             structuredContent: { error: 'run_cancelled', message, run_id: owningRun.id },
           };
+        }
+
+        // Audit-pipeline kinds (audit_manifest / audit_proposal /
+        // audit_synthesis) carry a JSON-stringified body that must
+        // match a strict Zod schema and stay under the orchestrator's
+        // pre-cap budget. Validation runs here so auditor agents get
+        // structured feedback in the same dispatch and can retry by
+        // tightening rationale / fixing the schema. See
+        // specs/subtree-audit-proposals-spec.md §4 + §5.2.
+        const noteKind = args.kind as NoteKind;
+        if (isAuditNoteKind(noteKind)) {
+          if (args.body.length > MAX_AUDIT_NOTE_BODY_CHARS) {
+            const message =
+              `Body exceeds ${MAX_AUDIT_NOTE_BODY_CHARS} chars (got ${args.body.length}). ` +
+              `Tighten the rationale or split via continuation_note_id (see spec §4.5).`;
+            return {
+              isError: true,
+              content: [{ type: 'text', text: message }],
+              structuredContent: {
+                error: 'audit_body_too_large',
+                message,
+                limit: MAX_AUDIT_NOTE_BODY_CHARS,
+                got: args.body.length,
+                kind: noteKind,
+              },
+            };
+          }
+          const validation = validateAuditNoteBody(noteKind, args.body);
+          if (!validation.ok) {
+            return {
+              isError: true,
+              content: [{ type: 'text', text: validation.error }],
+              structuredContent: {
+                error: 'audit_body_invalid',
+                message: validation.error,
+                kind: noteKind,
+              },
+            };
+          }
         }
 
         const note = createNote({

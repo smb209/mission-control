@@ -23,7 +23,10 @@ export type NoteKind =
   | 'decision'
   | 'observation'
   | 'question'
-  | 'breadcrumb';
+  | 'breadcrumb'
+  | 'audit_manifest'
+  | 'audit_proposal'
+  | 'audit_synthesis';
 
 export const NOTE_KINDS: ReadonlyArray<NoteKind> = [
   'discovery',
@@ -33,6 +36,23 @@ export const NOTE_KINDS: ReadonlyArray<NoteKind> = [
   'observation',
   'question',
   'breadcrumb',
+  'audit_manifest',
+  'audit_proposal',
+  'audit_synthesis',
+];
+
+/**
+ * Note kinds emitted by the subtree-audit pipeline (see
+ * specs/subtree-audit-proposals-spec.md). These are excluded by default
+ * from cross-audit reads (briefing builder, Notes Rail, default
+ * `listNotes` calls) so audit artifacts don't bleed into unrelated
+ * agent context. The proposal queue UI and the audit orchestrator
+ * itself read them explicitly via the `kinds` filter.
+ */
+export const AUDIT_NOTE_KINDS: ReadonlyArray<NoteKind> = [
+  'audit_manifest',
+  'audit_proposal',
+  'audit_synthesis',
 ];
 
 export type NoteImportance = 0 | 1 | 2;
@@ -155,6 +175,16 @@ export interface ListNotesFilter {
   audience?: string;
   /** When set, restrict to these note kinds. */
   kinds?: ReadonlyArray<NoteKind>;
+  /**
+   * When set, exclude these note kinds. Applied AFTER `kinds` (i.e. the
+   * intersection: kept iff `kind ∈ kinds` and `kind ∉ exclude_kinds`).
+   * Used by cross-audit readers (briefing assembly, Notes Rail) to
+   * filter out audit-pipeline artifacts (`audit_manifest`,
+   * `audit_proposal`, `audit_synthesis`) without enumerating the
+   * allow-list each time. See `AUDIT_NOTE_KINDS` and
+   * specs/subtree-audit-proposals-spec.md §4.1.
+   */
+  exclude_kinds?: ReadonlyArray<NoteKind>;
   /** When set, exclude notes whose `consumed_by_stages` already includes this stage. */
   not_consumed_by_stage?: string;
   /** When set, include archived notes; default excludes them. */
@@ -205,6 +235,11 @@ export function listNotes(filter: ListNotesFilter): AgentNote[] {
     const placeholders = filter.kinds.map(() => '?').join(',');
     where.push(`kind IN (${placeholders})`);
     args.push(...filter.kinds);
+  }
+  if (filter.exclude_kinds && filter.exclude_kinds.length > 0) {
+    const placeholders = filter.exclude_kinds.map(() => '?').join(',');
+    where.push(`kind NOT IN (${placeholders})`);
+    args.push(...filter.exclude_kinds);
   }
   if (filter.not_consumed_by_stage) {
     // SQLite has no native JSON containment in older builds; we do a
