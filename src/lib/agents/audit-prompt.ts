@@ -120,8 +120,20 @@ export interface BuildAuditPromptInput {
     }>;
     /** Pre-pulled `git log --oneline -20` excerpt or empty string. */
     gitActivity?: string | null;
-    /** Most recent prior `audit_synthesis` body (verbatim) or null. */
-    priorSynthesisBody?: string | null;
+    /**
+     * Compact ref to the most recent prior `audit_synthesis` note on
+     * the root, used as a delta-baseline. Null when no prior audit
+     * exists or the prior body failed to validate. The orchestrator
+     * pre-resolves the timestamp + run_group_id from the DB row so the
+     * surveyor doesn't have to walk notes itself.
+     *
+     * Spec: specs/subtree-audit-proposals-spec.md §7, §10 Phase 5.
+     */
+    priorSynthesis?: {
+      created_at: string;
+      run_group_id: string;
+      completion_sentinel: string;
+    } | null;
   };
   /**
    * L3 synthesizer briefing inputs (mode: 'synthesis'). The orchestrator
@@ -322,7 +334,7 @@ function buildSurveyPrompt(args: {
   if (!surveyInput) {
     throw new Error('buildAuditPrompt(mode=survey): surveyInput is required');
   }
-  const { rootId, attempt, descendants, gitActivity, priorSynthesisBody } = surveyInput;
+  const { rootId, attempt, descendants, gitActivity, priorSynthesis } = surveyInput;
 
   const descBlock =
     descendants.length === 0
@@ -338,9 +350,13 @@ function buildSurveyPrompt(args: {
     ? `\n## Recent repo activity (cheap skim)\n\n\`\`\`\n${gitActivity.trim()}\n\`\`\`\n`
     : '\n## Recent repo activity\n\n_(none provided — surveyor briefing did not include a git-log excerpt; do not greenfield git work)_\n';
 
-  const priorBlock = priorSynthesisBody?.trim()
-    ? `\n## Prior synthesis (most recent audit on this root)\n\n\`\`\`\n${priorSynthesisBody.trim()}\n\`\`\`\n\nUse this to bias toward delta-style narrowing — nodes with no signal change since the prior synthesis are good \`skip: true\` candidates.\n`
-    : '';
+  // Phase 5: always render a `## Prior audit` section so the surveyor
+  // is unambiguously instructed about delta-mode behavior — present or
+  // absent. With a prior, encourage `skip: true` for unchanged nodes;
+  // without one, force a fresh full-fanout investigation.
+  const priorBlock = priorSynthesis
+    ? `\n## Prior audit\n\nA prior audit completed at ${priorSynthesis.created_at}.\nLast sentinel: "${priorSynthesis.completion_sentinel}"\n\nUse this as a delta baseline. For each descendant in your manifest:\n- If you can confidently say nothing meaningful has changed since the\n  prior audit (no MC status flip, no scope change in the description,\n  no recent activity hinting at a re-investigation), set\n  \`hypothesis: 'likely-done'\` (or whatever was established) AND\n  \`skip: true\` AND \`confidence: 'high'\`. The orchestrator will skip\n  those nodes and emit a synthetic keep proposal.\n- If anything has changed (MC status, description text, target dates,\n  or there's recent activity), set \`skip: false\` regardless of\n  hypothesis. Do not skip on uncertainty.\n\nThis is a delta-run optimization. When in doubt, do not skip.\n\nIn your emitted manifest, set \`previous_synthesis_run_group_id\` to\nexactly: \`"${priorSynthesis.run_group_id}"\`\n`
+    : `\n## Prior audit\n\n(no prior audit synthesis on this root — investigate every node\nfreshly).\n\nIn your emitted manifest, set \`previous_synthesis_run_group_id: null\`.\n`;
 
   const guidanceBlock = guidance?.trim()
     ? `\n## Operator focus\n\n${guidance.trim()}\n`
@@ -352,7 +368,7 @@ function buildSurveyPrompt(args: {
   "version": 1,
   "root_initiative_id": "${rootId}",
   "attempt": ${attempt},
-  "previous_synthesis_run_group_id": null,
+  "previous_synthesis_run_group_id": ${priorSynthesis ? `"${priorSynthesis.run_group_id}"` : 'null'},
   "summary": "1-paragraph framing of the epic's intent and current state",
   "nodes": [
     {

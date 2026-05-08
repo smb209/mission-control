@@ -881,3 +881,153 @@ test('runSubtreeAudit (Phase 4): L3 failure → no synthetic fallback, root outc
   assert.match(rootOutcome!.error ?? '', /synthesis no-synthesis/);
   assert.match(rootOutcome!.error ?? '', /ghost-walked/);
 });
+
+test('runSubtreeAudit (Phase 5): delta skip — node dispatched on run 1, skipped on run 2', async () => {
+  __setSendChatClientForTests(stubClient());
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Delta epic' });
+  const node1 = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'Node 1',
+    parent_initiative_id: root.id,
+  });
+
+  // Run 1: surveyor reports needs-deep-dive / not skipped → node1 is
+  // dispatched. Plant a synthesis note at the end of run 1 so run 2
+  // sees a delta baseline.
+  const surveyorRun1 = async (): Promise<SurveyorResult> => ({
+    manifest: {
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 1,
+      previous_synthesis_run_group_id: null,
+      summary: 'first run',
+      nodes: [
+        {
+          initiative_id: node1.id,
+          title: node1.title,
+          current_status: 'in_progress',
+          hypothesis: 'needs-deep-dive',
+          confidence: 'medium',
+          investigation_prompt: 'first audit',
+          scoped_evidence_hints: [],
+          skip: false,
+        },
+      ],
+      cross_cutting_questions: [],
+    },
+    surveyorNoteId: null,
+    dispatchOutcome: 'ok',
+  });
+
+  const r1 = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 2,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride: surveyorRun1,
+    synthesizerOverride: noopSynthesizer,
+  });
+
+  // Run 1: node1 was dispatched (an agent_runs child row exists).
+  const run1Children = queryAll<{ id: string }>(
+    `SELECT id FROM agent_runs WHERE workspace_id = ? AND initiative_id = ? AND parent_run_id = ?`,
+    [ws, node1.id, r1.parentRunId],
+  );
+  assert.equal(run1Children.length, 1, 'run 1: node1 dispatched');
+
+  // Plant a valid prior synthesis on the root (simulates L3 having
+  // landed at the end of run 1). The Phase 5 surveyor read should pick
+  // this up on run 2.
+  createNote({
+    workspace_id: ws,
+    agent_id: null,
+    initiative_id: root.id,
+    scope_key: `initiative-${root.id}:audit-synthesis:1`,
+    role: 'auditor',
+    run_group_id: uuidv4(),
+    kind: 'audit_synthesis',
+    audience: 'pm',
+    importance: 1,
+    body: JSON.stringify({
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 1,
+      completion_sentinel: 'Delta epic done.',
+      epic_proposals: [],
+      cross_node_proposals: [],
+    }),
+  });
+
+  // Run 2: surveyor reports skip:true / high — simulating "nothing
+  // changed since the prior audit", which the Phase 5 briefing
+  // explicitly authorizes when a prior synthesis exists.
+  const surveyorRun2 = async (): Promise<SurveyorResult> => ({
+    manifest: {
+      version: 1,
+      root_initiative_id: root.id,
+      attempt: 2,
+      previous_synthesis_run_group_id: null, // overwritten by orchestrator anyway
+      summary: 'second run, nothing changed',
+      nodes: [
+        {
+          initiative_id: node1.id,
+          title: node1.title,
+          current_status: 'in_progress',
+          hypothesis: 'likely-done',
+          confidence: 'high',
+          investigation_prompt: 'unchanged since prior audit',
+          scoped_evidence_hints: [],
+          skip: true,
+        },
+      ],
+      cross_cutting_questions: [],
+    },
+    surveyorNoteId: null,
+    dispatchOutcome: 'ok',
+  });
+
+  const r2 = await runSubtreeAudit({
+    rootId: root.id,
+    workspaceId: ws,
+    guidance: null,
+    perNodeTimeoutMs: 10_000,
+    subtreeConcurrency: 2,
+    runner: fakeRunner(),
+    mode: 'subtree-proposal',
+    surveyorOverride: surveyorRun2,
+    synthesizerOverride: noopSynthesizer,
+  });
+
+  // Run 2: node1 should NOT have a new agent_runs child row under r2's
+  // parent (manifest-skip → synthetic keep, no dispatch).
+  const run2Children = queryAll<{ id: string }>(
+    `SELECT id FROM agent_runs WHERE workspace_id = ? AND initiative_id = ? AND parent_run_id = ?`,
+    [ws, node1.id, r2.parentRunId],
+  );
+  assert.equal(run2Children.length, 0, 'run 2: node1 skipped (no new dispatch)');
+
+  // A synthetic keep audit_proposal landed for node1 on run 2.
+  const proposals = listNotes({
+    initiative_id: node1.id,
+    kinds: ['audit_proposal'],
+    limit: 5,
+  });
+  // At least one keep proposal — the run 2 synthetic keep. (Run 1's
+  // dispatch may or may not have produced a real proposal via the
+  // stub, which doesn't matter for this assertion.)
+  const synthKeep = proposals
+    .map((p) => JSON.parse(p.body))
+    .find((b) => b.proposed_action === 'keep' && b.confidence === 'high');
+  assert.ok(synthKeep, 'run 2 emitted a synthetic high-confidence keep proposal');
+
+  // Per-node outcome is recorded with the manifest-skip marker.
+  const skipOutcome = r2.perNodeOutcomes.find((o) => o.initiativeId === node1.id);
+  assert.ok(skipOutcome);
+  assert.equal(skipOutcome!.status, 'ok');
+  assert.match(skipOutcome!.note ?? '', /manifest-skip/);
+});
