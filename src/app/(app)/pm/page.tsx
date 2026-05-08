@@ -11,8 +11,7 @@
  * proposals" sidebar on the right with proposal status chips.
  */
 
-import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -88,16 +87,6 @@ const STATUS_BADGE: Record<PmProposal['status'], string> = {
 // missing plan/decompose/notes — all three rendered as blue "manual").
 
 export default function PmChatPage() {
-  // useSearchParams() requires a Suspense boundary during static prerender
-  // (Next 16). The actual page contents live in PmChatPageInner below.
-  return (
-    <Suspense fallback={null}>
-      <PmChatPageInner />
-    </Suspense>
-  );
-}
-
-function PmChatPageInner() {
   const workspaceId = useCurrentWorkspaceId();
   const setCurrentWorkspaceId = useSetCurrentWorkspaceId();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -141,8 +130,21 @@ function PmChatPageInner() {
   // Phase 6: support `?proposal=<id>` deep-links — scroll to and highlight
   // the matching proposal card on load. Cleared after first successful
   // scroll so subsequent re-renders don't keep re-scrolling.
-  const searchParams = useSearchParams();
-  const focusProposalId = searchParams?.get('proposal') ?? null;
+  //
+  // We deliberately read the param from `window.location.search` post-mount
+  // rather than via `useSearchParams()`. The hook forces a Suspense boundary
+  // during static prerender (Next 15+), and wrapping this client page in
+  // <Suspense> caused the streaming chunk for `/pm?proposal=<id>` to be
+  // inserted as a body-level sibling of the shell <main> instead of replacing
+  // the placeholder — leaving the page rendered with empty initial state and
+  // no effects ever firing. Reading post-mount avoids the prerender path
+  // entirely. See PR #271 for the repro.
+  const [focusProposalId, setFocusProposalId] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    setFocusProposalId(params.get('proposal'));
+  }, []);
   const [highlightedProposalId, setHighlightedProposalId] = useState<string | null>(null);
 
   // Load workspace list once. The global switcher in the left nav owns the
