@@ -245,17 +245,21 @@ export default function InvestigateModal({
   // "Done" or jumps to the Activity strip via "View activity".
   const [dispatched, setDispatched] = useState<DispatchResult | null>(null);
   const [inFlightConflict, setInFlightConflict] = useState<{ message: string } | null>(null);
+  // Soft cooldown: when the most recent complete initiative_audit on
+  // this initiative is < RECENT_AUDIT_MS old, surface a non-blocking
+  // "audited X ago" hint so back-to-back reruns are intentional rather
+  // than accidental. Populated from the dryrun GET response.
+  // See specs/dedupe-investigations.md §3.
+  const [recentAuditAt, setRecentAuditAt] = useState<string | null>(null);
 
-  // Pre-flight: when opened in subtree mode, fetch the planned-nodes /
-  // planned-layers / concurrency from the dryrun endpoint so we can
-  // render an accurate ETA banner. Falls back to a generic message if
-  // the request fails.
+  // Pre-flight: fetch the dryrun endpoint to populate plan info
+  // (subtree only) and the recent-audit timestamp (both modes). Falls
+  // back to a generic message if the request fails.
   useEffect(() => {
-    if (mode !== 'subtree') return;
     let cancelled = false;
     setPlanErr(null);
     fetch(
-      `/api/initiatives/${initiative.id}/investigate?dryrun=1&mode=subtree`,
+      `/api/initiatives/${initiative.id}/investigate?dryrun=1&mode=${mode}`,
     )
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
@@ -264,10 +268,16 @@ export default function InvestigateModal({
             (body as { error?: string }).error || `Plan fetch failed (${res.status})`,
           );
         }
-        if (!cancelled) setPlan(body as SubtreePlan);
+        if (cancelled) return;
+        const last = (body as { last_complete_audit?: { completed_at: string | null } | null })
+          .last_complete_audit;
+        setRecentAuditAt(last?.completed_at ?? null);
+        if (mode === 'subtree') setPlan(body as SubtreePlan);
       })
       .catch((e) => {
-        if (!cancelled) setPlanErr(e instanceof Error ? e.message : String(e));
+        if (!cancelled && mode === 'subtree') {
+          setPlanErr(e instanceof Error ? e.message : String(e));
+        }
       });
     return () => {
       cancelled = true;
@@ -436,6 +446,21 @@ export default function InvestigateModal({
               {err}
             </div>
           )}
+
+          {recentAuditAt && !inFlightConflict && (() => {
+            const ageMs = Date.now() - new Date(recentAuditAt).getTime();
+            const RECENT_MS = 15 * 60_000;
+            if (ageMs < 0 || ageMs > RECENT_MS) return null;
+            const mins = Math.max(1, Math.round(ageMs / 60_000));
+            return (
+              <div
+                className="p-2 rounded bg-mc-bg/40 border border-mc-border text-xs text-mc-text-secondary"
+                role="status"
+              >
+                Last audit completed {mins} minute{mins === 1 ? '' : 's'} ago. Re-audit if something changed.
+              </div>
+            );
+          })()}
 
           {inFlightConflict && (
             <div

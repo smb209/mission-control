@@ -76,6 +76,26 @@ function findInFlightAudits(initiativeId: string): AgentRun[] {
   );
 }
 
+/**
+ * Find the most recent successfully-completed `initiative_audit` for
+ * this initiative. Surfaced via `?dryrun=1` so the modal can render a
+ * soft "audited recently" cooldown hint. See
+ * specs/dedupe-investigations.md §3.
+ */
+function lastCompleteAudit(initiativeId: string): { run_id: string; completed_at: string | null } | null {
+  const rows = queryAll<{ id: string; completed_at: string | null }>(
+    `SELECT id, completed_at FROM agent_runs
+      WHERE initiative_id = ?
+        AND kind = 'initiative_audit'
+        AND status = 'complete'
+      ORDER BY COALESCE(completed_at, created_at) DESC
+      LIMIT 1`,
+    [initiativeId],
+  );
+  if (rows.length === 0) return null;
+  return { run_id: rows[0].id, completed_at: rows[0].completed_at };
+}
+
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
@@ -123,6 +143,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       planned_layers: 1,
       concurrency: 1,
       per_node_timeout_ms: settings.perNodeTimeoutMs,
+      last_complete_audit: lastCompleteAudit(id),
     });
   }
   if (TERMINAL_STATUSES.has(initiative.status)) {
@@ -141,6 +162,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     planned_layers: plan.plannedLayers,
     concurrency: settings.subtreeConcurrency,
     per_node_timeout_ms: settings.perNodeTimeoutMs,
+    last_complete_audit: lastCompleteAudit(id),
   });
 }
 
