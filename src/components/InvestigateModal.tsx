@@ -244,6 +244,7 @@ export default function InvestigateModal({
   // confirmation panel instead of closing. Operator dismisses via
   // "Done" or jumps to the Activity strip via "View activity".
   const [dispatched, setDispatched] = useState<DispatchResult | null>(null);
+  const [inFlightConflict, setInFlightConflict] = useState<{ message: string } | null>(null);
 
   // Pre-flight: when opened in subtree mode, fetch the planned-nodes /
   // planned-layers / concurrency from the dryrun endpoint so we can
@@ -296,7 +297,7 @@ export default function InvestigateModal({
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  const submit = async () => {
+  const submit = async (opts?: { supersede?: boolean }) => {
     if (submitting) return;
     setSubmitting(true);
     setErr(null);
@@ -305,9 +306,10 @@ export default function InvestigateModal({
       // Subtree mode is always 'fresh' in PR 4; reaudit field is ignored
       // server-side but harmless to omit. The route default keeps narrow
       // behavior unchanged.
-      const requestBody = mode === 'subtree'
+      const requestBody: Record<string, unknown> = mode === 'subtree'
         ? { mode: 'subtree', guidance: baseBody.guidance }
-        : baseBody;
+        : { ...baseBody };
+      if (opts?.supersede) requestBody.supersede = true;
       const res = await fetch(`/api/initiatives/${initiative.id}/investigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -316,6 +318,15 @@ export default function InvestigateModal({
       // The route returns 200 once the dispatch is queued (or the
       // subtree orchestration is kicked off). Treat any 2xx as success.
       const body = await res.json().catch(() => ({}));
+      // 409 audit_in_flight: prompt the operator to cancel the live
+      // run and redispatch. Resolved via the inline button → recurse
+      // with supersede=true. See specs/dedupe-investigations.md §2.
+      if (res.status === 409 && (body as { error?: string }).error === 'audit_in_flight') {
+        setInFlightConflict({
+          message: (body as { message?: string }).message ?? 'Audit already in flight.',
+        });
+        return;
+      }
       if (!res.ok) {
         throw new Error(
           (body as { error?: string }).error || `Investigate failed (${res.status})`,
@@ -423,6 +434,34 @@ export default function InvestigateModal({
               role="alert"
             >
               {err}
+            </div>
+          )}
+
+          {inFlightConflict && (
+            <div
+              className="p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm flex flex-col gap-2"
+              role="alert"
+            >
+              <div>{inFlightConflict.message}</div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInFlightConflict(null);
+                    void submit({ supersede: true });
+                  }}
+                  className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs"
+                >
+                  Cancel & redispatch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInFlightConflict(null)}
+                  className="px-2 py-1 rounded hover:bg-mc-bg border border-mc-border text-xs text-mc-text-secondary"
+                >
+                  Keep existing
+                </button>
+              </div>
             </div>
           )}
 
@@ -551,7 +590,7 @@ export default function InvestigateModal({
                 Cancel
               </button>
               <button
-                onClick={submit}
+                onClick={() => submit()}
                 disabled={submitting}
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >

@@ -137,6 +137,87 @@ test('POST subtree with no runner registered → 503', async () => {
   assert.equal(res.status, 503);
 });
 
+test('POST narrow with an in-flight initiative_audit → 409 audit_in_flight', async () => {
+  const ws = freshWorkspace();
+  const i = createInitiative({ workspace_id: ws, kind: 'epic', title: 'open' });
+
+  // Insert a runner so the route doesn't 503 on us before the guard runs.
+  const runnerId = `agent-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT OR REPLACE INTO agents
+       (id, name, role, workspace_id, gateway_agent_id, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'mc-runner-dev', 'test', datetime('now'), datetime('now'))`,
+    [runnerId, 'runner', 'researcher', ws],
+  );
+
+  // Simulate an existing in-flight audit row.
+  const { startAgentRun } = await import('@/lib/db/agent-runs');
+  const liveRunId = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'agent:researcher:in-flight',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: runnerId,
+    initiative_id: i.id,
+    run_group_id: uuidv4(),
+  });
+
+  try {
+    const res = await callPost(i.id, { mode: 'narrow' });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.equal(body.error, 'audit_in_flight');
+    assert.ok(Array.isArray(body.in_flight));
+    assert.equal(body.in_flight[0].run_id, liveRunId);
+    assert.equal(body.in_flight[0].status, 'running');
+  } finally {
+    clearRunner();
+    run(`DELETE FROM agent_runs WHERE id = ?`, [liveRunId]);
+  }
+});
+
+test('POST narrow with supersede=true cancels in-flight and dispatches', async () => {
+  const ws = freshWorkspace();
+  const i = createInitiative({ workspace_id: ws, kind: 'epic', title: 'open' });
+
+  const runnerId = `agent-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT OR REPLACE INTO agents
+       (id, name, role, workspace_id, gateway_agent_id, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'mc-runner-dev', 'test', datetime('now'), datetime('now'))`,
+    [runnerId, 'runner', 'researcher', ws],
+  );
+
+  const { startAgentRun, getAgentRun } = await import('@/lib/db/agent-runs');
+  const liveRunId = startAgentRun({
+    workspace_id: ws,
+    kind: 'initiative_audit',
+    scope_key: 'agent:researcher:in-flight2',
+    scope_type: 'initiative_audit',
+    role: 'researcher',
+    agent_id: runnerId,
+    initiative_id: i.id,
+    run_group_id: uuidv4(),
+  });
+
+  try {
+    const res = await callPost(i.id, { mode: 'narrow', supersede: true });
+    // 200 because dispatch fired (background promise will fail to
+    // reach the gateway but that's not on the response path).
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.mode, 'narrow');
+    // The previously in-flight run should now be cancelled.
+    const after = getAgentRun(liveRunId);
+    assert.equal(after!.status, 'cancelled');
+  } finally {
+    clearRunner();
+    run(`DELETE FROM agent_runs WHERE initiative_id = ?`, [i.id]);
+    run(`DELETE FROM mc_sessions WHERE initiative_id = ?`, [i.id]);
+  }
+});
+
 test('POST subtree with zero non-terminal descendants → planned_nodes=1', async () => {
   const ws = freshWorkspace();
   const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'root' });

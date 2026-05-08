@@ -42,6 +42,8 @@ import { buildAuditPrompt } from '@/lib/agents/audit-prompt';
 import { queryAll } from '@/lib/db';
 import { getAuditSettings } from '@/lib/db/workspaces';
 import { planSubtreeAudit, runSubtreeAudit } from '@/lib/agents/subtree-audit';
+import { cancelAgentRun, AgentRunNotCancellableError } from '@/lib/db/agent-runs';
+import type { AgentRun } from '@/lib/db/agent-runs';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,7 +51,30 @@ const InvestigateSchema = z.object({
   mode: z.enum(['narrow', 'subtree']).default('narrow'),
   guidance: z.string().max(2000).nullish(),
   reaudit: z.enum(['fresh', 'build_on']).default('fresh'),
+  /**
+   * When `true`, cancel any in-flight `initiative_audit` runs on this
+   * initiative before dispatching a fresh one. When `false` (default),
+   * an in-flight audit causes the route to refuse with 409. See
+   * specs/dedupe-investigations.md §2.
+   */
+  supersede: z.boolean().optional().default(false),
 });
+
+/**
+ * Find queued/running `initiative_audit` runs already scoped to this
+ * initiative. Used by the dispatch-time guard so a second click of
+ * "Audit" on the same initiative doesn't silently spawn a duplicate.
+ */
+function findInFlightAudits(initiativeId: string): AgentRun[] {
+  return queryAll<AgentRun>(
+    `SELECT * FROM agent_runs
+      WHERE initiative_id = ?
+        AND kind = 'initiative_audit'
+        AND status IN ('queued', 'running')
+      ORDER BY created_at ASC`,
+    [initiativeId],
+  );
+}
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -131,7 +156,49 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { status: 400 },
       );
     }
-    const { mode, guidance, reaudit } = parsed.data;
+    const { mode, guidance, reaudit, supersede } = parsed.data;
+
+    // Concurrent-audit guard (specs/dedupe-investigations.md §2). An
+    // operator clicking "Audit" twice in a row used to silently spawn
+    // duplicates; require an explicit `supersede` to cancel the
+    // in-flight run, otherwise refuse with 409 + the live run's id so
+    // the UI can surface it.
+    const inFlight = findInFlightAudits(id);
+    if (inFlight.length > 0) {
+      if (!supersede) {
+        return NextResponse.json(
+          {
+            error: 'audit_in_flight',
+            message:
+              `An initiative audit is already ${inFlight[0].status} for this initiative. ` +
+              `Re-issue with { "supersede": true } to cancel and redispatch.`,
+            in_flight: inFlight.map((r) => ({
+              run_id: r.id,
+              status: r.status,
+              kind: r.kind,
+              started_at: r.started_at,
+              created_at: r.created_at,
+            })),
+          },
+          { status: 409 },
+        );
+      }
+      // supersede=true → cancel each. cancelAgentRun is idempotent on
+      // already-terminal rows; a NotCancellable error means someone
+      // raced us to the cancel path, which is fine.
+      for (const r of inFlight) {
+        try {
+          cancelAgentRun(r.id);
+        } catch (err) {
+          if (!(err instanceof AgentRunNotCancellableError)) {
+            console.warn(
+              `[investigate] supersede: cancelAgentRun(${r.id}) failed:`,
+              (err as Error).message,
+            );
+          }
+        }
+      }
+    }
 
     const initiative = getInitiative(id, { includeTasks: true });
     if (!initiative) {
