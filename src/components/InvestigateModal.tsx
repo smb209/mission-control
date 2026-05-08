@@ -448,7 +448,14 @@ export default function InvestigateModal({
           )}
 
           {recentAuditAt && !inFlightConflict && (() => {
-            const ageMs = Date.now() - new Date(recentAuditAt).getTime();
+            // SQLite's datetime('now') returns "YYYY-MM-DD HH:MM:SS"
+            // (UTC, no zone). Browsers treat that as *local* time,
+            // which would be 7+ hours off depending on tz and produce
+            // negative ageMs. Coerce to ISO-Z so it's parsed as UTC.
+            const iso = recentAuditAt.includes('T')
+              ? recentAuditAt
+              : `${recentAuditAt.replace(' ', 'T')}Z`;
+            const ageMs = Date.now() - new Date(iso).getTime();
             const RECENT_MS = 15 * 60_000;
             if (ageMs < 0 || ageMs > RECENT_MS) return null;
             const mins = Math.max(1, Math.round(ageMs / 60_000));
