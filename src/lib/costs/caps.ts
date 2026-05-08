@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { queryOne, queryAll, run } from '@/lib/db';
+import { queryOne, queryAll, run, toSqliteUtc } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import type { CostCap } from '@/lib/types';
 
@@ -92,14 +92,14 @@ export function checkCaps(workspaceId: string, productId?: string): {
     const now = new Date();
 
     if (cap.cap_type === 'daily') {
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const todayStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), now.getDate()));
       const result = queryOne<{ total: number }>(
         `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE workspace_id = ? AND created_at >= ?`,
         [workspaceId, todayStart]
       );
       currentSpend = result?.total || 0;
     } else if (cap.cap_type === 'monthly') {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const monthStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), 1));
       const result = queryOne<{ total: number }>(
         `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE workspace_id = ? AND created_at >= ?`,
         [workspaceId, monthStart]
@@ -107,7 +107,7 @@ export function checkCaps(workspaceId: string, productId?: string): {
       currentSpend = result?.total || 0;
     } else if (cap.cap_type === 'per_product_monthly' && (cap.product_id || productId)) {
       const pid = cap.product_id || productId;
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const monthStart = toSqliteUtc(new Date(now.getFullYear(), now.getMonth(), 1));
       const result = queryOne<{ total: number }>(
         `SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_events WHERE product_id = ? AND created_at >= ?`,
         [pid, monthStart]

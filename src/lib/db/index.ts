@@ -158,6 +158,16 @@ export function normalizeDatetimeString(v: string): string {
   return SQLITE_DATETIME_RE.test(v) ? `${v.replace(' ', 'T')}Z` : v;
 }
 
+// Format a Date as a bare-SQLite UTC datetime string ("YYYY-MM-DD HH:MM:SS")
+// for use as a bound parameter against `created_at` / `updated_at` columns.
+// SQLite's CURRENT_TIMESTAMP writes this exact shape, and SQLite compares
+// datetime columns as text — so an ISO-Z parameter with `T` at byte 11 will
+// always sort after a same-second stored value with a space, silently
+// excluding rows that should match `>=`.
+export function toSqliteUtc(d: Date): string {
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 function normalizeRow<T>(row: T): T {
   if (!row || typeof row !== 'object') return row;
   // Mutate in place — the row is a fresh object per query, never shared.
