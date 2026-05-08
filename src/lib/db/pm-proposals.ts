@@ -697,6 +697,26 @@ export interface AcceptProposalResult {
   changes_applied: number;
   /** True when the proposal was already accepted — the second call is a no-op. */
   idempotent_noop: boolean;
+  /**
+   * Indexes that were skipped because the operator unchecked them in
+   * the partial-accept flow. Mirrors `accepted_indexes` in the request:
+   * any index in `proposed_changes` that wasn't in the input is here.
+   * Empty array = full accept (or back-compat call without filter).
+   */
+  rejected_indexes: number[];
+}
+
+export interface AcceptProposalOptions {
+  /**
+   * Subset of `proposed_changes` indexes to apply. When omitted, every
+   * diff applies (full accept — back-compat). When provided, only the
+   * listed indexes apply; the rest are dropped silently. Cross-diff
+   * placeholder references (a `create_task_under_initiative` whose
+   * `initiative_id` is a placeholder for a NOT-selected
+   * `create_child_initiative`) trigger a validation error before any
+   * write happens.
+   */
+  accepted_indexes?: ReadonlyArray<number>;
 }
 
 /**
@@ -716,17 +736,77 @@ export interface AcceptProposalResult {
 export function acceptProposal(
   id: string,
   applied_by_agent_id: string | null = null,
+  options: AcceptProposalOptions = {},
 ): AcceptProposalResult {
   const existing = getProposal(id);
   if (!existing) throw new PmProposalValidationError(`proposal ${id} not found`);
 
   if (existing.status === 'accepted') {
-    return { proposal: existing, changes_applied: 0, idempotent_noop: true };
+    return {
+      proposal: existing,
+      changes_applied: 0,
+      idempotent_noop: true,
+      rejected_indexes: [],
+    };
   }
   if (existing.status === 'rejected' || existing.status === 'superseded') {
     throw new PmProposalValidationError(
       `proposal ${id} cannot be accepted from status=${existing.status}`,
     );
+  }
+
+  // Resolve the index filter once, up front. `null` means "apply all"
+  // (back-compat). `Set<number>` lets the apply loop cheaply skip
+  // unselected diffs while preserving the diff-array's natural index.
+  const filter: Set<number> | null = options.accepted_indexes
+    ? new Set(
+        options.accepted_indexes.filter(
+          (i) => i >= 0 && i < existing.proposed_changes.length,
+        ),
+      )
+    : null;
+
+  // Cross-diff placeholder safety: a selected `create_task_under_initiative`
+  // referring to `$N` (or a custom `placeholder_id`) requires the
+  // referenced `create_child_initiative` to also be selected. Catch
+  // before any write so the proposal isn't half-applied.
+  if (filter) {
+    const placeholderToOwner = new Map<string, number>();
+    for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+      const c = existing.proposed_changes[idx];
+      if (c.kind === 'create_child_initiative') {
+        placeholderToOwner.set(`$${idx}`, idx);
+        if (c.placeholder_id) placeholderToOwner.set(c.placeholder_id, idx);
+      }
+    }
+    for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+      if (!filter.has(idx)) continue;
+      const c = existing.proposed_changes[idx];
+      if (c.kind !== 'create_task_under_initiative') continue;
+      const refIdx = placeholderToOwner.get(c.initiative_id);
+      if (refIdx !== undefined && !filter.has(refIdx)) {
+        throw new PmProposalValidationError(
+          `changes[${idx}]: create_task_under_initiative refers to placeholder "${c.initiative_id}" but the create_child_initiative at index ${refIdx} is not in the accepted set. Either accept both or neither.`,
+        );
+      }
+    }
+    // Same check for create_child_initiative diffs that depend on other
+    // placeholders — accepting a child whose dep is unselected is
+    // unrecoverable at apply time.
+    for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+      if (!filter.has(idx)) continue;
+      const c = existing.proposed_changes[idx];
+      if (c.kind !== 'create_child_initiative') continue;
+      for (const rawRef of c.depends_on_initiative_ids ?? []) {
+        if (!rawRef.startsWith('$')) continue;
+        const refIdx = placeholderToOwner.get(rawRef);
+        if (refIdx !== undefined && !filter.has(refIdx)) {
+          throw new PmProposalValidationError(
+            `changes[${idx}]: create_child_initiative depends on placeholder "${rawRef}" but the source diff at index ${refIdx} is not in the accepted set.`,
+          );
+        }
+      }
+    }
   }
 
   // Re-validate against current DB state — initiatives could've been
@@ -760,6 +840,7 @@ export function acceptProposal(
       const placeholderMap = new Map<string, string>();
       // First pass: insert children, populate the map.
       for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+        if (filter && !filter.has(idx)) continue;
         const change = existing.proposed_changes[idx];
         if (change.kind === 'create_child_initiative') {
           const newId = applyCreateChildInitiative(
@@ -783,6 +864,7 @@ export function acceptProposal(
       }
       // Second pass: dep edges + task creation (placeholder-aware) + remaining diffs.
       for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
+        if (filter && !filter.has(idx)) continue;
         const change = existing.proposed_changes[idx];
         if (change.kind === 'create_child_initiative') {
           // Resolve dep placeholders against the freshly-built map and
@@ -879,7 +961,17 @@ export function acceptProposal(
   })();
 
   const updated = getProposal(id)!;
-  return { proposal: updated, changes_applied: changesApplied, idempotent_noop: false };
+  const rejected_indexes = filter
+    ? existing.proposed_changes
+        .map((_, idx) => idx)
+        .filter((idx) => !filter.has(idx))
+    : [];
+  return {
+    proposal: updated,
+    changes_applied: changesApplied,
+    idempotent_noop: false,
+    rejected_indexes,
+  };
 }
 
 /**

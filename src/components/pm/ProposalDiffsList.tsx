@@ -185,6 +185,22 @@ interface ProposalDiffsListProps {
    *  use the human title (e.g. "Smart Snappy") in place of the short
    *  hash (e.g. "072d1c7d"). */
   resolveInitiativeTitle?: InitiativeTitleResolver;
+  /**
+   * Per-diff selection state. When provided, a checkbox is rendered
+   * before each row and the parent owns the toggle. Default = no
+   * checkboxes (the original always-render-everything behavior, used
+   * by previews and read-only contexts).
+   *
+   * `disabledReason` (optional) renders the checkboxes greyed-out and
+   * uses the string as a tooltip. Used when the proposal contains
+   * cross-linked placeholder diffs (decompose flows) — partial accept
+   * doesn't compose cleanly so we keep those all-or-nothing.
+   */
+  selection?: {
+    selected: ReadonlySet<number>;
+    onToggle: (idx: number) => void;
+    disabledReason?: string;
+  };
 }
 
 export function ProposalDiffsList({
@@ -193,6 +209,7 @@ export function ProposalDiffsList({
   previewCap = DEFAULT_PREVIEW_CAP,
   className = 'px-3 pb-3 space-y-1',
   resolveInitiativeTitle,
+  selection,
 }: ProposalDiffsListProps) {
   if (diffs.length === 0) return null;
   const cap = showAll ? diffs.length : previewCap;
@@ -200,9 +217,35 @@ export function ProposalDiffsList({
   const overflow = diffs.length - visible.length;
   return (
     <div className={className}>
-      {visible.map((c, idx) => (
-        <DiffRow key={idx} diff={c} index={idx} resolveInitiativeTitle={resolveInitiativeTitle} />
-      ))}
+      {visible.map((c, idx) => {
+        const row = (
+          <DiffRow
+            diff={c}
+            index={idx}
+            resolveInitiativeTitle={resolveInitiativeTitle}
+          />
+        );
+        if (!selection) return <div key={idx}>{row}</div>;
+        const checked = selection.selected.has(idx);
+        const disabled = !!selection.disabledReason;
+        return (
+          <label
+            key={idx}
+            className={`flex items-start gap-2 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'} ${checked ? '' : 'opacity-50'}`}
+            title={selection.disabledReason}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={disabled}
+              onChange={() => selection.onToggle(idx)}
+              className="mt-1 shrink-0 accent-mc-accent"
+              aria-label={`Accept change ${idx + 1}`}
+            />
+            <span className="flex-1 min-w-0">{row}</span>
+          </label>
+        );
+      })}
       {overflow > 0 && (
         <div className="font-mono text-xs text-mc-text-secondary">
           …and {overflow} more
