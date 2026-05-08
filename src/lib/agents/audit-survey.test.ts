@@ -17,7 +17,8 @@ import assert from 'node:assert/strict';
 import { v4 as uuidv4 } from 'uuid';
 import { run } from '@/lib/db';
 import { createInitiative } from '@/lib/db/initiatives';
-import { createNote } from '@/lib/db/agent-notes';
+import { createNote, listNotes } from '@/lib/db/agent-notes';
+import { buildAuditPrompt } from './audit-prompt';
 import { runSurveyor, buildFallbackManifest } from './audit-survey';
 import {
   __setSendChatClientForTests,
@@ -198,6 +199,218 @@ test('runSurveyor: dispatch ok but no manifest note → dispatchOutcome no-manif
 
   assert.equal(result.dispatchOutcome, 'no-manifest');
   assert.equal(result.manifest, null);
+});
+
+test('runSurveyor (Phase 5): no prior synthesis → manifest has previous_synthesis_run_group_id null + briefing renders "no prior audit"', async () => {
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Delta root no prior' });
+  const child = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'Child A',
+    parent_initiative_id: root.id,
+  });
+
+  __setSendChatClientForTests(
+    stubClient({
+      beforeReply: () => {
+        createNote({
+          workspace_id: ws,
+          agent_id: null,
+          initiative_id: root.id,
+          scope_key: `initiative-${root.id}:audit-survey:1`,
+          role: 'auditor',
+          run_group_id: uuidv4(),
+          kind: 'audit_manifest',
+          audience: 'pm',
+          importance: 1,
+          // Surveyor agent (hallucinated) emits a non-null id; we expect
+          // the orchestrator to overwrite it back to null since no prior
+          // synthesis exists in the DB.
+          body: JSON.stringify({
+            version: 1,
+            root_initiative_id: root.id,
+            attempt: 1,
+            previous_synthesis_run_group_id: 'hallucinated-id',
+            summary: 'no prior',
+            nodes: [
+              {
+                initiative_id: child.id,
+                title: child.title,
+                current_status: 'in_progress',
+                hypothesis: 'needs-deep-dive',
+                confidence: 'medium',
+                investigation_prompt: 'go look',
+                scoped_evidence_hints: [],
+                skip: false,
+              },
+            ],
+            cross_cutting_questions: [],
+          }),
+        });
+      },
+    }),
+  );
+
+  const result = await runSurveyor({
+    rootId: root.id,
+    workspaceId: ws,
+    attempt: 1,
+    runner: fakeRunner(),
+    parentRunId: null,
+  });
+
+  assert.equal(result.dispatchOutcome, 'ok');
+  assert.equal(result.manifest!.previous_synthesis_run_group_id, null);
+
+  // Cross-check: rendering buildAuditPrompt with priorSynthesis=null
+  // surfaces the "(no prior audit synthesis on this root …)" line.
+  const briefing = buildAuditPrompt({
+    initiative: root,
+    tasks: [],
+    childInitiatives: [],
+    priorFindings: [],
+    childFindings: [],
+    mode: 'survey',
+    surveyInput: {
+      rootId: root.id,
+      attempt: 1,
+      descendants: [
+        { id: child.id, title: child.title, kind: 'story', status: 'in_progress', parent_initiative_id: root.id },
+      ],
+      gitActivity: null,
+      priorSynthesis: null,
+    },
+  });
+  assert.match(briefing, /## Prior audit/);
+  assert.match(briefing, /no prior audit synthesis/);
+  assert.match(briefing, /previous_synthesis_run_group_id: null/);
+});
+
+test('runSurveyor (Phase 5): prior synthesis present → manifest carries run_group_id; briefing surfaces sentinel + delta-skip guidance', async () => {
+  const ws = freshWorkspace();
+  const root = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Delta root with prior' });
+  const child = createInitiative({
+    workspace_id: ws,
+    kind: 'story',
+    title: 'Child B',
+    parent_initiative_id: root.id,
+  });
+
+  // Plant a valid prior audit_synthesis note on the root.
+  const priorRunGroupId = uuidv4();
+  const priorSynthesisBody = {
+    version: 1,
+    root_initiative_id: root.id,
+    attempt: 1,
+    completion_sentinel: 'Phase 4 cutover ships and surveyor delta-runs are validated.',
+    epic_proposals: [],
+    cross_node_proposals: [],
+  };
+  createNote({
+    workspace_id: ws,
+    agent_id: null,
+    initiative_id: root.id,
+    scope_key: `initiative-${root.id}:audit-synthesis:0`,
+    role: 'auditor',
+    run_group_id: priorRunGroupId,
+    kind: 'audit_synthesis',
+    audience: 'pm',
+    importance: 1,
+    body: JSON.stringify(priorSynthesisBody),
+  });
+
+  __setSendChatClientForTests(
+    stubClient({
+      beforeReply: () => {
+        createNote({
+          workspace_id: ws,
+          agent_id: null,
+          initiative_id: root.id,
+          scope_key: `initiative-${root.id}:audit-survey:1`,
+          role: 'auditor',
+          run_group_id: uuidv4(),
+          kind: 'audit_manifest',
+          audience: 'pm',
+          importance: 1,
+          // Even if the agent emits the wrong id, the orchestrator
+          // should overwrite to the truth.
+          body: JSON.stringify({
+            version: 1,
+            root_initiative_id: root.id,
+            attempt: 1,
+            previous_synthesis_run_group_id: 'wrong-id',
+            summary: 'with prior',
+            nodes: [
+              {
+                initiative_id: child.id,
+                title: child.title,
+                current_status: 'in_progress',
+                hypothesis: 'likely-done',
+                confidence: 'high',
+                investigation_prompt: 'unchanged since prior',
+                scoped_evidence_hints: [],
+                skip: true,
+              },
+            ],
+            cross_cutting_questions: [],
+          }),
+        });
+      },
+    }),
+  );
+
+  const result = await runSurveyor({
+    rootId: root.id,
+    workspaceId: ws,
+    attempt: 1,
+    runner: fakeRunner(),
+    parentRunId: null,
+  });
+
+  assert.equal(result.dispatchOutcome, 'ok');
+  assert.equal(
+    result.manifest!.previous_synthesis_run_group_id,
+    priorRunGroupId,
+    'orchestrator overwrites previous_synthesis_run_group_id with the DB-truth',
+  );
+
+  // Briefing rendering — pull the same priorSynthesis the surveyor saw.
+  const priorNote = listNotes({
+    initiative_id: root.id,
+    kinds: ['audit_synthesis'],
+    limit: 1,
+    order: 'desc',
+  })[0];
+  assert.ok(priorNote);
+  const briefing = buildAuditPrompt({
+    initiative: root,
+    tasks: [],
+    childInitiatives: [],
+    priorFindings: [],
+    childFindings: [],
+    mode: 'survey',
+    surveyInput: {
+      rootId: root.id,
+      attempt: 1,
+      descendants: [
+        { id: child.id, title: child.title, kind: 'story', status: 'in_progress', parent_initiative_id: root.id },
+      ],
+      gitActivity: null,
+      priorSynthesis: {
+        created_at: priorNote.created_at,
+        run_group_id: priorNote.run_group_id,
+        completion_sentinel: priorSynthesisBody.completion_sentinel,
+      },
+    },
+  });
+  assert.match(briefing, /## Prior audit/);
+  assert.match(briefing, /A prior audit completed at /);
+  assert.match(briefing, /Last sentinel:/);
+  assert.match(briefing, /Phase 4 cutover ships/);
+  assert.match(briefing, /delta baseline/);
+  assert.match(briefing, /skip: true/);
+  assert.ok(briefing.includes(priorNote.run_group_id), 'briefing tells the agent the exact run_group_id to emit');
 });
 
 test('buildFallbackManifest: every descendant skip:false, hypothesis needs-deep-dive', () => {

@@ -17,6 +17,7 @@ import {
   validateAuditNoteBody,
   type AuditManifestBody,
   type AuditManifestNode,
+  type AuditSynthesisBody,
 } from '@/lib/agents/audit-proposals/schemas';
 import type { Agent } from '@/lib/types';
 
@@ -102,19 +103,50 @@ export function buildFallbackManifest(
 }
 
 /**
- * Look up the most recent prior `audit_synthesis` note on the root —
- * used for delta runs in Phase 5. Phase 2 doesn't change behavior on
- * this read, but threads it through so the briefing renders the prior
- * if/when one exists.
+ * Compact summary of the most recent prior `audit_synthesis` note on
+ * the root, surfaced into the surveyor briefing for delta runs.
+ *
+ * Spec: specs/subtree-audit-proposals-spec.md §7, §10 Phase 5.
  */
-function loadPriorSynthesis(rootId: string): string | null {
+export interface PriorSynthesisRef {
+  /** Note row's `created_at` — the timestamp of the prior audit. */
+  created_at: string;
+  /** Note row's `run_group_id` — surfaced as `previous_synthesis_run_group_id`. */
+  run_group_id: string;
+  /** Synthesis body's `completion_sentinel` (1-line "we're done if…" string). */
+  completion_sentinel: string;
+}
+
+/**
+ * Look up the most recent prior `audit_synthesis` note on the root and
+ * decode the `completion_sentinel` for delta-run framing. Returns null
+ * if no prior synthesis exists OR the prior note's body fails to
+ * validate (corrupt / pre-schema). Failure logs but doesn't throw —
+ * we'd rather degrade to a full re-audit than crash the run.
+ */
+function loadPriorSynthesisRef(rootId: string): PriorSynthesisRef | null {
   const rows = listNotes({
     initiative_id: rootId,
     kinds: ['audit_synthesis'],
     limit: 1,
     order: 'desc',
   });
-  return rows[0]?.body ?? null;
+  const note = rows[0];
+  if (!note) return null;
+  const parsed = validateAuditNoteBody('audit_synthesis', note.body);
+  if (!parsed.ok) {
+    console.warn(
+      `[audit-survey] prior audit_synthesis note ${note.id} on ${rootId} ` +
+        `did not validate (${parsed.error}); treating as no prior audit.`,
+    );
+    return null;
+  }
+  const body = parsed.parsed as AuditSynthesisBody;
+  return {
+    created_at: note.created_at,
+    run_group_id: note.run_group_id,
+    completion_sentinel: body.completion_sentinel,
+  };
 }
 
 /**
@@ -183,7 +215,7 @@ export async function runSurveyor(input: RunSurveyorInput): Promise<SurveyorResu
     }
   }
 
-  const priorSynthesisBody = loadPriorSynthesis(rootId);
+  const priorSynthesis = loadPriorSynthesisRef(rootId);
 
   const triggerBody = buildAuditPrompt({
     initiative: root,
@@ -198,7 +230,7 @@ export async function runSurveyor(input: RunSurveyorInput): Promise<SurveyorResu
       attempt,
       descendants,
       gitActivity: gitActivity ?? null,
-      priorSynthesisBody,
+      priorSynthesis,
     },
   });
 
@@ -249,8 +281,16 @@ export async function runSurveyor(input: RunSurveyorInput): Promise<SurveyorResu
       errorMessage: `surveyor manifest body did not validate: ${parsed.error}`,
     };
   }
+  const manifest = parsed.parsed as AuditManifestBody;
+  // Phase 5: source-of-truth for the prior-synthesis link is the DB,
+  // not whatever the surveyor wrote into its body. The briefing tells
+  // the agent the right value to emit; we overwrite here defensively
+  // so a hallucinated null still gets corrected for downstream
+  // consumers (the synthesizer briefing surfaces this id).
+  manifest.previous_synthesis_run_group_id =
+    priorSynthesis?.run_group_id ?? null;
   return {
-    manifest: parsed.parsed as AuditManifestBody,
+    manifest,
     surveyorNoteId: fresh.noteId,
     dispatchOutcome: 'ok',
   };
