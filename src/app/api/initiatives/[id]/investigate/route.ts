@@ -9,16 +9,20 @@
  *
  * Request body:
  *   {
- *     mode: 'narrow' | 'subtree',
- *     guidance?: string,                // optional operator focus area
- *     reaudit?: 'fresh' | 'build_on'    // narrow only; subtree always fresh
+ *     mode: 'narrow' | 'subtree-proposal',
+ *     guidance?: string,                       // optional operator focus area
+ *     reaudit?: 'fresh' | 'build_on'           // narrow only; subtree-proposal always fresh
  *   }
+ *
+ * Phase 4 hard cutover: legacy `mode: 'subtree'` was removed (see
+ * specs/subtree-audit-proposals-spec.md §6.3). Posting it now returns
+ * 400 with a clear "use subtree-proposal" error.
  *
  * Response (200):
  *   For narrow: { ok, mode: 'narrow', scope_key, scope_keys, attempt, dispatched_at }
- *   For subtree: { ok, mode: 'subtree', root_scope_key, planned_layers,
- *                  planned_nodes, concurrency, per_node_timeout_ms,
- *                  dispatched_at }
+ *   For subtree-proposal: { ok, mode: 'subtree-proposal', root_scope_key,
+ *                           planned_layers, planned_nodes, concurrency,
+ *                           per_node_timeout_ms, dispatched_at }
  *
  * GET /api/initiatives/:id/investigate?dryrun=1&mode=subtree
  *   Returns the subtree plan ({ planned_layers, planned_nodes,
@@ -48,7 +52,9 @@ import type { AgentRun } from '@/lib/db/agent-runs';
 export const dynamic = 'force-dynamic';
 
 const InvestigateSchema = z.object({
-  mode: z.enum(['narrow', 'subtree', 'subtree-proposal']).default('narrow'),
+  // Default stays 'narrow' (was 'narrow' pre-Phase-4 — this is a hard
+  // cutover for the subtree shape only; narrow callers are unaffected).
+  mode: z.enum(['narrow', 'subtree-proposal']).default('narrow'),
   guidance: z.string().max(2000).nullish(),
   reaudit: z.enum(['fresh', 'build_on']).default('fresh'),
   /**
@@ -129,7 +135,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       { status: 400 },
     );
   }
-  const mode = url.searchParams.get('mode') ?? 'subtree';
+  // Default GET ?mode is the subtree-proposal shape — narrow callers
+  // pass `mode=narrow` explicitly. Legacy `mode=subtree` is mapped to
+  // `subtree-proposal` here too (the GET is read-only / cheap; we don't
+  // 400 the old query value, just the POST).
+  const rawMode = url.searchParams.get('mode');
+  const mode = !rawMode || rawMode === 'subtree' ? 'subtree-proposal' : rawMode;
   const initiative = getInitiative(id);
   if (!initiative) {
     return NextResponse.json({ error: 'Initiative not found' }, { status: 404 });
@@ -157,7 +168,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const plan = planSubtreeAudit(id, initiative.workspace_id);
   return NextResponse.json({
     ok: true,
-    mode: 'subtree',
+    mode: 'subtree-proposal',
     planned_nodes: plan.plannedNodes,
     planned_layers: plan.plannedLayers,
     concurrency: settings.subtreeConcurrency,
@@ -171,6 +182,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const { id } = await params;
 
     const raw = await request.json().catch(() => ({}));
+    // Phase 4 hard cutover: legacy `mode: 'subtree'` is removed. Surface
+    // a clear, documented error so older callers (operator scripts,
+    // stale UI builds) get a useful pointer instead of a generic Zod
+    // validation failure.
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      (raw as { mode?: unknown }).mode === 'subtree'
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'mode subtree was removed; use subtree-proposal (see specs/subtree-audit-proposals-spec.md §6.3)',
+        },
+        { status: 400 },
+      );
+    }
     const parsed = InvestigateSchema.safeParse(raw);
     if (!parsed.success) {
       return NextResponse.json(
@@ -241,7 +269,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    if (mode === 'subtree' || mode === 'subtree-proposal') {
+    if (mode === 'subtree-proposal') {
       // Subtree mode: reject terminal-status roots — auditing a
       // done/cancelled initiative's whole subtree is meaningless.
       if (TERMINAL_STATUSES.has(initiative.status)) {

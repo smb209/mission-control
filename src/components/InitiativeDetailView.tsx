@@ -294,7 +294,7 @@ export function InitiativeDetailView({
   // specs/initiative-investigate.md). Subtree mode lives in PR 4.
   const [showInvestigateModal, setShowInvestigateModal] = useState(false);
   // PR 4 of specs/initiative-investigate.md — subtree mode added.
-  const [investigateMode, setInvestigateMode] = useState<'narrow' | 'subtree'>('narrow');
+  const [investigateMode, setInvestigateMode] = useState<'narrow' | 'subtree-proposal'>('narrow');
   // Selected task for the inline TaskModal — clicking a task in the
   // children list opens it here instead of navigating away.
   const [taskModalTask, setTaskModalTask] = useState<Task | null>(null);
@@ -1301,9 +1301,9 @@ const INVESTIGATE_OPTIONS: InvestigateOption[] = [
     description: 'One researcher dispatch. Reads description, status check, and direct child tasks.',
   },
   {
-    id: 'subtree',
+    id: 'subtree-proposal',
     label: 'Whole subtree (bottom-up)',
-    description: 'MC fans researchers across non-terminal descendants layer by layer, then rolls up into a parent verdict.',
+    description: 'MC fans researchers across non-terminal descendants layer by layer, then synthesizes typed proposals at the root.',
   },
 ];
 

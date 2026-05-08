@@ -86,7 +86,7 @@ test('GET ?dryrun=1&mode=subtree → returns layer plan from helper', async () =
   const res = await callGet(root.id, '?dryrun=1&mode=subtree');
   assert.equal(res.status, 200);
   const body = await res.json();
-  assert.equal(body.mode, 'subtree');
+  assert.equal(body.mode, 'subtree-proposal');
   assert.equal(body.planned_nodes, 3);
   assert.equal(body.planned_layers, 3);
   assert.ok(body.concurrency >= 1);
@@ -107,6 +107,18 @@ test('GET without ?dryrun=1 → 400', async () => {
   assert.equal(res.status, 400);
 });
 
+test('POST mode=subtree (legacy) → 400 with removed-mode error', async () => {
+  const ws = freshWorkspace();
+  const i = createInitiative({ workspace_id: ws, kind: 'epic', title: 'open' });
+  const res = await callPost(i.id, { mode: 'subtree' });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /mode subtree was removed/i);
+  assert.match(body.error, /subtree-proposal/);
+  // Reference the spec section so callers can find the rationale.
+  assert.match(body.error, /§6\.3/);
+});
+
 test('POST subtree with terminal-status root → 400', async () => {
   const ws = freshWorkspace();
   const i = createInitiative({ workspace_id: ws, kind: 'epic', title: 'closed' });
@@ -120,7 +132,7 @@ test('POST subtree with terminal-status root → 400', async () => {
     [`agent-${uuidv4().slice(0, 8)}`, 'runner', 'researcher'],
   );
   try {
-    const res = await callPost(i.id, { mode: 'subtree' });
+    const res = await callPost(i.id, { mode: 'subtree-proposal' });
     assert.equal(res.status, 400);
     const body = await res.json();
     assert.match(body.error, /terminal-state initiative/i);
@@ -133,7 +145,7 @@ test('POST subtree with no runner registered → 503', async () => {
   const ws = freshWorkspace();
   const i = createInitiative({ workspace_id: ws, kind: 'epic', title: 'open' });
   clearRunner();
-  const res = await callPost(i.id, { mode: 'subtree' });
+  const res = await callPost(i.id, { mode: 'subtree-proposal' });
   assert.equal(res.status, 503);
 });
 
@@ -242,12 +254,12 @@ test('POST subtree with zero non-terminal descendants → planned_nodes=1', asyn
     [runnerId, 'runner', 'researcher'],
   );
   try {
-    const res = await callPost(root.id, { mode: 'subtree' });
+    const res = await callPost(root.id, { mode: 'subtree-proposal' });
     // Drain any unhandled background rejection into a black-hole; the
     // route's `.catch` handler already swallows + logs.
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.equal(body.mode, 'subtree');
+    assert.equal(body.mode, 'subtree-proposal');
     assert.equal(body.planned_nodes, 1);
     assert.equal(body.planned_layers, 1);
     assert.ok(typeof body.root_scope_key === 'string');

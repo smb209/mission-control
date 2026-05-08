@@ -198,3 +198,53 @@ test('audit-prompt: greenfield early-exit instruction is present', () => {
   assert.match(out, /early-exit/);
   assert.match(out, /never built — planned-only/);
 });
+
+test('audit-prompt: mode=synthesis includes manifest + proposal summaries via summarizeProposalForBriefing', () => {
+  const out = buildAuditPrompt({
+    initiative: baseInitiative,
+    tasks: [],
+    childInitiatives: [],
+    mode: 'synthesis',
+    synthesisInput: {
+      rootId: baseInitiative.id,
+      attempt: 7,
+      manifest: {
+        version: 1,
+        root_initiative_id: baseInitiative.id,
+        attempt: 7,
+        previous_synthesis_run_group_id: null,
+        summary: 'M1',
+        nodes: [],
+        cross_cutting_questions: [],
+      },
+      proposalSummaries: [
+        {
+          noteId: 'note-1',
+          initiativeId: 'leaf-1',
+          initiativeTitle: 'Leaf one',
+          body: {
+            version: 1,
+            node_initiative_id: 'leaf-1',
+            current_mc_status: 'in_progress',
+            current_mc_target_end: null,
+            proposed_action: 'mark_done',
+            proposed_changes: { note: 'shipped via #123' },
+            repo_evidence: [{ kind: 'pr', ref: 'https://example/pull/123' }],
+            rationale: 'PR closes the story; tests green.',
+            confidence: 'high',
+            would_confirm_by: null,
+            continuation_note_id: null,
+          },
+        },
+      ],
+    },
+  });
+  assert.match(out, /L3 SYNTHESIZER/);
+  assert.match(out, /audit_synthesis/);
+  assert.match(out, /completion_sentinel/);
+  assert.match(out, /Leaf one/);
+  // The synthesizer should see prose summaries, not raw JSON.
+  assert.match(out, /Proposed action: \*\*mark_done\*\*/);
+  assert.match(out, /Completion note: shipped via #123/);
+  assert.match(out, /Evidence: 1 ref/);
+});
