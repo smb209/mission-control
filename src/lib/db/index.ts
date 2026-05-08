@@ -100,6 +100,13 @@ export function getDb(): Database.Database {
       runMigrations(instance);
     }
 
+    // Wrap `prepare` so every Statement.all/get returned anywhere in
+    // the codebase normalizes bare SQLite datetime strings to ISO-Z
+    // before they reach JS. See specs/timestamp-handling.md §PR-A.
+    // This catches the queryAll/queryOne helpers AND the many sites
+    // that call `db.prepare(sql).all/get(...)` directly.
+    installDatetimeNormalization(instance);
+
     // Only publish the singleton after init fully succeeds. If anything above
     // throws, `db` stays null and the next call retries cleanly instead of
     // returning a poisoned handle.
@@ -129,7 +136,74 @@ export function closeDb(): void {
   }
 }
 
-// Type-safe query helpers
+// ── Timestamp normalization on read ─────────────────────────────────
+//
+// SQLite's `datetime('now')` returns "YYYY-MM-DD HH:MM:SS" — UTC by
+// sqlite convention but with no timezone marker. Browsers parse such
+// strings as *local* time, producing dates that drift by the local
+// UTC offset. Rather than fix every read site, we monkey-patch
+// `db.prepare` once at init so every Statement returned anywhere in
+// the codebase normalizes string fields shaped like bare SQLite
+// datetimes to ISO-Z ("YYYY-MM-DDTHH:MM:SSZ") before they reach JS.
+// See specs/timestamp-handling.md §PR-A.
+//
+// We rewrite only string fields that match the bare-SQLite-datetime
+// shape. Subseconds are preserved; already-Z values are untouched
+// (idempotent); unrelated strings, numbers, nulls, and `pluck()`
+// scalar returns all pass through unchanged.
+export const SQLITE_DATETIME_RE =
+  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/;
+
+export function normalizeDatetimeString(v: string): string {
+  return SQLITE_DATETIME_RE.test(v) ? `${v.replace(' ', 'T')}Z` : v;
+}
+
+function normalizeRow<T>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  // Mutate in place — the row is a fresh object per query, never shared.
+  const r = row as Record<string, unknown>;
+  for (const k in r) {
+    const v = r[k];
+    if (typeof v === 'string') {
+      const nv = normalizeDatetimeString(v);
+      if (nv !== v) r[k] = nv;
+    }
+  }
+  return row;
+}
+
+function installDatetimeNormalization(instance: Database.Database): void {
+  // Each statement holds its own .all / .get methods. We wrap them
+  // lazily the first time the statement is used — this dodges the
+  // edge case where better-sqlite3's bound functions check `this`.
+  const origPrepare = instance.prepare.bind(instance);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (instance as any).prepare = function patchedPrepare(
+    this: Database.Database,
+    sql: string,
+  ): Database.Statement {
+    const stmt = origPrepare(sql);
+    const origAll = stmt.all.bind(stmt);
+    const origGet = stmt.get.bind(stmt);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stmt.all = ((...params: unknown[]) => {
+      const rows = origAll(...(params as [])) as unknown;
+      if (!Array.isArray(rows)) return rows as unknown;
+      for (const row of rows) normalizeRow(row);
+      return rows;
+    }) as typeof stmt.all;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stmt.get = ((...params: unknown[]) => {
+      const row = origGet(...(params as [])) as unknown;
+      return row === undefined ? undefined : normalizeRow(row);
+    }) as typeof stmt.get;
+    return stmt;
+  } as typeof instance.prepare;
+}
+
+// Type-safe query helpers. Normalization happens inside
+// `installDatetimeNormalization`'s prepare wrapper, so these helpers
+// stay thin.
 export function queryAll<T>(sql: string, params: unknown[] = []): T[] {
   const stmt = getDb().prepare(sql);
   return stmt.all(...params) as T[];
