@@ -196,11 +196,14 @@ body {
   box-shadow: 0 0 10px var(--mc-accent-green), 0 0 20px var(--mc-accent-green);
 }
 
-/* Markdown viewer typography (deliverables/[id]/view). Scoped so it doesn't
-   bleed into other markdown surfaces; styled with mc-* tokens. */
+/* Markdown typography. Sets headings / lists / blockquotes / code styling
+   but intentionally does NOT pin font-size — it inherits from the parent
+   so call sites can pick a size that matches their surrounding chrome
+   (text-xs for compact panels, text-sm for content blocks, text-base for
+   the dedicated deliverables viewer). All heading sizes are em-based so
+   they scale relative to whatever the parent sets. */
 .mc-md {
   color: var(--mc-text);
-  font-size: 15px;
   line-height: 1.65;
 }
 .mc-md > :first-child { margin-top: 0; }

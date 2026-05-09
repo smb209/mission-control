@@ -114,8 +114,9 @@ export default function DeliverableViewPage({ params }: { params: Promise<{ id: 
           </div>
         )}
 
+        {/* Dedicated viewer — read at a comfortable content size. */}
         {!state.error && state.content !== undefined && looksMarkdown && (
-          <article className="mc-md">
+          <article className="mc-md text-[15px]">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.content}</ReactMarkdown>
           </article>
         )}
