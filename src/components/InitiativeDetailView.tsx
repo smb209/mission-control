@@ -1019,7 +1019,11 @@ or "carve out the onboarding flow as its own story first"`}
                       {c.title}
                     </Link>
                   )}
-                  <span className="text-xs text-mc-text-secondary ml-auto">{c.status}</span>
+                  <span
+                    className={`ml-auto text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${STATUS_PILL[c.status].className}`}
+                  >
+                    {STATUS_PILL[c.status].label}
+                  </span>
                 </li>
               ))}
             </ul>
