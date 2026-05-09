@@ -8,6 +8,8 @@ import { AgentModal } from './AgentModal';
 import { DiscoverAgentsModal } from './DiscoverAgentsModal';
 import { HealthIndicator } from './HealthIndicator';
 import { AgentPingIndicator } from './AgentPingIndicator';
+import { showAlertDialog } from '@/lib/show-alert';
+import { showToast } from '@/components/Toast';
 
 export interface RollCallEntryView {
   id: string;
@@ -165,14 +167,14 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
       if (!res.ok) {
         updateAgent(agent); // rollback
         const err = await res.json().catch(() => ({}));
-        alert(err.error || 'Failed to toggle agent');
+        showAlertDialog('Toggle failed', err.error || 'Failed to toggle agent');
       } else {
         const fresh = await res.json();
         updateAgent(fresh as Agent);
       }
     } catch (err) {
       updateAgent(agent); // rollback
-      alert(`Failed to toggle agent: ${(err as Error).message}`);
+      showAlertDialog('Toggle failed', `Failed to toggle agent: ${(err as Error).message}`);
     } finally {
       setTogglingAgentId(null);
     }
@@ -246,7 +248,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
       );
       const data = await res.json();
       if (!res.ok) {
-        alert(data.error || 'Failed to reset sessions');
+        showAlertDialog('Reset sessions failed', data.error || 'Failed to reset sessions');
         return;
       }
       // Drop in-memory OpenClaw session state so badges update immediately.
@@ -277,9 +279,9 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
         lines.push('Fall back: run `/reset` in those agents\' OpenClaw chats directly.');
       }
       if (data.gateway_error) lines.push(`Gateway unreachable: ${data.gateway_error}`);
-      alert(lines.join('\n'));
+      showToast({ type: 'info' as const, title: 'Reset results summary', message: lines.join('\n') });
     } catch (err) {
-      alert(`Failed to reset sessions: ${(err as Error).message}`);
+      showAlertDialog('Reset sessions error', `Failed to reset sessions: ${(err as Error).message}`);
     } finally {
       setResetSessionsBusy(false);
     }
@@ -329,7 +331,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
         } else {
           const error = await res.json();
           console.error('Failed to connect to OpenClaw:', error);
-          alert(`Failed to connect: ${error.error || 'Unknown error'}`);
+          showAlertDialog('Connect failed', `Failed to connect: ${error.error || 'Unknown error'}`);
         }
       }
     } catch (error) {

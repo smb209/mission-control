@@ -8,6 +8,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { FileText, Link as LinkIcon, Package, ExternalLink, Eye, Download, Archive, BookOpen } from 'lucide-react';
 import { debug } from '@/lib/debug';
+import { showToast } from '@/components/Toast';
 import type { TaskDeliverable } from '@/lib/types';
 
 interface DeliverablesListProps {
@@ -78,9 +79,9 @@ export function DeliverablesList({ taskId, refreshKey = 0 }: DeliverablesListPro
         debug.file('Failed to open', error);
 
         if (res.status === 404) {
-          alert(`File not found:\n${deliverable.path}\n\nThe file may have been moved or deleted.`);
+          showToast({ type: 'info' as const, title: 'File not found', message: `File not found:\n${deliverable.path}\n\nThe file may have been moved or deleted.` });
         } else if (res.status === 403) {
-          alert(`Cannot open this location:\n${deliverable.path}\n\nPath is outside allowed directories.`);
+          showToast({ type: 'info' as const, title: 'Path outside allowed dirs', message: `Cannot open this location:\n${deliverable.path}\n\nPath is outside allowed directories.` });
         } else {
           throw new Error(error.error || 'Unknown error');
         }
@@ -89,9 +90,9 @@ export function DeliverablesList({ taskId, refreshKey = 0 }: DeliverablesListPro
         // Fallback: copy path to clipboard
         try {
           await navigator.clipboard.writeText(deliverable.path);
-          alert(`Could not open Finder. Path copied to clipboard:\n${deliverable.path}`);
+          showToast({ type: 'info' as const, title: 'Could not open Finder', message: `Could not open Finder. Path copied to clipboard:\n${deliverable.path}` });
         } catch {
-          alert(`File path:\n${deliverable.path}`);
+          showToast({ type: 'info' as const, title: 'File path', message: `File path:\n${deliverable.path}` });
         }
       }
     }
