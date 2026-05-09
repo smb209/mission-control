@@ -52,6 +52,7 @@ import type { Task } from '@/lib/types';
 import PlanWithPmPanel, {
   type PlanInitiativeSuggestions,
 } from '@/components/PlanWithPmPanel';
+import { InitiativeResearchSection } from '@/components/research/InitiativeResearchSection';
 import {
   InlineText,
   InlineTextarea,
@@ -901,6 +902,17 @@ or "carve out the onboarding flow as its own story first"`}
               />
             </div>
           </div>
+
+          {/* Research — initiative-scoped briefs + Suggest research /
+              New brief entry points. Sits inside the header card
+              alongside Description / Status check so the loop is
+              visible even when the operator hasn't scrolled. */}
+          <div className="mt-6">
+            <InitiativeResearchSection
+              workspaceId={initiative.workspace_id}
+              initiativeId={initiative.id}
+            />
+          </div>
         </header>
 
         {/*
@@ -1270,6 +1282,7 @@ or "carve out the onboarding flow as its own story first"`}
           sections={[
             { id: 'description', label: 'Description', visible: true },
             { id: 'status-check', label: 'Status check', visible: true },
+            { id: 'research', label: 'Research', visible: true },
             { id: 'audit-proposals', label: 'Audit Proposals', visible: true },
             {
               id: 'children',
