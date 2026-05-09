@@ -754,12 +754,23 @@ export class OpenClawClient extends EventEmitter {
   }
 }
 
-// Singleton instance for server-side usage
-let clientInstance: OpenClawClient | null = null;
+// Singleton instance for server-side usage. Persisted on `globalThis`
+// so the instance survives module re-evaluation (HMR in dev, double-
+// import edge cases in prod). Without this, a stale module realm could
+// hold a previous instance whose WS still owns the chat session, while
+// new `getOpenClawClient()` callers get a fresh instance — splitting
+// the EventEmitter listeners (registered by in-flight dispatches) from
+// the actual frame producer. That split is the documented cause of the
+// missed-final-frame audit hangs (see the listener-count diagnostic in
+// `sendChatAndAwaitReply` and /tmp/missed-final-investigation.md).
+const GLOBAL_CLIENT_KEY = '__openclawClientInstance__';
 
 export function getOpenClawClient(): OpenClawClient {
+  const g = globalThis as Record<string, unknown>;
+  let clientInstance = g[GLOBAL_CLIENT_KEY] as OpenClawClient | undefined;
   if (!clientInstance) {
     clientInstance = new OpenClawClient();
+    g[GLOBAL_CLIENT_KEY] = clientInstance;
   }
   return clientInstance;
 }

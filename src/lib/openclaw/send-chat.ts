@@ -446,6 +446,18 @@ export async function sendChatAndAwaitReply(
   client.on('chat_event', listener);
   if (agentEventListener) client.on('agent_event', agentEventListener);
 
+  // Prime the idle clock IMMEDIATELY after listener attach — independent
+  // of the send-ack path. Rationale: if an upstream bug ever leaves our
+  // listener attached to a different OpenClawClient instance than the
+  // one whose WS is delivering frames (HMR module-realm churn,
+  // singleton replacement, etc.), the listener never fires AND the
+  // send-ack path used to skip the only `armIdle()` call. That meant
+  // dispatches stalled to the hard `timeoutMs` ceiling instead of the
+  // soft `idleTimeoutMs`. Priming here makes idle-recovery
+  // unconditional. See specs/subtree-audit-proposals-spec.md and the
+  // missed-final investigation against run group c3c0e995.
+  armIdle();
+
   try {
     // Send the frame. If this fails, short-circuit with the SendChatResult
     // shape — no point waiting for a reply that can never arrive.
@@ -469,10 +481,6 @@ export async function sendChatAndAwaitReply(
       };
     }
 
-    // Arm the idle clock once the send is acked; we don't want
-    // pre-send latency to count as agent silence.
-    armIdle();
-
     // Race the `done` event (or idle expiry) against the hard ceiling.
     let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<null>(resolve => {
@@ -487,6 +495,26 @@ export async function sendChatAndAwaitReply(
     if (idleTimer) clearTimeout(idleTimer);
 
     if (winner === null && !doneEvent) {
+      // Diagnostic: log enough to root-cause whether the listener was on
+      // the same client instance whose WS is delivering frames. If the
+      // count here is 0 (or off-by-one against expected concurrent
+      // dispatches), the listener was attached to a different
+      // OpenClawClient instance — the singleton-replacement bug. See
+      // missed-final investigation /tmp/missed-final-investigation.md.
+      try {
+        const clientWithCounts = client as SendChatClient & {
+          listenerCount?: (event: string) => number;
+        };
+        const lc = clientWithCounts.listenerCount?.('chat_event');
+        const connected = client.isConnected();
+        console.warn(
+          `[send-chat] dispatch timed out (reason=${timeoutReason ?? 'max'}, ` +
+            `sessionKey=${sessionKey}, idleEnabled=${idleEnabled}, ` +
+            `listenerCount(chat_event)=${lc ?? 'n/a'}, isConnected=${connected})`,
+        );
+      } catch {
+        // Diagnostics shouldn't break the result.
+      }
       return {
         sent: true,
         sessionKey,
@@ -504,6 +532,24 @@ export async function sendChatAndAwaitReply(
       timedOut: false,
     };
   } finally {
+    // Defensive: re-fetch the client at cleanup. If a singleton swap
+    // happened mid-dispatch, `client.off(...)` would otherwise be a
+    // no-op against a stale instance, leaking listeners on the live
+    // one. Warn so the diagnostic above (and this one) point at the
+    // same root cause if it ever triggers.
+    const cleanupClient = getClient();
+    if (cleanupClient !== client) {
+      console.warn(
+        `[send-chat] OpenClawClient singleton was replaced mid-dispatch ` +
+          `(sessionKey=${sessionKey}). Cleaning up listeners on both ` +
+          `instances to avoid leaks. This is the singleton-replacement ` +
+          `path that produces missed-final stalls.`,
+      );
+      try { cleanupClient.off('chat_event', listener); } catch { /* noop */ }
+      if (agentEventListener) {
+        try { cleanupClient.off('agent_event', agentEventListener); } catch { /* noop */ }
+      }
+    }
     client.off('chat_event', listener);
     if (agentEventListener) client.off('agent_event', agentEventListener);
     if (idleTimer) clearTimeout(idleTimer);

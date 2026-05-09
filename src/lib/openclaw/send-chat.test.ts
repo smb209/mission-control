@@ -414,6 +414,41 @@ test('sendChatAndAwaitReply: idle timer resets on every event; hard ceiling stil
   }
 });
 
+test('sendChatAndAwaitReply: idle expires when listener never fires (singleton-split scenario)', async () => {
+  // Simulate the missed-final bug: send succeeds, but the gateway
+  // delivers events to a DIFFERENT client instance (or never delivers),
+  // so the dispatcher's listener never sees a frame. Pre-fix the only
+  // armIdle() call was after send-ack, so a never-firing listener
+  // meant idle never bit and we sat at the hard ceiling.
+  // Post-fix, armIdle() primes immediately after listener attach, so
+  // idle expiry fires regardless of whether the listener ever sees a
+  // single frame.
+  const stub = makeStub({
+    callImpl: async () => {
+      // chat.send succeeds — but no events are emitted to our listener.
+      // That mimics a singleton split where frames go to a different
+      // client instance.
+      return undefined;
+    },
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const t0 = Date.now();
+    const result = await sendChatAndAwaitReply({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 2_000,
+      idleTimeoutMs: 80,
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(result.timedOut, true);
+    assert.equal(result.timeoutReason, 'idle');
+    assert.ok(elapsed < 1_000, `should resolve at idle (~80ms) even with zero events, got ${elapsed}ms`);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
 test('sendChatAndAwaitReply: idle disabled (no idleTimeoutMs) keeps legacy single-timer behavior', async () => {
   const stub = makeStub();
   __setSendChatClientForTests(stub.client);
