@@ -315,26 +315,36 @@ export default function WorkspaceSettingsPage({
           </div>
         )}
 
-        {/* Identity */}
+        {/* Identity — icon + name share a row so the section doesn't
+            burn three label/value stacks worth of vertical space when
+            the values themselves are tiny. Description gets its own
+            row because it's a textarea. */}
         <Section id="identity" title="Identity">
-          <Field label="Name">
-            <InlineText
-              value={workspace.name}
-              onSave={next => patch({ name: next })}
-              className="text-mc-text font-medium"
-              placeholder="Untitled workspace"
-              label="Edit workspace name"
-            />
-          </Field>
-          <Field label="Icon">
-            <InlineText
-              value={workspace.icon}
-              onSave={next => patch({ icon: next || '📁' })}
-              className="text-2xl"
-              placeholder="📁"
-              label="Edit workspace icon"
-            />
-          </Field>
+          <div className="flex items-start gap-4">
+            <div className="shrink-0">
+              <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                Icon
+              </div>
+              <InlineText
+                value={workspace.icon}
+                onSave={next => patch({ icon: next || '📁' })}
+                className="text-2xl leading-none"
+                placeholder="📁"
+                label="Edit workspace icon"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <Field label="Name">
+                <InlineText
+                  value={workspace.name}
+                  onSave={next => patch({ name: next })}
+                  className="text-mc-text font-medium"
+                  placeholder="Untitled workspace"
+                  label="Edit workspace name"
+                />
+              </Field>
+            </div>
+          </div>
           <Field label="Description">
             <InlineTextarea
               value={workspace.description ?? ''}
@@ -342,7 +352,7 @@ export default function WorkspaceSettingsPage({
                 patch({ description: next.length > 0 ? next : null })
               }
               placeholder="What is this workspace for?"
-              minRows={3}
+              minRows={2}
               label="Edit workspace description"
             />
           </Field>
