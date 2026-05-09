@@ -1030,6 +1030,7 @@ export type SSEEventType =
   | 'rollcall_entry_updated'
   | 'agent_pinged'
   | 'pm_proposal_replaced'
+  | 'pm_proposal_deleted'
   | 'pm_proposal_dispatch_state_changed'
   | 'agent_note_created'
   | 'agent_note_consumed'

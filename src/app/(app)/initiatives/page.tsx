@@ -469,7 +469,15 @@ export default function InitiativesPage() {
   const trimmedSearch = search.trim();
   const leftRail = (
     <div className="text-sm flex flex-col h-full">
-      <div className="sticky top-0 z-10 -mt-1 pt-1 pb-2 bg-mc-bg/95 backdrop-blur-sm space-y-2 mb-1">
+      {/* Solid background, no /95 + backdrop-blur — translucent let
+          scrolling content read through the New / Search / filter row
+          and the operator flagged it as visually weird. The bg colour
+          differs by context: at >=lg the leftRail sits in a desktop
+          aside with the page background; below lg it sits inside the
+          PageWithRails <details> fold which uses bg-mc-bg-secondary,
+          so the inner toolbar matches its parent surface in either
+          context. */}
+      <div className="sticky top-0 z-10 -mt-1 pt-1 pb-2 bg-mc-bg-secondary lg:bg-mc-bg space-y-2 mb-1">
         {/* Primary action — full-width so it doesn't fight the tree
             rows for attention. */}
         <button
