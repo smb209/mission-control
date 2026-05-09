@@ -223,9 +223,16 @@ export function PageWithRails({
                 style={!leftRailCollapsed && resizableLeftRail && resizedWidth != null ? { width: resizedWidth } : undefined}
               >
                 {collapsibleLeftRail && (
+                  // When expanded, float the chevron over the rail
+                  // (negative bottom-margin pulls subsequent SectionNav
+                  // up so its "On this page" header aligns with the
+                  // adjacent main-column card header). When collapsed,
+                  // the chevron has a normal column header.
                   <div className={clsx(
-                    'flex items-center px-1.5 py-1 border-b border-mc-border/60 mb-2',
-                    leftRailCollapsed ? 'justify-center' : 'justify-end',
+                    'flex items-center px-1.5',
+                    leftRailCollapsed
+                      ? 'justify-center py-1 border-b border-mc-border/60 mb-2'
+                      : 'justify-end -mb-7 relative z-10',
                   )}>
                     <button
                       type="button"
@@ -273,7 +280,15 @@ export function PageWithRails({
                 <summary className="px-3 py-2 text-xs uppercase tracking-wide text-mc-text-secondary cursor-pointer">
                   Sections
                 </summary>
-                <div className="p-3 border-t border-mc-border/60 max-h-[calc(100vh-9rem)] overflow-y-auto">
+                {/* No top padding: the leftRail's first child is its
+                    own sticky toolbar (New / Search / filters) and it
+                    needs to sit flush against the summary border. Top
+                    padding here would leave a 12px transparent strip
+                    above the sticky toolbar that scrolling content
+                    bleeds through, which the operator (correctly)
+                    flagged as another bleed-through gap. Keep horizontal
+                    + bottom padding for the tree rows below. */}
+                <div className="px-3 pb-3 border-t border-mc-border/60 max-h-[calc(100vh-9rem)] overflow-y-auto">
                   {leftRail}
                 </div>
               </details>
