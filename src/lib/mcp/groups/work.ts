@@ -868,11 +868,16 @@ export function registerWorkTools(server: McpServer): void {
           [`child_escalated:${args.reason.slice(0, 200)}`, now, parentTaskId],
         );
         if (coordinatorId) {
-          sendAgentMail({
-            fromAgentId: args.agent_id,
+          // Use the lower-level sendMail (no authz) — the escalating agent
+          // is not authz'd on the parent task, but this is a system-driven
+          // notification, not an agent-driven message. Mirrors the pattern
+          // in stall-detection.ts.
+          const { sendMail } = await import('@/lib/mailbox');
+          sendMail({
+            fromAgentId: coordinatorId,
             toAgentId: coordinatorId,
             subject: `ESCALATION: ${task.title.slice(0, 80)}`,
-            body: `Child task ${args.task_id} has been escalated.\n\n**Reason:** ${args.reason}\n\nThe child is bounced to assigned with is_failed=1. You can: re-decompose via update_subtask, reassign, or board_override.`,
+            body: `Child task ${args.task_id} has been escalated by ${args.agent_id}.\n\n**Reason:** ${args.reason}\n\nThe child is bounced to assigned with is_failed=1. You can: re-decompose via update_subtask, reassign, or board_override.`,
             taskId: parentTaskId,
             push: true,
           }).catch((err: unknown) => {
@@ -889,11 +894,12 @@ export function registerWorkTools(server: McpServer): void {
         const { getPmAgent } = await import('@/lib/agents/pm-resolver');
         const pm = getPmAgent(task.workspace_id);
         if (pm) {
-          sendAgentMail({
-            fromAgentId: args.agent_id,
+          const { sendMail } = await import('@/lib/mailbox');
+          sendMail({
+            fromAgentId: pm.id,
             toAgentId: pm.id,
             subject: `ESCALATION: ${task.title.slice(0, 80)} (top-level)`,
-            body: `Top-level task ${args.task_id} has been escalated by its assignee.\n\n**Reason:** ${args.reason}\n\nTask is now needs_user_input. Reassign or board_override to continue.`,
+            body: `Top-level task ${args.task_id} has been escalated by ${args.agent_id}.\n\n**Reason:** ${args.reason}\n\nTask is now needs_user_input. Reassign or board_override to continue.`,
             taskId: args.task_id,
             push: true,
           }).catch((err: unknown) => {
