@@ -53,6 +53,21 @@ export interface Initiative {
    * don't render the indicator. Treat absence as 0.
    */
   note_count?: number;
+  /**
+   * Count of `status='draft'` PM proposals targeting this initiative.
+   * Populated alongside `note_count` for the list-card "pending PM
+   * proposal" chip. Targeting comes from `pm_proposals.target_initiative_id`
+   * which is auto-inferred at write time when all proposed changes
+   * converge on one initiative — see `inferTargetInitiativeId`.
+   */
+  pending_proposal_count?: number;
+  /**
+   * id of the most recent draft proposal targeting this initiative, if
+   * any. Used by the chip's onClick to deep-link `/pm?proposal=<id>`.
+   * When count > 1 this points at the newest; the others are still
+   * reachable via the PM page sidebar.
+   */
+  pending_proposal_id?: string | null;
 }
 
 export interface InitiativeDependency {
@@ -225,7 +240,10 @@ export function listInitiatives(filters: ListInitiativesFilters = {}): Initiativ
   // disappears when the operator empties the trash. Subquery uses the
   // existing idx_agent_notes_initiative index.
   const sql = `
-    SELECT i.*, COALESCE(n.note_count, 0) AS note_count
+    SELECT i.*,
+           COALESCE(n.note_count, 0) AS note_count,
+           COALESCE(p.pending_proposal_count, 0) AS pending_proposal_count,
+           p.pending_proposal_id AS pending_proposal_id
       FROM initiatives i
       LEFT JOIN (
         SELECT initiative_id, COUNT(*) AS note_count
@@ -234,6 +252,18 @@ export function listInitiatives(filters: ListInitiativesFilters = {}): Initiativ
            AND archived_at IS NULL
          GROUP BY initiative_id
       ) n ON n.initiative_id = i.id
+      LEFT JOIN (
+        SELECT target_initiative_id,
+               COUNT(*) AS pending_proposal_count,
+               (SELECT id FROM pm_proposals p2
+                 WHERE p2.target_initiative_id = pm_proposals.target_initiative_id
+                   AND p2.status = 'draft'
+                 ORDER BY p2.created_at DESC LIMIT 1) AS pending_proposal_id
+          FROM pm_proposals
+         WHERE target_initiative_id IS NOT NULL
+           AND status = 'draft'
+         GROUP BY target_initiative_id
+      ) p ON p.target_initiative_id = i.id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY i.sort_order, i.created_at`;
   return queryAll<Initiative>(sql, params);
@@ -251,7 +281,10 @@ export interface InitiativeTreeNode extends Initiative {
 export function getInitiativeTree(workspace_id: string, root_id?: string): InitiativeTreeNode[] {
   // Same JOIN as listInitiatives so tree-rendered cards also get note_count.
   const all = queryAll<Initiative>(
-    `SELECT i.*, COALESCE(n.note_count, 0) AS note_count
+    `SELECT i.*,
+            COALESCE(n.note_count, 0) AS note_count,
+            COALESCE(p.pending_proposal_count, 0) AS pending_proposal_count,
+            p.pending_proposal_id AS pending_proposal_id
        FROM initiatives i
        LEFT JOIN (
          SELECT initiative_id, COUNT(*) AS note_count
@@ -260,6 +293,18 @@ export function getInitiativeTree(workspace_id: string, root_id?: string): Initi
             AND archived_at IS NULL
           GROUP BY initiative_id
        ) n ON n.initiative_id = i.id
+       LEFT JOIN (
+         SELECT target_initiative_id,
+                COUNT(*) AS pending_proposal_count,
+                (SELECT id FROM pm_proposals p2
+                  WHERE p2.target_initiative_id = pm_proposals.target_initiative_id
+                    AND p2.status = 'draft'
+                  ORDER BY p2.created_at DESC LIMIT 1) AS pending_proposal_id
+           FROM pm_proposals
+          WHERE target_initiative_id IS NOT NULL
+            AND status = 'draft'
+          GROUP BY target_initiative_id
+       ) p ON p.target_initiative_id = i.id
       WHERE i.workspace_id = ?
       ORDER BY i.sort_order, i.created_at`,
     [workspace_id],
@@ -334,6 +379,7 @@ export function moveInitiative(
   to_parent_id: string | null,
   moved_by_agent_id?: string | null,
   reason?: string | null,
+  to_index?: number | null,
 ): Initiative {
   const existing = queryOne<Initiative>('SELECT * FROM initiatives WHERE id = ?', [id]);
   if (!existing) throw new Error(`Initiative not found: ${id}`);
@@ -351,23 +397,53 @@ export function moveInitiative(
 
   return transaction(() => {
     const now = new Date().toISOString();
-    run(
-      'UPDATE initiatives SET parent_initiative_id = ?, updated_at = ? WHERE id = ?',
-      [to_parent_id, now, id],
-    );
-    run(
-      `INSERT INTO initiative_parent_history (id, initiative_id, from_parent_id, to_parent_id, moved_by_agent_id, reason, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        uuidv4(),
+    const parentChanged = existing.parent_initiative_id !== to_parent_id;
+
+    if (parentChanged) {
+      run(
+        'UPDATE initiatives SET parent_initiative_id = ?, updated_at = ? WHERE id = ?',
+        [to_parent_id, now, id],
+      );
+      run(
+        `INSERT INTO initiative_parent_history (id, initiative_id, from_parent_id, to_parent_id, moved_by_agent_id, reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          uuidv4(),
+          id,
+          existing.parent_initiative_id,
+          to_parent_id,
+          moved_by_agent_id ?? null,
+          reason ?? null,
+          now,
+        ],
+      );
+    }
+
+    // Renumber siblings when an explicit position is requested. Spacing of
+    // 1000 leaves room for future inserts without immediate rebalancing,
+    // and the small N (rendered un-virtualized) keeps the rewrite cheap.
+    if (typeof to_index === 'number') {
+      const siblings = queryAll<{ id: string }>(
+        to_parent_id === null
+          ? 'SELECT id FROM initiatives WHERE parent_initiative_id IS NULL AND workspace_id = ? AND id != ? ORDER BY sort_order, created_at'
+          : 'SELECT id FROM initiatives WHERE parent_initiative_id = ? AND id != ? ORDER BY sort_order, created_at',
+        to_parent_id === null ? [existing.workspace_id, id] : [to_parent_id, id],
+      );
+      const clamped = Math.max(0, Math.min(to_index, siblings.length));
+      const ordered: string[] = [
+        ...siblings.slice(0, clamped).map(s => s.id),
         id,
-        existing.parent_initiative_id,
-        to_parent_id,
-        moved_by_agent_id ?? null,
-        reason ?? null,
-        now,
-      ],
-    );
+        ...siblings.slice(clamped).map(s => s.id),
+      ];
+      ordered.forEach((sid, i) => {
+        run('UPDATE initiatives SET sort_order = ?, updated_at = ? WHERE id = ?', [
+          (i + 1) * 1000,
+          now,
+          sid,
+        ]);
+      });
+    }
+
     return queryOne<Initiative>('SELECT * FROM initiatives WHERE id = ?', [id])!;
   });
 }
