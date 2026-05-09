@@ -290,8 +290,12 @@ export function InlineTextarea({
           disabled={saving}
           className={
             textareaClassName ??
+            // Default editor matches the rendered display size. Non-mono
+            // content lands at text-sm (14px) so the textarea doesn't
+            // jump to the browser's 16px body default the moment you
+            // click into a description; mono fields stay at text-xs.
             `w-full px-3 py-2 rounded bg-mc-bg border border-mc-accent/60 text-mc-text outline-none resize-y ${
-              mono ? 'font-mono text-xs' : ''
+              mono ? 'font-mono text-xs' : 'text-sm'
             }`
           }
         />
