@@ -663,114 +663,135 @@ export function InitiativeDetailView({
           than appearing far below.
         */}
         <header className="mb-4 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-2">
-                {/*
-                  Kind badge is a click-target that opens the ConvertModal —
-                  changing kind has migration semantics (e.g. story-only
-                  promote) so it shouldn't be a flat inline select.
-                */}
-                <button
-                  onClick={() => setShowConvertModal(true)}
-                  title="Change kind (opens converter)"
-                  className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide hover:ring-1 hover:ring-mc-accent/40 ${KIND_BADGE[initiative.kind]}`}
+          {/*
+            Header layout (top → bottom, each row owns its full width
+            so narrow viewports don't squish the title against an
+            action button):
+              1. Meta row — kind badge + status pill (small, fixed)
+              2. Title row — full width, wraps cleanly
+              3. Action toolbar — wraps in semantic groups
+          */}
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            {/*
+              Kind badge is a click-target that opens the ConvertModal —
+              changing kind has migration semantics (e.g. story-only
+              promote) so it shouldn't be a flat inline select.
+            */}
+            <button
+              onClick={() => setShowConvertModal(true)}
+              title="Change kind (opens converter)"
+              className={`px-2 py-0.5 rounded text-xs uppercase tracking-wide hover:ring-1 hover:ring-mc-accent/40 ${KIND_BADGE[initiative.kind]}`}
+            >
+              {initiative.kind}
+            </button>
+            <StatusPickerPill
+              value={initiative.status}
+              onSave={next => patch({ status: next })}
+            />
+          </div>
+          <InlineText
+            value={initiative.title}
+            onSave={next => patch({ title: next })}
+            className="text-2xl font-semibold text-mc-text block w-full"
+            inputClassName="w-full px-2 py-1 rounded bg-mc-bg border border-mc-accent/60 text-mc-text outline-none text-2xl font-semibold"
+            placeholder="Untitled"
+            label="Edit title"
+          />
+
+          {/*
+            Action toolbar — grouped by intent. Groups are wrapped in
+            their own flex containers so they reflow as units rather
+            than turning into a flat soup of buttons. The vertical-bar
+            dividers we used to use disappear when wrapped; the gap-x-3
+            spacing between groups carries the visual weight at any
+            width.
+
+            Group order:
+              · AI helpers (Plan / Decompose / Investigate) — primary
+              · Structural (Promote / Move / Convert kind / Add dep)
+              · Read-only (View history)
+              · Destructive (Detach / Delete) — last, pushed right
+                with ml-auto so it sits at the end of the final row
+                regardless of how many rows the toolbar wraps to.
+          */}
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-mc-border/60 pt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <SplitToolbarButton
+                icon={<Sparkles className="w-3.5 h-3.5" />}
+                onClick={() => openPlanPanel()}
+                onClickWithGuidance={(g) => openPlanPanel(g)}
+                guidanceLabel="What should the PM focus the plan on?"
+                guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
+or "treat memory + checklist as MVP, exclude dashboard widgets"`}
+                guidanceCta="Plan with guidance"
+                title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'PM proposes refined description / sizing / window'}
+                disabled={hasDraftProposal}
+              >
+                Plan with PM
+              </SplitToolbarButton>
+              {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
+                <SplitToolbarButton
+                  icon={<Sparkles className="w-3.5 h-3.5" />}
+                  onClick={() => openDecompose()}
+                  onClickWithGuidance={(g) => openDecompose(g)}
+                  guidanceLabel="How should the PM slice this?"
+                  guidancePlaceholder={`e.g. "split by frontend / backend / data"
+or "carve out the onboarding flow as its own story first"`}
+                  guidanceCta="Decompose with guidance"
+                  title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Ask the PM to propose 3-7 child initiatives'}
+                  disabled={hasDraftDecomposeProposal}
                 >
-                  {initiative.kind}
-                </button>
-                <StatusPickerPill
-                  value={initiative.status}
-                  onSave={next => patch({ status: next })}
-                />
-              </div>
-              <InlineText
-                value={initiative.title}
-                onSave={next => patch({ title: next })}
-                className="text-2xl font-semibold text-mc-text block"
-                inputClassName="w-full px-2 py-1 rounded bg-mc-bg border border-mc-accent/60 text-mc-text outline-none text-2xl font-semibold"
-                placeholder="Untitled"
-                label="Edit title"
+                  Decompose with PM
+                </SplitToolbarButton>
+              )}
+              {initiative.kind === 'story' && (
+                <DecomposerAgentPicker
+                  icon={<Sparkles className="w-3.5 h-3.5" />}
+                  agents={decomposerOptions}
+                  onPick={(id, label) => {
+                    setDecomposeStoryAgent({ id, label });
+                    setShowDecomposeStoryModal(true);
+                  }}
+                  title="Break this story into draft tasks"
+                >
+                  Decompose to tasks
+                </DecomposerAgentPicker>
+              )}
+              <InvestigatePicker
+                options={INVESTIGATE_OPTIONS}
+                onPick={(scope) => {
+                  setInvestigateMode(scope);
+                  setShowInvestigateModal(true);
+                }}
               />
             </div>
-            <div className="shrink-0">
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/*
+                PromoteButton renders disabled for non-story kinds with
+                an explanatory tooltip ("Convert to story first") —
+                keeps the action discoverable rather than hiding it.
+              */}
               <PromoteButton
                 kind={initiative.kind}
                 onClick={() => setShowPromoteModal(true)}
               />
+              <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
+                Move
+              </ToolbarButton>
+              <ToolbarButton icon={<Shuffle className="w-3.5 h-3.5" />} onClick={() => setShowConvertModal(true)}>
+                Convert kind
+              </ToolbarButton>
+              <ToolbarButton icon={<Link2 className="w-3.5 h-3.5" />} onClick={() => setShowAddDepModal(true)}>
+                Add dependency
+              </ToolbarButton>
             </div>
-          </div>
 
-          {/*
-            Action toolbar — grouped left→right by intent:
-              · AI helpers (Plan / Decompose) — primary, accent-tinted
-              · Structural (Move / Convert kind / Add dependency)
-              · Read-only (View history)
-              · Destructive (Detach / Delete) — pushed to the far right
-          */}
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
-            <SplitToolbarButton
-              icon={<Sparkles className="w-3.5 h-3.5" />}
-              onClick={() => openPlanPanel()}
-              onClickWithGuidance={(g) => openPlanPanel(g)}
-              guidanceLabel="What should the PM focus the plan on?"
-              guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
-or "treat memory + checklist as MVP, exclude dashboard widgets"`}
-              guidanceCta="Plan with guidance"
-              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'PM proposes refined description / sizing / window'}
-              disabled={hasDraftProposal}
-            >
-              Plan with PM
-            </SplitToolbarButton>
-            {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
-              <SplitToolbarButton
-                icon={<Sparkles className="w-3.5 h-3.5" />}
-                onClick={() => openDecompose()}
-                onClickWithGuidance={(g) => openDecompose(g)}
-                guidanceLabel="How should the PM slice this?"
-                guidancePlaceholder={`e.g. "split by frontend / backend / data"
-or "carve out the onboarding flow as its own story first"`}
-                guidanceCta="Decompose with guidance"
-                title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Ask the PM to propose 3-7 child initiatives'}
-                disabled={hasDraftDecomposeProposal}
-              >
-                Decompose with PM
-              </SplitToolbarButton>
-            )}
-            {initiative.kind === 'story' && (
-              <DecomposerAgentPicker
-                icon={<Sparkles className="w-3.5 h-3.5" />}
-                agents={decomposerOptions}
-                onPick={(id, label) => {
-                  setDecomposeStoryAgent({ id, label });
-                  setShowDecomposeStoryModal(true);
-                }}
-                title="Break this story into draft tasks"
-              >
-                Decompose to tasks
-              </DecomposerAgentPicker>
-            )}
-            <InvestigatePicker
-              options={INVESTIGATE_OPTIONS}
-              onPick={(scope) => {
-                setInvestigateMode(scope);
-                setShowInvestigateModal(true);
-              }}
-            />
-            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
-            <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
-              Move
-            </ToolbarButton>
-            <ToolbarButton icon={<Shuffle className="w-3.5 h-3.5" />} onClick={() => setShowConvertModal(true)}>
-              Convert kind
-            </ToolbarButton>
-            <ToolbarButton icon={<Link2 className="w-3.5 h-3.5" />} onClick={() => setShowAddDepModal(true)}>
-              Add dependency
-            </ToolbarButton>
-            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
             <ToolbarButton icon={<History className="w-3.5 h-3.5" />} onClick={() => setShowHistoryDrawer(true)}>
               View history
             </ToolbarButton>
-            <div className="ml-auto flex items-center gap-2">
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
               {initiative.parent_initiative_id && (
                 <ToolbarButton
                   icon={<CornerUpLeft className="w-3.5 h-3.5" />}
@@ -1366,6 +1387,9 @@ function MetaPair({ label, children }: { label: string; children: React.ReactNod
 
 function PromoteButton({ kind, onClick }: { kind: Kind; onClick: () => void }) {
   const isStory = kind === 'story';
+  // Sized to match ToolbarButton so the action toolbar reads as one
+  // coherent strip; accent palette while enabled (it's a primary CTA),
+  // muted-disabled treatment otherwise with an explanatory tooltip.
   return (
     <button
       onClick={isStory ? onClick : undefined}
@@ -1375,13 +1399,13 @@ function PromoteButton({ kind, onClick }: { kind: Kind; onClick: () => void }) {
           ? 'Create a draft task linked to this initiative'
           : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
       }
-      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+      className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border ${
         isStory
-          ? 'bg-mc-accent text-white hover:bg-mc-accent/90'
-          : 'bg-mc-bg-tertiary text-mc-text-secondary cursor-not-allowed border border-mc-border'
+          ? 'border-mc-accent/40 text-mc-accent bg-mc-accent/5 hover:bg-mc-accent/10'
+          : 'border-mc-border text-mc-text-secondary/60 cursor-not-allowed'
       }`}
     >
-      <Plus className="w-4 h-4" /> Promote to task
+      <Plus className="w-3.5 h-3.5" /> Promote to task
     </button>
   );
 }
