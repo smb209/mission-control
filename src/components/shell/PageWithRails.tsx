@@ -261,11 +261,20 @@ export function PageWithRails({
 
           <main className={clsx('flex-1 min-w-0', mainMaxWidth, 'mx-auto lg:mx-0')}>
             {leftRail && (
-              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary">
+              // Below the lg breakpoint the dedicated left aside is
+              // hidden; this <details> is the fallback nav. Pin it to
+              // the top of the viewport (just under the page header at
+              // top-0 / z-20) so the operator can collapse/expand the
+              // tree-controls panel without scrolling back up. Backdrop
+              // blur keeps content scrolling underneath legible without
+              // leaking through the toggle.
+              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary/95 backdrop-blur-sm sticky top-[4.5rem] z-10">
                 <summary className="px-3 py-2 text-xs uppercase tracking-wide text-mc-text-secondary cursor-pointer">
                   Sections
                 </summary>
-                <div className="p-3 border-t border-mc-border/60">{leftRail}</div>
+                <div className="p-3 border-t border-mc-border/60 max-h-[calc(100vh-9rem)] overflow-y-auto">
+                  {leftRail}
+                </div>
               </details>
             )}
             {children}
