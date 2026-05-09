@@ -103,14 +103,25 @@ const KIND_BADGE: Record<Kind, string> = {
 };
 
 /**
- * Pills next to the kind badge surface notable statuses on the tree
- * row at a glance. `planned` and `in_progress` are intentionally
- * omitted — they're the boring default and would clutter every row;
- * the title/kind already convey "this is a thing being worked on".
- * `cancelled` had its own pill before this map landed; we fold it in
- * here for consistency and keep the existing red treatment.
+ * Pills next to the kind badge surface the status of every node on
+ * the tree row at a glance. Originally `planned` / `in_progress` were
+ * omitted (treated as the boring default), but operators consistently
+ * read the absence of a pill as "I haven't yet figured out the status"
+ * rather than "this is the default" — so every status gets a pill now,
+ * with the boring defaults rendered in muted neutral chrome so they
+ * don't shout.
  */
-const STATUS_BADGE: Partial<Record<Status, { label: string; className: string; tooltip: string }>> = {
+const STATUS_BADGE: Record<Status, { label: string; className: string; tooltip: string }> = {
+  planned: {
+    label: 'planned',
+    className: 'bg-mc-bg-tertiary text-mc-text-secondary border border-mc-border',
+    tooltip: 'Planned — not started yet',
+  },
+  in_progress: {
+    label: 'in progress',
+    className: 'bg-blue-500/15 text-blue-300 border border-blue-500/30',
+    tooltip: 'In progress',
+  },
   done: {
     label: 'done',
     className: 'bg-green-500/15 text-green-300 border border-green-500/30',
@@ -914,14 +925,12 @@ function InitiativeRow({
             <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[node.kind]}`}>
               {node.kind}
             </span>
-            {STATUS_BADGE[node.status] && (
-              <span
-                className={`text-[10px] uppercase tracking-wide px-1 py-0.5 rounded ${STATUS_BADGE[node.status]!.className}`}
-                title={STATUS_BADGE[node.status]!.tooltip}
-              >
-                {STATUS_BADGE[node.status]!.label}
-              </span>
-            )}
+            <span
+              className={`text-[10px] uppercase tracking-wide px-1 py-0.5 rounded ${STATUS_BADGE[node.status].className}`}
+              title={STATUS_BADGE[node.status].tooltip}
+            >
+              {STATUS_BADGE[node.status].label}
+            </span>
             {!childrenExpanded && directChildrenCount > 0 && (
               <span
                 className="text-[10px] text-mc-text-secondary/80"
