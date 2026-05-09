@@ -40,6 +40,18 @@ const hypothesisEnum = z.enum([
   'needs-deep-dive',
 ]);
 
+// Repo evidence refs are loosely structured — `{kind, ref}` with non-empty
+// ref. We deliberately do NOT enforce per-kind ref shapes here: this same
+// schema is used at both write-time (take_note validator) and read-time
+// (proposal-queue render). A stricter regex would be correct at write but
+// would retroactively invalidate already-stored rows on read, silently
+// dropping them from the queue — that's data loss without operator signal.
+//
+// Defense-in-depth lives elsewhere: the L2 prompt teaches per-kind ref
+// shapes (use `kind:'file'` for negative findings, never put grep output
+// in `kind:'git'`), and the renderer guards the SHA-slice with a regex
+// check so non-SHA `kind:'git'` refs render as full text rather than as
+// gibberish chips.
 const evidenceRefSchema = z.object({
   kind: z.enum(['file', 'git', 'pr', 'note']),
   ref: z.string().min(1),

@@ -23,6 +23,14 @@ import type { Agent } from '@/lib/types';
 
 const TERMINAL_STATUSES = new Set(['done', 'cancelled']);
 
+/**
+ * Idle (soft) timeout for audit dispatches. If the gateway misses a
+ * `state: 'final'` frame, the dispatch will still return ~5 min after
+ * the agent goes silent rather than burning the full per-node ceiling
+ * (workspaces.AUDIT_PER_NODE_TIMEOUT_MS_DEFAULT = 15 min).
+ */
+export const AUDIT_IDLE_TIMEOUT_MS = 5 * 60_000;
+
 export interface RunSurveyorInput {
   rootId: string;
   workspaceId: string;
@@ -247,6 +255,7 @@ export async function runSurveyor(input: RunSurveyorInput): Promise<SurveyorResu
       trigger_body: triggerBody,
       attempt_strategy: 'fresh',
       timeoutMs: timeoutMs ?? 5 * 60_000,
+      idleTimeoutMs: AUDIT_IDLE_TIMEOUT_MS,
       idempotencyKey: `audit-survey-${rootId}-${attempt}-${Date.now()}`,
       parent_run_id: parentRunId,
       source_kind: 'fanout',

@@ -41,6 +41,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   runSurveyor,
   buildFallbackManifest,
+  AUDIT_IDLE_TIMEOUT_MS,
   type SurveyorResult,
 } from '@/lib/agents/audit-survey';
 import {
@@ -661,6 +662,7 @@ export async function runSubtreeAudit(
           trigger_body: triggerBody,
           attempt_strategy: 'fresh',
           timeoutMs: perNodeTimeoutMs,
+          idleTimeoutMs: AUDIT_IDLE_TIMEOUT_MS,
           idempotencyKey: `subtree-audit-${node.id}-${attempt}-${Date.now()}`,
           parent_run_id: parentRunId,
           source_kind: 'fanout',

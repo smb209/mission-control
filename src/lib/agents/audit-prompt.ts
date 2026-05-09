@@ -446,6 +446,14 @@ ${takeNoteCall}
 - Do **not** call \`update_task_status\`, \`update_initiative\`, or \`register_deliverable\` — auditors are read-only.
 - The body MUST be a JSON string (\`JSON.stringify(...)\`). The MCP \`take_note\` handler validates it; off-shape bodies are rejected and you'll have to retry.
 - If the subtree above is empty, still emit the manifest with \`nodes: []\` and a one-line \`summary\`.
+
+## End of turn
+
+After \`take_note\` returns successfully, emit ONE short assistant
+message (e.g. \`Manifest <noteId>.\`) and STOP. That terminal text is
+what the gateway promotes to \`state: 'final'\` — without it the
+orchestrator's dispatch waits the full timeout. Do NOT keep working
+after the manifest is accepted; do NOT call additional tools.
 `;
 }
 
@@ -613,6 +621,12 @@ Top-level fields:
   * \`modify_scope\` → \`{ title?: string, description?: string }\` (≥1 required)
   * \`modify_dates\` → \`{ target_start?: 'YYYY-MM-DD', target_end?: 'YYYY-MM-DD' }\` (≥1 required)
 - \`repo_evidence\`: array (min 1) of \`{ kind: 'file'|'git'|'pr'|'note', ref: string }\`.
+  Per-kind ref shape (validator-enforced):
+  * \`file\` → repo-relative path, optionally with line: \`src/foo/bar.ts\`, \`src/foo/bar.ts:42\`, \`src/foo/bar.ts:42-58\`.
+  * \`git\`  → commit SHA only (7-40 hex chars), optionally \`<sha>:<path>\`. **Never** put grep output, search misses, or "no matching file" sentences here — the schema rejects it.
+  * \`pr\`   → PR URL or short ref like \`apps#33297\`.
+  * \`note\` → another note id (e.g. the audit_manifest you were briefed with).
+  **Negative evidence:** if you grepped and found nothing, still cite \`kind:'file'\` with the path you searched (or the path the story description named, even if the file is absent). Put the actual finding ("file does not exist", "no matches in src/") in \`rationale\`. The evidence array records *what you looked at*, not *what you found*.
 - \`rationale\`: 1-paragraph string.
 - \`confidence\`: \`low\` | \`medium\` | \`high\`.
 - \`would_confirm_by\`: required (non-empty string) when confidence is \`low\` or \`medium\`; may be \`null\` when high.
@@ -655,6 +669,15 @@ queue retains full coverage.
 - If the node has no associated code (planned-only), emit a \`keep\`
   proposal with \`confidence: 'low'\` and a one-line rationale +
   \`would_confirm_by\`. Don't burn ten minutes greenfield-grepping.
+
+## End of turn
+
+After \`take_note\` returns successfully (proposal OR fallback
+observation), emit ONE short assistant message (e.g.
+\`Proposal <noteId>.\`) and STOP. That terminal text is what the
+gateway promotes to \`state: 'final'\` — without it the orchestrator's
+dispatch waits the full per-node timeout. Do NOT keep working after
+the proposal is accepted; do NOT call additional tools.
 `;
 }
 
@@ -837,5 +860,13 @@ affordance to re-run just L3.
 - It is OK to emit empty \`epic_proposals\` and \`cross_node_proposals\`
   arrays if the subtree shows no cross-cutting drift — but the
   \`completion_sentinel\` must still summarize the overall verdict.
+
+## End of turn
+
+After \`take_note\` returns successfully, emit ONE short assistant
+message (e.g. \`Synthesis <noteId>.\`) and STOP. That terminal text is
+what the gateway promotes to \`state: 'final'\` — without it the
+orchestrator's dispatch waits the full timeout. Do NOT keep working
+after the synthesis is accepted; do NOT call additional tools.
 `;
 }

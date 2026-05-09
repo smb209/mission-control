@@ -18,6 +18,7 @@
 import { listInitiatives } from '@/lib/db/initiatives';
 import { listNotes } from '@/lib/db/agent-notes';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
+import { AUDIT_IDLE_TIMEOUT_MS } from '@/lib/agents/audit-survey';
 import { buildAuditPrompt } from '@/lib/agents/audit-prompt';
 import {
   validateAuditNoteBody,
@@ -229,6 +230,7 @@ export async function runSynthesizer(
       trigger_body: triggerBody,
       attempt_strategy: 'fresh',
       timeoutMs: timeoutMs ?? 5 * 60_000,
+      idleTimeoutMs: AUDIT_IDLE_TIMEOUT_MS,
       idempotencyKey: `audit-synthesis-${rootId}-${attempt}-${Date.now()}`,
       parent_run_id: parentRunId,
       source_kind: 'fanout',

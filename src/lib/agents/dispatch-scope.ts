@@ -82,6 +82,14 @@ export interface DispatchScopeInput {
   /** Per-call timeout override (defaults to sendChatAndAwaitReply's). */
   timeoutMs?: number;
   /**
+   * Optional idle (soft) timeout forwarded to sendChatAndAwaitReply.
+   * When set, the wait ends `timedOut: true` if no chat or agent event
+   * for the session arrives within this window — bounded above by
+   * `timeoutMs`. Recovers from missed `state: 'final'` frames without
+   * burning the full ceiling. See `SendChatAndAwaitInput.idleTimeoutMs`.
+   */
+  idleTimeoutMs?: number;
+  /**
    * Idempotency key forwarded to chat.send. Caller-supplied so the
    * caller can correlate downstream rows with this dispatch.
    */
@@ -261,6 +269,7 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
       message: briefing,
       idempotencyKey: input.idempotencyKey ?? `dispatch-scope-${run_group_id}`,
       timeoutMs: input.timeoutMs,
+      idleTimeoutMs: input.idleTimeoutMs,
       sessionSuffix: input.session_suffix,
       onEvent: input.onEvent,
       onAgentEvent: input.onAgentEvent,
