@@ -1,6 +1,22 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useContext, createContext } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  pointerWithin,
+  type DragStartEvent,
+  type DragOverEvent,
+  type DragEndEvent,
+  type DragCancelEvent,
+} from '@dnd-kit/core';
 import Link from 'next/link';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Fuse from 'fuse.js';
@@ -27,6 +43,8 @@ import {
   ExternalLink,
   FolderInput,
   StickyNote,
+  GripVertical,
+  ClipboardList,
 } from 'lucide-react';
 import Drawer from '@/components/Drawer';
 import ActionMenu, { ActionMenuItem } from '@/components/ActionMenu';
@@ -58,6 +76,12 @@ export interface Initiative {
    *  the LEFT JOIN in `listInitiatives` (server side). Optional because
    *  some upstream callers omit it. */
   note_count?: number;
+  /** Number of `status='draft'` PM proposals targeting this initiative.
+   *  Drives the "pending PM proposal" chip on the row. */
+  pending_proposal_count?: number;
+  /** Most-recent draft proposal id targeting this initiative — chip
+   *  click target. */
+  pending_proposal_id?: string | null;
 }
 
 interface TreeNode extends Initiative {
@@ -187,6 +211,27 @@ function useShowCancelled(): [boolean, (next: boolean) => void] {
   );
 
   return [value, update];
+}
+
+type DropZone = 'above' | 'nest' | 'below';
+
+interface TreeDndState {
+  activeId: string | null;
+  invalid: Set<string>; // self + descendants of activeId — invalid drop targets
+  over: { id: string; zone: DropZone } | null;
+  isValidOver: boolean;
+}
+
+const TreeDndContext = createContext<TreeDndState | null>(null);
+
+function parseDropId(id: string): { nodeId: string; zone: DropZone } | null {
+  // Drop ids are encoded as `${nodeId}::${zone}` plus a special `__root::below::${nodeId}` for top-level slots.
+  const idx = id.lastIndexOf('::');
+  if (idx === -1) return null;
+  const zone = id.slice(idx + 2) as DropZone;
+  const nodeId = id.slice(0, idx);
+  if (zone !== 'above' && zone !== 'nest' && zone !== 'below') return null;
+  return { nodeId, zone };
 }
 
 export default function InitiativesPage() {
@@ -440,6 +485,224 @@ export default function InitiativesPage() {
     [refresh],
   );
 
+  // ── Drag-and-drop reorder/reparent ────────────────────────────────────
+  // Drag handle (mouse) or long-press (touch) on a row, then release on
+  // one of three drop zones per target row:
+  //   • above → become a sibling above the target
+  //   • below → become a sibling below the target
+  //   • nest  → become the first child of the target
+  // Cancel: Esc, drop outside any zone, or release while the overlay shows
+  // "Release to cancel" (over a self/descendant target).
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overInfo, setOverInfo] = useState<{ id: string; zone: DropZone } | null>(null);
+  const [invalidIds, setInvalidIds] = useState<Set<string>>(new Set());
+  // Source row width — captured on drag start so the DragOverlay preview
+  // matches the original card's footprint instead of collapsing to its
+  // intrinsic size (which renders as a tall, narrow sliver).
+  const [sourceWidth, setSourceWidth] = useState<number | null>(null);
+  const expandTimerRef = useRef<{ id: string; t: ReturnType<typeof setTimeout> } | null>(null);
+  const clearExpandTimer = () => {
+    if (expandTimerRef.current) {
+      clearTimeout(expandTimerRef.current.t);
+      expandTimerRef.current = null;
+    }
+  };
+
+  const sensors = useSensors(
+    // Distance threshold so a click on the grab handle doesn't immediately
+    // start a drag (gives the click a chance to be a click).
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // 250ms long-press on touch — matches the spec.
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
+
+  const computeDescendants = useCallback(
+    (rootId: string): Set<string> => {
+      const byParent = new Map<string, Initiative[]>();
+      for (const r of flat) {
+        if (!r.parent_initiative_id) continue;
+        const arr = byParent.get(r.parent_initiative_id) ?? [];
+        arr.push(r);
+        byParent.set(r.parent_initiative_id, arr);
+      }
+      const out = new Set<string>([rootId]);
+      const stack = [rootId];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        for (const c of byParent.get(cur) ?? []) {
+          if (!out.has(c.id)) {
+            out.add(c.id);
+            stack.push(c.id);
+          }
+        }
+      }
+      return out;
+    },
+    [flat],
+  );
+
+  const handleDragStart = useCallback(
+    (e: DragStartEvent) => {
+      const id = String(e.active.id);
+      setActiveDragId(id);
+      setInvalidIds(computeDescendants(id));
+      setOverInfo(null);
+      // Capture the source row's rendered width so the DragOverlay matches
+      // its shape. Querying the DOM here is OK — it's a one-shot read at
+      // drag-start, not a per-frame measurement.
+      const li = document.querySelector(`[data-row-id="${CSS.escape(id)}"]`);
+      setSourceWidth(li ? Math.round((li as HTMLElement).getBoundingClientRect().width) : null);
+    },
+    [computeDescendants],
+  );
+
+  const handleDragOver = useCallback(
+    (e: DragOverEvent) => {
+      const overId = e.over ? String(e.over.id) : null;
+      const parsed = overId ? parseDropId(overId) : null;
+      setOverInfo(parsed ? { id: parsed.nodeId, zone: parsed.zone } : null);
+
+      // Auto-expand a collapsed parent after 600ms hover on its body.
+      if (parsed && parsed.zone === 'nest' && collapsedIds.has(parsed.nodeId)) {
+        if (expandTimerRef.current?.id !== parsed.nodeId) {
+          clearExpandTimer();
+          expandTimerRef.current = {
+            id: parsed.nodeId,
+            t: setTimeout(() => {
+              setNodeCollapsed(parsed.nodeId, false);
+              expandTimerRef.current = null;
+            }, 600),
+          };
+        }
+      } else {
+        clearExpandTimer();
+      }
+    },
+    [collapsedIds, setNodeCollapsed],
+  );
+
+  const handleDragCancel = useCallback((_e: DragCancelEvent) => {
+    clearExpandTimer();
+    setActiveDragId(null);
+    setOverInfo(null);
+    setInvalidIds(new Set());
+    setSourceWidth(null);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    async (e: DragEndEvent) => {
+      clearExpandTimer();
+      const draggedId = String(e.active.id);
+      const overId = e.over ? String(e.over.id) : null;
+      const parsed = overId ? parseDropId(overId) : null;
+
+      // Reset drag visuals up front.
+      setActiveDragId(null);
+      setOverInfo(null);
+      setInvalidIds(new Set());
+      setSourceWidth(null);
+
+      if (!parsed) return; // drop outside → cancel
+      if (invalidIds.has(parsed.nodeId)) return; // self / descendant → cancel
+
+      const dragged = flat.find(r => r.id === draggedId);
+      const target = flat.find(r => r.id === parsed.nodeId);
+      if (!dragged || !target) return;
+
+      // Resolve target parent + index from the zone.
+      let toParentId: string | null;
+      let toIndex: number;
+      const siblingsOf = (parentId: string | null) =>
+        flat
+          .filter(r => r.parent_initiative_id === parentId && r.id !== draggedId)
+          .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at));
+
+      if (parsed.zone === 'nest') {
+        toParentId = target.id;
+        // Drop at the start of the target's children list.
+        toIndex = 0;
+      } else {
+        toParentId = target.parent_initiative_id;
+        const sibs = siblingsOf(toParentId);
+        const targetIdx = sibs.findIndex(s => s.id === target.id);
+        if (targetIdx < 0) return;
+        toIndex = parsed.zone === 'above' ? targetIdx : targetIdx + 1;
+      }
+
+      // No-op? (dropping in the same place)
+      if (
+        dragged.parent_initiative_id === toParentId
+      ) {
+        const sibs = siblingsOf(toParentId);
+        const currentIdx = flat
+          .filter(r => r.parent_initiative_id === toParentId)
+          .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at))
+          .findIndex(s => s.id === draggedId);
+        // Account for the fact that toIndex is computed against a sibling
+        // list that already excludes the dragged row.
+        const normalizedCurrent = currentIdx;
+        const normalizedTarget =
+          toIndex > normalizedCurrent ? toIndex : toIndex;
+        if (normalizedCurrent === normalizedTarget) return;
+        void sibs;
+      }
+
+      // Optimistic local update: clone flat, change parent, renumber the
+      // destination sibling group with the same i*1000 scheme the server
+      // will apply. On error we re-fetch to recover the truth.
+      const prevFlat = flat;
+      const next = flat.map(r => ({ ...r }));
+      const movedRow = next.find(r => r.id === draggedId)!;
+      movedRow.parent_initiative_id = toParentId;
+      const destSibs = next
+        .filter(r => r.parent_initiative_id === toParentId && r.id !== draggedId)
+        .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at));
+      const clamped = Math.max(0, Math.min(toIndex, destSibs.length));
+      const ordered = [...destSibs.slice(0, clamped), movedRow, ...destSibs.slice(clamped)];
+      ordered.forEach((row, i) => {
+        const ref = next.find(r => r.id === row.id)!;
+        ref.sort_order = (i + 1) * 1000;
+      });
+      setFlat(next);
+
+      try {
+        const res = await fetch(`/api/initiatives/${draggedId}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to_parent_id: toParentId,
+            to_index: toIndex,
+            reason: 'drag-and-drop',
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setFlat(prevFlat);
+          showAlertDialog('Move failed', body.error || `Move failed (${res.status})`);
+          refresh();
+        }
+      } catch (err) {
+        setFlat(prevFlat);
+        showAlertDialog('Move failed', err instanceof Error ? err.message : 'Move failed');
+        refresh();
+      }
+    },
+    [flat, invalidIds, refresh],
+  );
+
+  const draggedNode = activeDragId ? flat.find(r => r.id === activeDragId) ?? null : null;
+  const isValidOver = !!overInfo && !invalidIds.has(overInfo.id);
+  const dndState: TreeDndState = useMemo(
+    () => ({
+      activeId: activeDragId,
+      invalid: invalidIds,
+      over: overInfo,
+      isValidOver,
+    }),
+    [activeDragId, invalidIds, overInfo, isValidOver],
+  );
+
   // Page header is intentionally minimal — the heavy controls
   // (New / Show cancelled / Search / Expand-all / Collapse-all) live in
   // the tree rail since they operate on the tree itself, not on the
@@ -578,44 +841,94 @@ export default function InitiativesPage() {
           No initiatives match <strong className="text-mc-text">&quot;{trimmedSearch}&quot;</strong>.
         </p>
       ) : (
-        <ul className="space-y-0.5">
-          {visibleTree.map(node => (
-            <InitiativeRow
-              key={node.id}
-              node={node}
-              depth={0}
-              selectedId={selectedId}
-              onSelect={selectInitiative}
-              collapsedIds={collapsedIds}
-              onSetCollapsed={setNodeCollapsed}
-              forceExpand={!!trimmedSearch}
-              allInitiatives={flat}
-              pickableInitiatives={pickableInitiatives}
-              taskCounts={taskCounts}
-              onEdit={setEditing}
-              onAddChild={parent => setCreating({ parent_id: parent.id })}
-              onMove={setMoving}
-              onMoveToWorkspace={setMovingToWorkspace}
-              onConvert={setConverting}
-              onPromote={setPromoting}
-              onShowHistory={setHistoryFor}
-              onAddDependency={setAddingDepFor}
-              onDetach={detach}
-              onDecompose={setDecomposing}
-              onDelete={async (init) => {
-                if (!confirm(`Delete "${init.title}"?`)) return;
-                const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
-                if (!res.ok) {
-                  const body = await res.json().catch(() => ({}));
-                  showAlertDialog('Delete failed', body.error || 'Delete failed');
-                  return;
-                }
-                if (selectedId === init.id) selectInitiative(null);
-                refresh();
-              }}
-            />
-          ))}
-        </ul>
+        <TreeDndContext.Provider value={dndState}>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={pointerWithin}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
+            <ul
+              // Expand inter-row gaps while a drag is in progress so the
+              // above/below drop strips become easier to hit. Default
+              // spacing is tight (0.5 = 2px) for visual density; during
+              // a drag we widen to 1.5 (6px) which roughly triples the
+              // gap area each strip can cover.
+              className={activeDragId ? 'space-y-1.5 transition-[margin] duration-150' : 'space-y-0.5 transition-[margin] duration-150'}
+            >
+              {visibleTree.map(node => (
+                <InitiativeRow
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  selectedId={selectedId}
+                  onSelect={selectInitiative}
+                  collapsedIds={collapsedIds}
+                  onSetCollapsed={setNodeCollapsed}
+                  forceExpand={!!trimmedSearch}
+                  allInitiatives={flat}
+                  pickableInitiatives={pickableInitiatives}
+                  taskCounts={taskCounts}
+                  onEdit={setEditing}
+                  onAddChild={parent => setCreating({ parent_id: parent.id })}
+                  onMove={setMoving}
+                  onMoveToWorkspace={setMovingToWorkspace}
+                  onConvert={setConverting}
+                  onPromote={setPromoting}
+                  onShowHistory={setHistoryFor}
+                  onAddDependency={setAddingDepFor}
+                  onDetach={detach}
+                  onDecompose={setDecomposing}
+                  onDelete={async (init) => {
+                    if (!confirm(`Delete "${init.title}"?`)) return;
+                    const res = await fetch(`/api/initiatives/${init.id}`, { method: 'DELETE' });
+                    if (!res.ok) {
+                      const body = await res.json().catch(() => ({}));
+                      showAlertDialog('Delete failed', body.error || 'Delete failed');
+                      return;
+                    }
+                    if (selectedId === init.id) selectInitiative(null);
+                    refresh();
+                  }}
+                />
+              ))}
+            </ul>
+            <DragOverlay
+              dropAnimation={null}
+              // Width must be set on the overlay wrapper itself, not the
+              // child — dnd-kit defaults the wrapper's box to the
+              // activator element's size (here: the small grip-handle
+              // button), which collapses any inner element to ~24px wide.
+              style={sourceWidth ? { width: `${sourceWidth}px` } : undefined}
+            >
+              {draggedNode ? (
+                <div
+                  className={`px-2.5 py-2 rounded-lg border shadow-lg text-sm font-medium pointer-events-none ${
+                    overInfo === null || !isValidOver
+                      ? 'bg-mc-bg border-red-500/60 text-red-300'
+                      : 'bg-mc-bg-secondary border-mc-accent text-mc-text'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide ${KIND_BADGE[draggedNode.kind]}`}>
+                      {draggedNode.kind}
+                    </span>
+                    {(overInfo === null || !isValidOver) && (
+                      <span className="text-[10px] uppercase tracking-wide text-red-400">
+                        Release to cancel
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-sm break-words leading-snug">
+                    {draggedNode.title}
+                  </div>
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </TreeDndContext.Provider>
       )}
     </div>
   );
@@ -776,6 +1089,13 @@ function buildTree(rows: Initiative[], hideCancelled: boolean): TreeNode[] {
     list.push(r);
     byParent.set(k, list);
   }
+  // Sort each sibling group by sort_order so optimistic DnD updates that
+  // only change sort_order (not flat-array order) still re-render in the
+  // new visual order. Falls back to created_at on ties to mirror the
+  // server-side ORDER BY.
+  for (const list of byParent.values()) {
+    list.sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at));
+  }
   function build(parentId: string | null): TreeNode[] {
     const kids = byParent.get(parentId) ?? [];
     return kids.map(k => ({ ...k, children: build(k.id) }));
@@ -831,6 +1151,7 @@ function InitiativeRow({
   onDelete: (init: Initiative) => void;
   onDecompose: (init: Initiative) => void;
 }) {
+  const router = useRouter();
   // Expansion is parent-controlled so the rail header's Expand-all /
   // Collapse-all can flip every row at once. Default is expanded
   // (membership in `collapsedIds` means the operator has explicitly
@@ -897,33 +1218,111 @@ function InitiativeRow({
     },
   ];
 
+  // ── DnD wiring ──────────────────────────────────────────────────────
+  // Three droppable zones per row so a drag's `over.id` directly encodes
+  // the drop intent (above / nest / below). Visual indicators read from
+  // the page-level TreeDndContext so collapsed-subtree rows still know to
+  // highlight when a sibling above is the drop target.
+  const dnd = useContext(TreeDndContext);
+  const draggable = useDraggable({ id: node.id });
+  const aboveDrop = useDroppable({ id: `${node.id}::above` });
+  const nestDrop = useDroppable({ id: `${node.id}::nest` });
+  const belowDrop = useDroppable({ id: `${node.id}::below` });
+  const isBeingDragged = dnd?.activeId === node.id;
+  const isInvalidDropTarget =
+    !!dnd?.activeId && dnd.invalid.has(node.id);
+  const showAbove =
+    dnd?.over?.id === node.id && dnd.over.zone === 'above' && !isInvalidDropTarget;
+  const showBelow =
+    dnd?.over?.id === node.id && dnd.over.zone === 'below' && !isInvalidDropTarget;
+  const showNest =
+    dnd?.over?.id === node.id && dnd.over.zone === 'nest' && !isInvalidDropTarget;
+
   return (
     <>
       <li
-        className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border transition-colors ${
+        className={`relative flex items-start gap-1 px-2.5 py-2 rounded-lg border transition-colors ${
           isSelected
             ? 'bg-mc-accent/10 border-mc-accent/60'
-            : 'bg-mc-bg-secondary border-mc-border hover:border-mc-accent/40'
-        } ${node.status === 'cancelled' ? 'opacity-60' : ''}`}
+            : showNest
+              ? 'bg-mc-accent/15 border-mc-accent ring-2 ring-mc-accent/40'
+              : 'bg-mc-bg-secondary border-mc-border hover:border-mc-accent/40'
+        } ${node.status === 'cancelled' ? 'opacity-60' : ''} ${
+          isBeingDragged ? 'opacity-30' : ''
+        } group/row`}
         style={{ marginLeft: depth * 14 }}
+        ref={nestDrop.setNodeRef}
+        data-row-id={node.id}
       >
-        <button
-          title={
-            childrenExpanded
-              ? `Collapse subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
-              : `Expand subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
-          }
-          onClick={() => setChildrenExpanded(v => !v)}
-          aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
-          aria-expanded={childrenExpanded}
-          disabled={directChildrenCount === 0}
-          // ~32px tap target — was a 14px chevron + p-0.5 padding, which
-          // was easy to miss especially on touchpads. Now p-1.5 +
-          // larger 18px chevron lands at ~30×30px hit area.
-          className="p-1.5 mt-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent shrink-0"
-        >
-          {childrenExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        </button>
+        {/* Drop zones split the row into thirds for forgiving hit-testing.
+            pointer-events:none so the buttons inside the row stay
+            clickable — dnd-kit hit-tests via geometric rects, it doesn't
+            need to intercept pointer events. The strips extend 1px past
+            the row edges to bridge the 2px space-y gap between rows so
+            the pointer can never land in dead space. dnd-kit's
+            pointerWithin sorts collisions by distance-to-center, so a
+            smaller strip rect wins over the LI's nest rect when the
+            pointer is within the strip's band. */}
+        <div
+          ref={aboveDrop.setNodeRef}
+          className="absolute left-0 right-0 -top-1 h-1/2 z-10 pointer-events-none"
+          aria-hidden
+        />
+        {showAbove && (
+          <div
+            className="absolute left-0 right-0 -top-px h-0.5 bg-mc-accent rounded-full pointer-events-none z-20"
+            aria-hidden
+          />
+        )}
+        <div
+          ref={belowDrop.setNodeRef}
+          className="absolute left-0 right-0 -bottom-1 h-1/2 z-10 pointer-events-none"
+          aria-hidden
+        />
+        {showBelow && (
+          <div
+            className="absolute left-0 right-0 -bottom-px h-0.5 bg-mc-accent rounded-full pointer-events-none z-20"
+            aria-hidden
+          />
+        )}
+        {/* Left affordance column: chevron on top, drag handle below.
+            The handle doubles as an expand/collapse target on tap — the
+            PointerSensor's 4px distance constraint lets a click pass
+            through unless the pointer actually moves enough to start a
+            drag. Touch users get long-press → drag, plain tap → expand. */}
+        <div className="flex flex-col items-center gap-0.5 shrink-0 mt-0.5">
+          <button
+            title={
+              childrenExpanded
+                ? `Collapse subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
+                : `Expand subtree (${directChildrenCount} direct, ${totalDescendantCount} total)`
+            }
+            onClick={() => setChildrenExpanded(v => !v)}
+            aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
+            aria-expanded={childrenExpanded}
+            disabled={directChildrenCount === 0}
+            className="p-1.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            {childrenExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+          </button>
+          <button
+            ref={draggable.setNodeRef}
+            {...draggable.listeners}
+            {...draggable.attributes}
+            type="button"
+            onClick={() => {
+              // Tap (no drag activated) acts as a secondary expand
+              // target. If the row has no children, fall through and do
+              // nothing — the handle is still a drag affordance.
+              if (directChildrenCount > 0) setChildrenExpanded(v => !v);
+            }}
+            aria-label={`Drag ${node.title} (tap to ${childrenExpanded ? 'collapse' : 'expand'})`}
+            title="Drag to reorder or reparent · tap to expand/collapse"
+            className="p-1 rounded text-mc-text-secondary/60 hover:text-mc-text hover:bg-mc-bg cursor-grab active:cursor-grabbing touch-none"
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => onSelect(node.id)}
@@ -966,6 +1365,47 @@ function InitiativeRow({
               >
                 <StickyNote className="w-3 h-3" />
                 {node.note_count}
+              </span>
+            )}
+            {(node.pending_proposal_count ?? 0) > 0 && (
+              // Span+role=button (not <a> or <button>) because this chip
+              // lives inside the row's outer select <button>; nesting
+              // interactive elements is invalid HTML and React warns. We
+              // stop propagation so clicking the chip doesn't also fire
+              // onSelect, then route to the PM proposal deep-link.
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  router.push(
+                    node.pending_proposal_id
+                      ? `/pm?proposal=${encodeURIComponent(node.pending_proposal_id)}`
+                      : '/pm',
+                  );
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    router.push(
+                      node.pending_proposal_id
+                        ? `/pm?proposal=${encodeURIComponent(node.pending_proposal_id)}`
+                        : '/pm',
+                    );
+                  }
+                }}
+                className="inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded bg-mc-accent/15 text-mc-accent hover:bg-mc-accent/25 cursor-pointer"
+                title={`${node.pending_proposal_count} pending PM proposal${
+                  node.pending_proposal_count === 1 ? '' : 's'
+                } — click to open in PM`}
+                aria-label={`${node.pending_proposal_count} pending PM proposal${
+                  node.pending_proposal_count === 1 ? '' : 's'
+                }`}
+              >
+                <ClipboardList className="w-3 h-3" />
+                {node.pending_proposal_count} pending
               </span>
             )}
           </div>

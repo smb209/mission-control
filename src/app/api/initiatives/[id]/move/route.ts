@@ -8,6 +8,7 @@ const MoveSchema = z.object({
   to_parent_id: z.string().nullable(),
   moved_by_agent_id: z.string().nullish(),
   reason: z.string().max(2000).nullish(),
+  to_index: z.number().int().min(0).nullish(),
 });
 
 export async function POST(
@@ -29,6 +30,7 @@ export async function POST(
       parsed.data.to_parent_id,
       parsed.data.moved_by_agent_id ?? null,
       parsed.data.reason ?? null,
+      parsed.data.to_index ?? null,
     );
     return NextResponse.json(updated);
   } catch (error) {
