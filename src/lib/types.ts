@@ -219,6 +219,12 @@ export interface Workspace {
    * via `resolveWorkspacePath`). Stored raw with optional `~`.
    */
   workspace_path?: string | null;
+  /**
+   * Whether the floating chat widget shows in the bottom-right corner.
+   * Stored as INTEGER 0/1 in SQLite; surfaced as boolean | 0 | 1 here so
+   * callers can write either form. Default false (migration 088).
+   */
+  show_chat_widget?: boolean | 0 | 1;
   created_at: string;
   updated_at: string;
 }

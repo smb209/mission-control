@@ -76,6 +76,9 @@ interface WorkspaceWithDefault {
   /** Operator-overridden display timezone (IANA name). NULL means
    *  "auto-detect from browser". See specs/timestamp-handling.md §PR-B. */
   display_timezone?: string | null;
+  /** Whether the floating bottom-right ChatWidget renders. Stored as
+   *  0/1 INTEGER in SQLite; default 0 (off). Migration 088. */
+  show_chat_widget?: number | boolean | null;
   created_at: string;
   updated_at: string;
 }
@@ -261,6 +264,7 @@ export default function WorkspaceSettingsPage({
     { id: 'project-root', label: 'Project root' },
     { id: 'source-control', label: 'Source control' },
     { id: 'conventions', label: 'Workspace conventions' },
+    { id: 'ui', label: 'UI' },
     { id: 'audit-defaults', label: 'Audit defaults' },
     { id: 'export', label: 'Export' },
     { id: 'import', label: 'Import' },
@@ -621,6 +625,32 @@ export default function WorkspaceSettingsPage({
                 })()}
               </code>
               ). Reload after saving for the change to apply everywhere.
+            </p>
+          </Field>
+        </Section>
+
+        {/* UI — workspace-scoped presentation toggles. Today this just
+            owns the floating chat widget visibility; the operator
+            reported never using it, so it's gated rather than always-on. */}
+        <Section
+          id="ui"
+          title="UI"
+          description="Workspace-scoped UI toggles."
+        >
+          <Field label="Show chat widget">
+            <label className="inline-flex items-center gap-2 text-sm text-mc-text cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!workspace.show_chat_widget}
+                onChange={(e) => patch({ show_chat_widget: e.target.checked })}
+                aria-label="Show chat widget"
+              />
+              <span>Render the floating chat icon</span>
+            </label>
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              Floating chat icon in the bottom-right corner. Off by
+              default — enable if you actively use the per-task chat
+              conversations.
             </p>
           </Field>
         </Section>

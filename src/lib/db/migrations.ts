@@ -4592,6 +4592,24 @@ const migrations: Migration[] = [
       console.log('[Migration 087] agent_notes.kind extended with audit_manifest / audit_proposal / audit_synthesis.');
     },
   },
+  {
+    id: '088',
+    name: 'workspaces_show_chat_widget',
+    up: (db) => {
+      // Per-workspace toggle for the floating chat widget. Default 0
+      // (off) — the operator reported never using it; keeping it
+      // on-by-default would clobber the new floating-TOC FAB that lives
+      // in the same bottom-right corner of the initiative detail view.
+      // Flip via the workspace settings page when desired.
+      const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'show_chat_widget')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN show_chat_widget INTEGER NOT NULL DEFAULT 0`);
+        console.log('[Migration 088] workspaces.show_chat_widget added (default 0).');
+      } else {
+        console.log('[Migration 088] workspaces.show_chat_widget already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
