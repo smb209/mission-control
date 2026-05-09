@@ -153,9 +153,9 @@ test('acceptProposal: create_child_initiative inserts children with audit + dep 
   }
 });
 
-test('acceptProposal: rejects create_child_initiative with theme/milestone child_kind', () => {
+test('acceptProposal: rejects create_child_initiative with theme child_kind (milestone now allowed)', () => {
   const ws = freshWorkspace();
-  const parent = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Parent' });
+  const parent = createInitiative({ workspace_id: ws, kind: 'theme', title: 'Parent' });
 
   assert.throws(
     () =>
@@ -166,10 +166,10 @@ test('acceptProposal: rejects create_child_initiative with theme/milestone child
         impact_md: 'x',
         proposed_changes: [
           {
-            // @ts-expect-error testing the validation path
             kind: 'create_child_initiative',
             parent_initiative_id: parent.id,
             title: 'Bad theme child',
+            // @ts-expect-error testing the validation path — theme is the only forbidden child_kind
             child_kind: 'theme',
           },
         ],

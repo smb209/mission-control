@@ -52,10 +52,10 @@ export async function POST(request: NextRequest) {
     if (!parent) {
       return NextResponse.json({ error: 'Initiative not found' }, { status: 404 });
     }
-    if (parent.kind !== 'epic' && parent.kind !== 'milestone') {
+    if (parent.kind !== 'theme' && parent.kind !== 'milestone' && parent.kind !== 'epic') {
       return NextResponse.json(
         {
-          error: `Decompose only supported for epic/milestone parents (got "${parent.kind}")`,
+          error: `Split only supported for theme/milestone/epic parents (got "${parent.kind}")`,
         },
         { status: 400 },
       );
@@ -113,8 +113,16 @@ export async function POST(request: NextRequest) {
       agent_prompt:
         `Decompose initiative ${parent.id} ("${parent.title}", kind=${parent.kind}) ` +
         `into 3-7 child initiatives.` +
+        (parent.description ? ` Parent description: ${parent.description}` : '') +
         (parsed.data.hint ? ` Operator hint: ${parsed.data.hint}.` : '') +
-        ` Call \`propose_changes\` (trigger_kind='decompose_initiative') with one ` +
+        ` Before composing, call read_notes({ initiative_id: "${parent.id}", audience: 'pm', min_importance: 2, limit: 5 }) ` +
+        `to ingest any recent audit findings; if any are returned, reference one or two explicitly in impact_md ` +
+        `(e.g. \`Per audit on YYYY-MM-DD: "<short quoted finding>"\`). See SOUL.md "Ingest recent audit findings".\n\n` +
+        `Pick child_kind based on the parent's kind: theme parents split into ` +
+        `milestones; milestone parents split into epics (or stories for thin slices); ` +
+        `epic parents split into stories (or smaller epics for genuinely large scope). ` +
+        `Never propose theme as child_kind. ` +
+        `Call \`propose_changes\` (trigger_kind='decompose_initiative') with one ` +
         `\`create_child_initiative\` diff per child. Pre-wire each child to depend on the ` +
         `prior sibling using placeholder ids \`$0\`, \`$1\`, etc. See your SOUL.md. ` +
         `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
@@ -129,7 +137,7 @@ export async function POST(request: NextRequest) {
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'user',
-        content: `Decompose: "${parent.title}"` + (parsed.data.hint ? ` (hint: ${parsed.data.hint})` : ''),
+        content: `Split: "${parent.title}"` + (parsed.data.hint ? ` (hint: ${parsed.data.hint})` : ''),
       });
       postPmChatMessage({
         workspace_id: parent.workspace_id,

@@ -715,28 +715,28 @@ export function InitiativeDetailView({
               icon={<Sparkles className="w-3.5 h-3.5" />}
               onClick={() => openPlanPanel()}
               onClickWithGuidance={(g) => openPlanPanel(g)}
-              guidanceLabel="What should the PM focus the plan on?"
+              guidanceLabel="What should the PM focus the enrichment on?"
               guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
 or "treat memory + checklist as MVP, exclude dashboard widgets"`}
-              guidanceCta="Plan with guidance"
-              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'Plan with PM — proposes refined description / sizing / window'}
+              guidanceCta="Enrich with guidance"
+              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'Enrich with PM — proposes refined description / sizing / window'}
               disabled={hasDraftProposal}
             >
-              Plan
+              Enrich
             </SplitToolbarButton>
-            {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
+            {(initiative.kind === 'theme' || initiative.kind === 'milestone' || initiative.kind === 'epic') && (
               <SplitToolbarButton
                 icon={<Sparkles className="w-3.5 h-3.5" />}
                 onClick={() => openDecompose()}
                 onClickWithGuidance={(g) => openDecompose(g)}
-                guidanceLabel="How should the PM slice this?"
+                guidanceLabel="How should the PM split this?"
                 guidancePlaceholder={`e.g. "split by frontend / backend / data"
 or "carve out the onboarding flow as its own story first"`}
-                guidanceCta="Decompose with guidance"
-                title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Decompose with PM — propose 3-7 child initiatives'}
+                guidanceCta="Split with guidance"
+                title={hasDraftDecomposeProposal ? 'Resolve the existing draft split first' : 'Split with PM — propose 3-7 child initiatives'}
                 disabled={hasDraftDecomposeProposal}
               >
-                Decompose
+                Split
               </SplitToolbarButton>
             )}
             {initiative.kind === 'story' && (
@@ -747,9 +747,9 @@ or "carve out the onboarding flow as its own story first"`}
                   setDecomposeStoryAgent({ id, label });
                   setShowDecomposeStoryModal(true);
                 }}
-                title="Break this story into draft tasks"
+                title="Create draft tasks from this story"
               >
-                Decompose to tasks
+                Create tasks
               </DecomposerAgentPicker>
             )}
             <InvestigatePicker
@@ -1012,7 +1012,7 @@ or "carve out the onboarding flow as its own story first"`}
         <Section id="tasks" title={`Tasks (${tasks.length})`}>
           {tasks.length === 0 ? (
             <p className="text-sm text-mc-text-secondary">
-              No tasks yet. {initiative.kind === 'story' ? 'Use “Promote to task” to create one.' : ''}
+              No tasks yet. {initiative.kind === 'story' ? 'Use “Use as task” to create one directly, or “Create tasks” for an agent-drafted set.' : ''}
             </p>
           ) : (
             <div className="space-y-3">
@@ -1436,7 +1436,7 @@ function OverflowMenu({
               just omit it). */}
           {isStory && (
             <MenuItem icon={<Plus className="w-3.5 h-3.5" />} onClick={wrap(onPromote)}>
-              Promote to task
+              Use as task
             </MenuItem>
           )}
           <MenuItem icon={<MoveRight className="w-3.5 h-3.5" />} onClick={wrap(onMove)}>
@@ -1724,11 +1724,12 @@ function PromoteToTaskModal({
         className="bg-mc-bg-secondary border border-mc-border rounded-lg p-6 w-full max-w-lg text-mc-text"
         onClick={e => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold mb-4">Promote story to task draft</h2>
+        <h2 className="text-lg font-semibold mb-4">Use story as task</h2>
         <p className="text-sm text-mc-text-secondary mb-4">
-          Creates one task in <code>status=draft</code>, linked to this initiative.
-          The draft lives on the task board's Draft column until you explicitly
-          promote it to the execution queue.
+          Creates one task in <code>status=draft</code>, linked to this initiative,
+          using this story's title and description directly (no agent). The draft
+          lives on the task board's Draft column until you explicitly promote it
+          to the execution queue.
         </p>
         {existingDraftCount + existingActiveCount > 0 && (
           <div className="mb-4 p-3 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
@@ -1742,7 +1743,7 @@ function PromoteToTaskModal({
               : existingDraftCount > 0
                 ? ` (draft${existingDraftCount === 1 ? '' : 's'})`
                 : ` (active)`}
-            . Promote anyway only if you genuinely need another parallel task.
+            . Create another only if you genuinely need a parallel task.
           </div>
         )}
         <div className="space-y-3">
@@ -1776,7 +1777,7 @@ function PromoteToTaskModal({
               disabled={submitting || !title.trim()}
               className="px-3 py-2 rounded bg-mc-accent text-white disabled:opacity-50 text-sm"
             >
-              Promote to draft
+              Create draft task
             </button>
           </div>
         </div>

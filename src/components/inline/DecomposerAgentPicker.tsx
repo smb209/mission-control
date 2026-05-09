@@ -73,7 +73,7 @@ export function DecomposerAgentPicker({
         }}
         disabled={disabled || noneAvailable}
         title={noneAvailable ? 'No decomposer agents available in this workspace' : title}
-        className="inline-flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-l border border-mc-border border-r-0 text-mc-accent hover:bg-mc-accent/10 hover:border-mc-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-l border border-r-0 border-mc-accent/40 text-mc-accent bg-mc-accent/5 hover:bg-mc-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {icon}
         <span>{children}</span>
@@ -83,7 +83,7 @@ export function DecomposerAgentPicker({
         aria-label="Choose decomposer agent"
         onClick={() => setOpen(o => !o)}
         disabled={disabled || noneAvailable}
-        className="inline-flex items-center px-1.5 py-1.5 rounded-r border border-mc-border text-mc-accent hover:bg-mc-accent/10 hover:border-mc-accent/40 disabled:opacity-50 disabled:cursor-not-allowed"
+        className="inline-flex items-center px-1.5 rounded-r border border-mc-accent/40 text-mc-accent bg-mc-accent/5 hover:bg-mc-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <ChevronDown className="w-3.5 h-3.5" />
       </button>
@@ -93,7 +93,7 @@ export function DecomposerAgentPicker({
           role="menu"
         >
           <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
-            Decompose with…
+            Agent
           </div>
           {agents.length === 0 ? (
             <div className="px-2 py-2 text-xs text-mc-text-secondary">

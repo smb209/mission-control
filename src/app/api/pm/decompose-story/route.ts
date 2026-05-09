@@ -112,8 +112,13 @@ export async function POST(request: NextRequest) {
       agent_prompt:
         `Decompose story ${parent.id} ("${parent.title}") into a small set of ` +
         `draft TASKS (not initiatives) that an implementer can pick up directly.` +
+        (parent.description ? ` Story description: ${parent.description}` : '') +
         (parsed.data.hint ? ` Operator hint: ${parsed.data.hint}.` : '') +
-        ` Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
+        ` Before composing, call read_notes({ initiative_id: "${parent.id}", audience: 'pm', min_importance: 2, limit: 5 }) ` +
+        `to ingest any recent audit findings; if any are returned, reference one or two explicitly in impact_md ` +
+        `(e.g. \`Per audit on YYYY-MM-DD: "<short quoted finding>"\`) and let them inform task scope. ` +
+        `See SOUL.md "Ingest recent audit findings".\n\n` +
+        `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
         `\`create_task_under_initiative\` diff per task, all targeting initiative_id='${parent.id}'. ` +
         `Each task should be focused enough to land in a single PR. ` +
         `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
@@ -126,7 +131,7 @@ export async function POST(request: NextRequest) {
         workspace_id: parent.workspace_id,
         role: 'user',
         content:
-          `Decompose story to tasks: "${parent.title}"` +
+          `Create tasks: "${parent.title}"` +
           (parsed.data.hint ? ` (hint: ${parsed.data.hint})` : ''),
       });
       postPmChatMessage({

@@ -215,6 +215,35 @@ type Reaudit = 'fresh' | 'build_on';
 
 const GUIDANCE_MAX = 2000;
 
+interface GuidancePreset {
+  id: string;
+  label: string;
+  text: string;
+}
+
+const GUIDANCE_PRESETS: GuidancePreset[] = [
+  {
+    id: 'progress',
+    label: 'Progress / status',
+    text: "Assess actual progress vs intended scope. What's complete, what's in-flight, what's blocked. Cite specific files/PRs/tasks where possible.",
+  },
+  {
+    id: 'mental-model',
+    label: 'Mental model',
+    text: "Map the relevant files, modules, and call sites for this initiative. I'm preparing for detailed planning — focus on architecture and surface area, not gaps.",
+  },
+  {
+    id: 'risks',
+    label: 'Risks / unknowns',
+    text: 'Identify risks, underspecified areas, and likely failure modes. Flag anything that should be resolved before implementation starts.',
+  },
+  {
+    id: 'scope',
+    label: 'Scope check',
+    text: 'Is this initiative still the right shape? Too big, too small, overlapping with siblings? Recommend split/merge/reparent if warranted.',
+  },
+];
+
 interface DispatchResult {
   mode: 'narrow' | 'subtree-proposal';
   scope_key?: string;
@@ -544,6 +573,36 @@ export default function InvestigateModal({
             </label>
           </fieldset>
           )}
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">
+              Presets
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {GUIDANCE_PRESETS.map((preset) => {
+                const active = guidance.trim() === preset.text;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setGuidance(active ? '' : preset.text)}
+                    className={`px-2 py-1 rounded-full border text-xs transition-colors ${
+                      active
+                        ? 'bg-mc-accent/20 border-mc-accent/60 text-mc-text'
+                        : 'border-mc-border text-mc-text-secondary hover:bg-mc-bg hover:text-mc-text'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+            {mode === 'subtree-proposal' && (
+              <span className="text-[10px] text-mc-text-secondary/70 leading-snug">
+                Same guidance is sent to every node in the subtree.
+              </span>
+            )}
+          </div>
 
           <label className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-mc-text-secondary/80">

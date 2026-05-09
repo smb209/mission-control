@@ -846,7 +846,7 @@ function InitiativeRow({
   const isStory = node.kind === 'story';
   const isContainer = node.kind !== 'story';
   const hasParent = !!node.parent_initiative_id;
-  const isDecomposable = node.kind === 'epic' || node.kind === 'milestone';
+  const isDecomposable = node.kind === 'theme' || node.kind === 'milestone' || node.kind === 'epic';
 
   // Direct + total descendant counts for the collapsed-children summary.
   // useMemo keeps the recursion off the render hot path; node identity
@@ -869,7 +869,7 @@ function InitiativeRow({
     ...(isDecomposable
       ? [
           {
-            label: 'Decompose with PM',
+            label: 'Split with PM',
             icon: <Network className="w-3.5 h-3.5" />,
             onClick: () => onDecompose(node),
           },
@@ -1530,7 +1530,7 @@ export function EditDrawer({
             className="px-3 py-2 rounded border border-mc-accent/50 text-mc-accent text-sm inline-flex items-center gap-1 disabled:opacity-50"
             title="Ask the PM agent to suggest description / complexity / window / dependencies"
           >
-            <Sparkles className="w-3.5 h-3.5" /> Plan with PM
+            <Sparkles className="w-3.5 h-3.5" /> Enrich with PM
           </button>
           <button
             onClick={onClose}
