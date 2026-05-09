@@ -31,6 +31,8 @@ import {
   Trash2,
   Search,
   Activity,
+  MoreHorizontal,
+  List,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -231,6 +233,11 @@ export interface InitiativeDetailViewProps {
    *  detail view already optimistically merges the changed fields
    *  locally, but tree rows are owned by the host page. */
   onChanged?: () => void;
+  /** When true, render a floating bottom-right TOC FAB that scrolls to
+   *  the visible sections. Only the standalone /initiatives/[id] route
+   *  passes true — inside the planning-tree right pane the FAB would
+   *  float over the wrong content. Default false. */
+  showFloatingToc?: boolean;
 }
 
 export function InitiativeDetailView({
@@ -239,6 +246,7 @@ export function InitiativeDetailView({
   onDeleted,
   onSelectInitiative,
   onChanged,
+  showFloatingToc = false,
 }: InitiativeDetailViewProps) {
   const id = initiativeId;
   const router = useRouter();
@@ -663,7 +671,7 @@ export function InitiativeDetailView({
           than appearing far below.
         */}
         <header className="mb-4 p-5 rounded-lg bg-mc-bg-secondary border border-mc-border">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
                 {/*
@@ -692,20 +700,15 @@ export function InitiativeDetailView({
                 label="Edit title"
               />
             </div>
-            <div className="shrink-0">
-              <PromoteButton
-                kind={initiative.kind}
-                onClick={() => setShowPromoteModal(true)}
-              />
-            </div>
           </div>
 
           {/*
-            Action toolbar — grouped left→right by intent:
-              · AI helpers (Plan / Decompose) — primary, accent-tinted
-              · Structural (Move / Convert kind / Add dependency)
-              · Read-only (View history)
-              · Destructive (Detach / Delete) — pushed to the far right
+            Action toolbar — restructured per Direction 1:
+              · Primary row (left): labelled AI CTAs — Plan / Decompose / Investigate
+              · Secondary icon strip (right via ml-auto): structural + read-only
+                actions as 32×32 icon-only buttons with title= tooltips
+              · Overflow ⋯ More: destructive (Detach / Delete) tucked behind
+                a popover so they can't ml-auto orphan at narrow widths
           */}
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-mc-border/60 pt-3">
             <SplitToolbarButton
@@ -756,127 +759,155 @@ or "carve out the onboarding flow as its own story first"`}
                 setShowInvestigateModal(true);
               }}
             />
-            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
-            <ToolbarButton icon={<MoveRight className="w-3.5 h-3.5" />} onClick={() => setShowMoveModal(true)}>
-              Move
-            </ToolbarButton>
-            <ToolbarButton icon={<Shuffle className="w-3.5 h-3.5" />} onClick={() => setShowConvertModal(true)}>
-              Convert kind
-            </ToolbarButton>
-            <ToolbarButton icon={<Link2 className="w-3.5 h-3.5" />} onClick={() => setShowAddDepModal(true)}>
-              Add dependency
-            </ToolbarButton>
-            <span className="w-px h-5 bg-mc-border/60 mx-1" aria-hidden />
-            <ToolbarButton icon={<History className="w-3.5 h-3.5" />} onClick={() => setShowHistoryDrawer(true)}>
-              View history
-            </ToolbarButton>
-            <div className="ml-auto flex items-center gap-2">
-              {initiative.parent_initiative_id && (
-                <ToolbarButton
-                  icon={<CornerUpLeft className="w-3.5 h-3.5" />}
-                  onClick={detach}
-                  title="Move to no parent"
-                >
-                  Detach
-                </ToolbarButton>
-              )}
-              <ToolbarButton
-                icon={<Trash2 className="w-3.5 h-3.5" />}
-                onClick={deleteInitiative}
-                destructive
+            {/* Secondary icon strip + overflow — pinned right at desktop,
+                wraps below at narrow via flex-wrap on the parent. */}
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <IconButton
+                ariaLabel="Promote to task"
+                title={
+                  initiative.kind === 'story'
+                    ? 'Create a draft task linked to this initiative'
+                    : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
+                }
+                onClick={() => setShowPromoteModal(true)}
+                disabled={initiative.kind !== 'story'}
               >
-                Delete
-              </ToolbarButton>
+                <Plus className="w-3.5 h-3.5" />
+              </IconButton>
+              <IconButton
+                ariaLabel="Move"
+                title="Move (change parent initiative)"
+                onClick={() => setShowMoveModal(true)}
+              >
+                <MoveRight className="w-3.5 h-3.5" />
+              </IconButton>
+              <IconButton
+                ariaLabel="Convert kind"
+                title="Convert kind"
+                onClick={() => setShowConvertModal(true)}
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+              </IconButton>
+              <IconButton
+                ariaLabel="Add dependency"
+                title="Add dependency"
+                onClick={() => setShowAddDepModal(true)}
+              >
+                <Link2 className="w-3.5 h-3.5" />
+              </IconButton>
+              <IconButton
+                ariaLabel="View history"
+                title="View parent-change history"
+                onClick={() => setShowHistoryDrawer(true)}
+              >
+                <History className="w-3.5 h-3.5" />
+              </IconButton>
+              <OverflowMenu
+                hasParent={!!initiative.parent_initiative_id}
+                onDetach={detach}
+                onDelete={deleteInitiative}
+              />
             </div>
           </div>
 
           {/*
-            Compact metadata strip — one horizontal row of label/value
-            pairs that wraps on small viewports. Replaces the prior 4×4
-            grid + separate sizing grid (8 boxes of mostly empty space)
-            so the toolbar above and description below stay close.
+            Direction A metadata grid — two columns grouped by intent
+            (Schedule / Sizing) at md+, single column stacked at narrow.
+            Each row uses a fixed-width label column so the values line
+            up vertically and the strip reads as a structured table
+            instead of the prior wrap-anywhere flex chain.
           */}
-          <dl className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-            <MetaPair label="Target start">
-              <InlineDate
-                value={initiative.target_start ?? ''}
-                onSave={next => patch({ target_start: next || null })}
-                label="Edit target start"
-              />
-            </MetaPair>
-            <MetaPair label="Target end">
-              <InlineDate
-                value={initiative.target_end ?? ''}
-                onSave={next => patch({ target_end: next || null })}
-                label="Edit target end"
-              />
-            </MetaPair>
-            <MetaPair label="Committed">
-              <InlineDate
-                value={initiative.committed_end ?? ''}
-                onSave={next => patch({ committed_end: next || null })}
-                label="Edit committed end"
-              />
-            </MetaPair>
-            <MetaPair label="Owner">
-              <InlineSelect<string>
-                value={initiative.owner_agent_id ?? ''}
-                onSave={next =>
-                  patch({ owner_agent_id: next.length > 0 ? next : null })
-                }
-                options={[
-                  { value: '', label: 'Unassigned' },
-                  ...agents.map(a => ({
-                    value: a.id,
-                    label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
-                  })),
-                ]}
-                renderDisplay={v => {
-                  const a = agents.find(x => x.id === v);
-                  return a ? (
-                    <span>
-                      {a.avatar_emoji} {a.name}
-                    </span>
-                  ) : (
-                    <span className="text-mc-text-secondary">—</span>
-                  );
-                }}
-                label="Edit owner"
-              />
-            </MetaPair>
-            <MetaPair label="Complexity">
-              <InlineSelect<Complexity | ''>
-                value={(initiative.complexity ?? '') as Complexity | ''}
-                options={COMPLEXITY_OPTIONS}
-                onSave={next => patch({ complexity: next || null })}
-                renderDisplay={v =>
-                  v ? <span>{v}</span> : <span className="text-mc-text-secondary">—</span>
-                }
-                label="Edit complexity"
-              />
-            </MetaPair>
-            <MetaPair label="Effort (h)">
-              <InlineText
-                value={
-                  initiative.estimated_effort_hours == null
-                    ? ''
-                    : String(initiative.estimated_effort_hours)
-                }
-                onSave={next =>
-                  patch({
-                    estimated_effort_hours: next === '' ? null : Number(next),
-                  })
-                }
-                type="number"
-                step="0.5"
-                placeholder="—"
-                label="Edit effort hours"
-              />
-            </MetaPair>
-          </dl>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                Schedule
+              </div>
+              <MetaRow label="target start">
+                <InlineDate
+                  value={initiative.target_start ?? ''}
+                  onSave={next => patch({ target_start: next || null })}
+                  label="Edit target start"
+                />
+              </MetaRow>
+              <MetaRow label="target end">
+                <InlineDate
+                  value={initiative.target_end ?? ''}
+                  onSave={next => patch({ target_end: next || null })}
+                  label="Edit target end"
+                />
+              </MetaRow>
+              <MetaRow label="committed">
+                <InlineDate
+                  value={initiative.committed_end ?? ''}
+                  onSave={next => patch({ committed_end: next || null })}
+                  label="Edit committed end"
+                />
+              </MetaRow>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+                Sizing
+              </div>
+              <MetaRow label="owner">
+                <InlineSelect<string>
+                  value={initiative.owner_agent_id ?? ''}
+                  onSave={next =>
+                    patch({ owner_agent_id: next.length > 0 ? next : null })
+                  }
+                  options={[
+                    { value: '', label: 'Unassigned' },
+                    ...agents.map(a => ({
+                      value: a.id,
+                      label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
+                    })),
+                  ]}
+                  renderDisplay={v => {
+                    const a = agents.find(x => x.id === v);
+                    return a ? (
+                      <span>
+                        {a.avatar_emoji} {a.name}
+                      </span>
+                    ) : (
+                      <span className="text-mc-text-secondary">—</span>
+                    );
+                  }}
+                  label="Edit owner"
+                />
+              </MetaRow>
+              <MetaRow label="complexity">
+                <InlineSelect<Complexity | ''>
+                  value={(initiative.complexity ?? '') as Complexity | ''}
+                  options={COMPLEXITY_OPTIONS}
+                  onSave={next => patch({ complexity: next || null })}
+                  renderDisplay={v =>
+                    v ? <span>{v}</span> : <span className="text-mc-text-secondary">—</span>
+                  }
+                  label="Edit complexity"
+                />
+              </MetaRow>
+              <MetaRow label="effort (h)">
+                <InlineText
+                  value={
+                    initiative.estimated_effort_hours == null
+                      ? ''
+                      : String(initiative.estimated_effort_hours)
+                  }
+                  onSave={next =>
+                    patch({
+                      estimated_effort_hours: next === '' ? null : Number(next),
+                    })
+                  }
+                  type="number"
+                  step="0.5"
+                  placeholder="—"
+                  label="Edit effort hours"
+                />
+              </MetaRow>
+            </div>
+          </div>
 
           {/* Description — the largest editable surface */}
-          <div className="mt-5">
+          <div id="description" className="mt-5 scroll-mt-20">
             <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
               Description
             </div>
@@ -900,7 +931,7 @@ or "carve out the onboarding flow as its own story first"`}
             />
           </div>
 
-          <div className="mt-4">
+          <div id="status-check" className="mt-4 scroll-mt-20">
             <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
               Status check
             </div>
@@ -993,7 +1024,7 @@ or "carve out the onboarding flow as its own story first"`}
 
         {/* Children */}
         {initiative.children && initiative.children.length > 0 && (
-          <Section title={`Children (${initiative.children.length})`}>
+          <Section id="children" title={`Children (${initiative.children.length})`}>
             <ul className="space-y-1">
               {initiative.children.map(c => (
                 <li
@@ -1031,7 +1062,7 @@ or "carve out the onboarding flow as its own story first"`}
         )}
 
         {/* Tasks */}
-        <Section title={`Tasks (${tasks.length})`}>
+        <Section id="tasks" title={`Tasks (${tasks.length})`}>
           {tasks.length === 0 ? (
             <p className="text-sm text-mc-text-secondary">
               No tasks yet. {initiative.kind === 'story' ? 'Use “Promote to task” to create one.' : ''}
@@ -1054,7 +1085,7 @@ or "carve out the onboarding flow as its own story first"`}
         </Section>
 
         {/* Dependencies */}
-        <Section title="Dependencies" icon={<Link2 className="w-4 h-4" />}>
+        <Section id="dependencies" title="Dependencies" icon={<Link2 className="w-4 h-4" />}>
           {!deps || (deps.outgoing.length === 0 && deps.incoming.length === 0) ? (
             <p className="text-sm text-mc-text-secondary">No dependencies.</p>
           ) : (
@@ -1108,13 +1139,15 @@ or "carve out the onboarding flow as its own story first"`}
         {/* Audit Proposals — operator-facing review queue produced by
             the subtree-audit pipeline. Auto-hides when there's nothing
             to show. See specs/subtree-audit-proposals-spec.md §8. */}
-        <AuditProposalsSection initiativeId={initiative.id} />
+        <div id="audit-proposals" className="scroll-mt-20">
+          <AuditProposalsSection initiativeId={initiative.id} />
+        </div>
 
         {/* Activity — live + recent agent_runs touching this initiative.
             Closes the "what did I just queue?" gap after page refresh and
             gives investigations a durable surface beyond the dispatch
             toast. See specs/audit-actions-and-tracking.md PR 2. */}
-        <Section title="Activity" icon={<Activity className="w-4 h-4" />}>
+        <Section id="activity" title="Activity" icon={<Activity className="w-4 h-4" />}>
           <InitiativeRunsStrip
             workspaceId={initiative.workspace_id}
             initiativeId={initiative.id}
@@ -1125,7 +1158,7 @@ or "carve out the onboarding flow as its own story first"`}
             Surface for the Investigate flow's take_note output. Filters
             to scoped notes only (no child-task rollup) since the audit
             writes its report row directly against this initiative_id. */}
-        <Section title="Notes" icon={<Search className="w-4 h-4" />}>
+        <Section id="notes" title="Notes" icon={<Search className="w-4 h-4" />}>
           <NotesRail
             initiative_id={initiative.id}
             workspace_id={initiative.workspace_id}
@@ -1135,7 +1168,7 @@ or "carve out the onboarding flow as its own story first"`}
         </Section>
 
         {/* History */}
-        <Section title="Parent-change history" icon={<History className="w-4 h-4" />}>
+        <Section id="parent-history" title="Parent-change history" icon={<History className="w-4 h-4" />}>
           {history.length === 0 ? (
             <p className="text-sm text-mc-text-secondary">No moves recorded.</p>
           ) : (
@@ -1285,6 +1318,25 @@ or "carve out the onboarding flow as its own story first"`}
           }}
         />
       )}
+      {showFloatingToc && (
+        <DetailTOC
+          sections={[
+            { id: 'description', label: 'Description', visible: true },
+            { id: 'status-check', label: 'Status check', visible: true },
+            { id: 'audit-proposals', label: 'Audit Proposals', visible: true },
+            {
+              id: 'children',
+              label: 'Children',
+              visible: !!initiative.children && initiative.children.length > 0,
+            },
+            { id: 'tasks', label: 'Tasks', visible: true },
+            { id: 'dependencies', label: 'Dependencies', visible: true },
+            { id: 'activity', label: 'Activity', visible: true },
+            { id: 'notes', label: 'Notes', visible: true },
+            { id: 'parent-history', label: 'Parent-change history', visible: true },
+          ].filter(s => s.visible)}
+        />
+      )}
       <ConfirmDialog
         open={pendingConfirm !== null}
         title={pendingConfirm?.title ?? ''}
@@ -1317,86 +1369,245 @@ const INVESTIGATE_OPTIONS: InvestigateOption[] = [
   },
 ];
 
-function ToolbarButton({
-  icon,
-  onClick,
-  children,
-  destructive,
-  accent,
+/**
+ * IconButton — square 32×32 icon-only toolbar button used in the
+ * secondary action strip. Icon is the only child; the full label is
+ * exposed via aria-label + title so screen readers and hover tooltips
+ * still convey what the button does. Keep the height in sync with the
+ * SplitToolbarButton primary CTAs (text-xs px-2.5 py-1.5 → ~32px tall)
+ * so the two strips align on the same row.
+ */
+function IconButton({
+  ariaLabel,
   title,
+  onClick,
+  disabled,
+  children,
 }: {
-  icon: React.ReactNode;
+  ariaLabel: string;
+  title: string;
   onClick: () => void;
+  disabled?: boolean;
   children: React.ReactNode;
-  destructive?: boolean;
-  accent?: boolean;
-  title?: string;
 }) {
-  // Three palettes:
-  //   accent     — primary AI helpers (Plan / Decompose with PM)
-  //   destructive — Detach / Delete
-  //   default    — everything else
-  const palette = destructive
-    ? 'border-red-500/30 text-red-300 hover:bg-red-500/10 hover:border-red-500/50'
-    : accent
-      ? 'border-mc-accent/40 text-mc-accent bg-mc-accent/5 hover:bg-mc-accent/10'
-      : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40';
   return (
     <button
-      onClick={onClick}
+      type="button"
+      aria-label={ariaLabel}
       title={title}
-      className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border ${palette}`}
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center justify-center w-8 h-8 rounded border ${
+        disabled
+          ? 'border-mc-border/40 text-mc-text-secondary/40 cursor-not-allowed'
+          : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40'
+      }`}
     >
-      {icon}
-      <span>{children}</span>
+      {children}
     </button>
   );
 }
 
-function MetaPair({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * Overflow ⋯ button + popover with destructive actions. Mirrors
+ * InvestigatePicker's outside-click + Escape dismissal so the pattern
+ * reads consistently across the toolbar. Detach is conditional on
+ * having a parent; Delete renders with red text always.
+ */
+function OverflowMenu({
+  hasParent,
+  onDetach,
+  onDelete,
+}: {
+  hasParent: boolean;
+  onDetach: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="flex items-baseline gap-2">
-      <dt className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70">
-        {label}
-      </dt>
-      <dd className="text-mc-text">{children}</dd>
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        onClick={() => setOpen(o => !o)}
+        className={`inline-flex items-center justify-center w-8 h-8 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40 ${
+          open ? 'bg-mc-accent/10' : ''
+        }`}
+      >
+        <MoreHorizontal className="w-3.5 h-3.5" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-30 min-w-[10rem] rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg p-1"
+        >
+          {hasParent && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onDetach();
+              }}
+              className="w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg"
+            >
+              <CornerUpLeft className="w-3.5 h-3.5" /> Detach
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            className="w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 text-red-300 hover:bg-red-500/10"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function PromoteButton({ kind, onClick }: { kind: Kind; onClick: () => void }) {
-  const isStory = kind === 'story';
+/**
+ * One row in the Direction A metadata grid — fixed-width uppercase label
+ * column on the left so values line up vertically across the Schedule /
+ * Sizing groups.
+ */
+function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button
-      onClick={isStory ? onClick : undefined}
-      disabled={!isStory}
-      title={
-        isStory
-          ? 'Create a draft task linked to this initiative'
-          : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
-      }
-      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-        isStory
-          ? 'bg-mc-accent text-white hover:bg-mc-accent/90'
-          : 'bg-mc-bg-tertiary text-mc-text-secondary cursor-not-allowed border border-mc-border'
-      }`}
-    >
-      <Plus className="w-4 h-4" /> Promote to task
-    </button>
+    <div className="flex items-baseline gap-2 py-0.5">
+      <span className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 w-20 shrink-0">
+        {label}
+      </span>
+      <span className="text-mc-text min-w-0">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * Floating bottom-right table-of-contents FAB. Click opens a popover
+ * above the button with the visible-section anchors; clicking an
+ * anchor smooth-scrolls to that id. Outside-click + Escape close the
+ * popover, matching InvestigatePicker's dismissal pattern.
+ *
+ * Only mounts when InitiativeDetailView is rendered with
+ * showFloatingToc — i.e. the standalone /initiatives/[id] page. Inside
+ * the planning-tree right pane the FAB would float over the wrong
+ * content.
+ */
+function DetailTOC({
+  sections,
+}: {
+  sections: { id: string; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="fixed bottom-6 right-6 z-30">
+      {open && (
+        <div
+          role="menu"
+          aria-label="Jump to section"
+          className="absolute bottom-full right-0 mb-2 min-w-[14rem] rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg p-1"
+        >
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
+            Jump to section
+          </div>
+          {sections.map(s => (
+            <a
+              key={s.id}
+              href={`#${s.id}`}
+              role="menuitem"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById(s.id)?.scrollIntoView({
+                  block: 'start',
+                  behavior: 'smooth',
+                });
+                setOpen(false);
+              }}
+              className="block px-2 py-1.5 rounded text-sm text-mc-text hover:bg-mc-bg"
+            >
+              {s.label}
+            </a>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        aria-label="Table of contents"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Jump to section"
+        onClick={() => setOpen(o => !o)}
+        className="w-12 h-12 rounded-full bg-mc-accent text-white hover:bg-mc-accent/90 shadow-lg flex items-center justify-center"
+      >
+        <List className="w-5 h-5" />
+      </button>
+    </div>
   );
 }
 
 function Section({
+  id,
   title,
   icon,
   children,
 }: {
+  /** Optional anchor id for in-page navigation (e.g. the floating TOC FAB).
+   *  Adds `scroll-mt-20` so the heading isn't tucked under any sticky chrome
+   *  after a smooth-scroll. */
+  id?: string;
   title: string;
   icon?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="mb-6 p-4 rounded-lg bg-mc-bg-secondary border border-mc-border">
+    <section
+      id={id}
+      className="mb-6 p-4 rounded-lg bg-mc-bg-secondary border border-mc-border scroll-mt-20"
+    >
       <h2 className="font-medium text-mc-text mb-3 flex items-center gap-2">
         {icon}
         {title}

@@ -140,6 +140,7 @@ export async function PATCH(
       repo_url,
       default_base_branch,
       display_timezone,
+      show_chat_widget,
     } = body;
 
     const db = getDb();
@@ -232,6 +233,12 @@ export async function PATCH(
       }
       updates.push('display_timezone = ?');
       values.push(raw && raw.length > 0 ? raw : null);
+    }
+    if (show_chat_widget !== undefined) {
+      // Per-workspace toggle for the floating chat widget. Stored as
+      // INTEGER 0/1; accept any truthy/falsy form from the UI.
+      updates.push('show_chat_widget = ?');
+      values.push(show_chat_widget ? 1 : 0);
     }
     if (audit_subtree_concurrency !== undefined) {
       const n = Number(audit_subtree_concurrency);

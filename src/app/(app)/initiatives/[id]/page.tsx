@@ -29,6 +29,7 @@ export default function InitiativeDetailPage({
     <InitiativeDetailView
       initiativeId={id}
       variant="full"
+      showFloatingToc
       onDeleted={() => router.push('/initiatives')}
     />
   );
