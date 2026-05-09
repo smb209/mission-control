@@ -265,10 +265,11 @@ export function PageWithRails({
               // hidden; this <details> is the fallback nav. Pin it to
               // the top of the viewport (just under the page header at
               // top-0 / z-20) so the operator can collapse/expand the
-              // tree-controls panel without scrolling back up. Backdrop
-              // blur keeps content scrolling underneath legible without
-              // leaking through the toggle.
-              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary/95 backdrop-blur-sm sticky top-[4.5rem] z-10">
+              // tree-controls panel without scrolling back up. Solid
+              // background — translucent + backdrop-blur let scrolling
+              // content read THROUGH the toggle, which the operator
+              // (correctly) called out as visually weird.
+              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary sticky top-[4.5rem] z-10">
                 <summary className="px-3 py-2 text-xs uppercase tracking-wide text-mc-text-secondary cursor-pointer">
                   Sections
                 </summary>
