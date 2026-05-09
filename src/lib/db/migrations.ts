@@ -4610,6 +4610,51 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '089',
+    name: 'initiative_research_loop',
+    up: (db) => {
+      // Substrate for the initiative research loop (specs/initiative-research-loop.md):
+      //   - briefs.initiative_id: lets a brief belong to an initiative so refine/decompose
+      //     pull its result into context via the existing read_notes channel.
+      //   - briefs.summary: one-liner populated at completion time, used in the suggest
+      //     prompt's "prior briefs" index so the PM doesn't have to re-read each body.
+      //   - agent_notes.source_kind / source_ref: track the upstream entity that produced
+      //     a note (e.g. {brief, <id>}) so a brief rerun can soft-archive its prior auto-note
+      //     instead of stacking duplicates. Indexed for the rerun lookup path.
+      // All columns are nullable; existing rows are unaffected.
+
+      const briefCols = db.prepare(`PRAGMA table_info(briefs)`).all() as Array<{ name: string }>;
+      if (!briefCols.some((c) => c.name === 'initiative_id')) {
+        db.exec(`ALTER TABLE briefs ADD COLUMN initiative_id TEXT REFERENCES initiatives(id) ON DELETE SET NULL`);
+        console.log('[Migration 089] briefs.initiative_id added.');
+      }
+      if (!briefCols.some((c) => c.name === 'summary')) {
+        db.exec(`ALTER TABLE briefs ADD COLUMN summary TEXT`);
+        console.log('[Migration 089] briefs.summary added.');
+      }
+      // source_ref denormalized onto briefs so chain-walk during a rerun
+      // is a single-table lookup instead of a join through agent_runs.
+      // Format: "brief:<original_id>". Stored on the corresponding
+      // agent_run.source_ref too — that column was the previous home.
+      if (!briefCols.some((c) => c.name === 'source_ref')) {
+        db.exec(`ALTER TABLE briefs ADD COLUMN source_ref TEXT`);
+        console.log('[Migration 089] briefs.source_ref added.');
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS briefs_initiative_id_idx ON briefs(initiative_id) WHERE initiative_id IS NOT NULL`);
+
+      const noteCols = db.prepare(`PRAGMA table_info(agent_notes)`).all() as Array<{ name: string }>;
+      if (!noteCols.some((c) => c.name === 'source_kind')) {
+        db.exec(`ALTER TABLE agent_notes ADD COLUMN source_kind TEXT`);
+        console.log('[Migration 089] agent_notes.source_kind added.');
+      }
+      if (!noteCols.some((c) => c.name === 'source_ref')) {
+        db.exec(`ALTER TABLE agent_notes ADD COLUMN source_ref TEXT`);
+        console.log('[Migration 089] agent_notes.source_ref added.');
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS agent_notes_source_idx ON agent_notes(source_kind, source_ref) WHERE source_kind IS NOT NULL`);
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

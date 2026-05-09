@@ -81,6 +81,11 @@ export interface AgentNote {
    *  from this note via the Ask-PM-from-notes flow. Multiple ids are
    *  possible because the operator can re-ask on the same note. */
   pm_proposal_ids: string | null;
+  /** Upstream entity that produced this note. E.g. {kind:'brief', ref:<id>}
+   *  for auto-notes written when an initiative-scoped brief completes.
+   *  See specs/initiative-research-loop-build-plan.md §D2. */
+  source_kind: string | null;
+  source_ref: string | null;
 }
 
 /** Maximum body length per note. Sized to fit a full multi-section
@@ -105,6 +110,11 @@ export interface CreateNoteInput {
   body: string;
   attached_files?: ReadonlyArray<string> | null;
   importance?: NoteImportance;
+  /** Optional upstream entity producing this note. Both fields must be
+   *  set together or both null. Used by `findNoteBySource` for dedupe
+   *  paths (e.g. brief-rerun replaces prior auto-note). */
+  source_kind?: string | null;
+  source_ref?: string | null;
 }
 
 export class AgentNoteValidationError extends Error {
@@ -146,8 +156,9 @@ export function createNote(input: CreateNoteInput): AgentNote {
        id, workspace_id, agent_id, task_id, initiative_id,
        scope_key, role, run_group_id, kind, audience, body,
        attached_files, importance, consumed_by_stages,
-       archived_at, archived_reason, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, datetime('now'))`,
+       archived_at, archived_reason, created_at,
+       source_kind, source_ref
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, datetime('now'), ?, ?)`,
     [
       id,
       input.workspace_id,
@@ -162,6 +173,8 @@ export function createNote(input: CreateNoteInput): AgentNote {
       input.body,
       attachedJson,
       importance,
+      input.source_kind ?? null,
+      input.source_ref ?? null,
     ],
   );
 
@@ -277,6 +290,29 @@ export function listNotes(filter: ListNotesFilter): AgentNote[] {
 
 export function getNote(noteId: string): AgentNote | null {
   return queryOne<AgentNote>(`SELECT * FROM agent_notes WHERE id = ?`, [noteId]) ?? null;
+}
+
+/**
+ * Look up notes by their upstream source. Returns non-archived rows
+ * by default (set `include_archived` to fetch the full history). Used
+ * by the brief-rerun auto-note path: when a rerun completes, find the
+ * non-archived auto-note for the chain root and soft-delete it before
+ * inserting the new one.
+ */
+export function findNotesBySource(
+  source_kind: string,
+  source_ref: string,
+  opts: { include_archived?: boolean } = {},
+): AgentNote[] {
+  const where: string[] = ['source_kind = ?', 'source_ref = ?'];
+  const args: unknown[] = [source_kind, source_ref];
+  if (!opts.include_archived) {
+    where.push('archived_at IS NULL');
+  }
+  return queryAll<AgentNote>(
+    `SELECT * FROM agent_notes WHERE ${where.join(' AND ')} ORDER BY created_at ASC`,
+    args,
+  );
 }
 
 // ─── Mutate ─────────────────────────────────────────────────────────

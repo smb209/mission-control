@@ -245,3 +245,56 @@ test('deleteBrief: returns false for unknown id', async () => {
   const { deleteBrief } = await import('./briefs');
   assert.equal(deleteBrief('does-not-exist'), false);
 });
+
+test('createBriefWithRun: persists initiative_id when provided', async () => {
+  const { findBriefChainRoot, setBriefSummary } = await import('./briefs');
+  const ws = freshWorkspace();
+  // Seed an initiative in this workspace.
+  const initId = `init-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO initiatives (id, workspace_id, kind, title, status, sort_order, created_at, updated_at)
+     VALUES (?, ?, 'theme', 'Test theme', 'planned', 0, datetime('now'), datetime('now'))`,
+    [initId, ws],
+  );
+
+  const { brief } = createBriefWithRun(baseInput(ws, { initiative_id: initId }));
+  assert.equal(brief.initiative_id, initId);
+  assert.equal(brief.summary, null);
+  assert.equal(brief.source_ref, null);
+
+  // Round-trip through getBrief.
+  assert.equal(getBrief(brief.id)?.initiative_id, initId);
+
+  // setBriefSummary persists.
+  const updated = setBriefSummary(brief.id, 'WebGPU is broadly supported.');
+  assert.equal(updated?.summary, 'WebGPU is broadly supported.');
+
+  // Listing by initiative finds it.
+  const byInit = listBriefs(ws, { initiative_id: initId });
+  assert.equal(byInit.length, 1);
+  assert.equal(byInit[0].id, brief.id);
+
+  // Initiative-less briefs don't bleed into the filtered list.
+  const { brief: other } = createBriefWithRun(baseInput(ws));
+  assert.equal(other.initiative_id, null);
+  assert.equal(listBriefs(ws, { initiative_id: initId }).length, 1);
+
+  // ON DELETE SET NULL: deleting the initiative nulls out the FK.
+  run(`DELETE FROM initiatives WHERE id = ?`, [initId]);
+  assert.equal(getBrief(brief.id)?.initiative_id, null);
+
+  // Chain root walk: a brief with no source_ref returns itself.
+  assert.equal(findBriefChainRoot(brief.id), brief.id);
+});
+
+test('findBriefChainRoot: walks source_ref chain back to the original', async () => {
+  const { findBriefChainRoot } = await import('./briefs');
+  const ws = freshWorkspace();
+  const original = createBriefWithRun(baseInput(ws));
+  const rerun1 = createBriefWithRun(baseInput(ws, { source_ref: `brief:${original.brief.id}` }));
+  const rerun2 = createBriefWithRun(baseInput(ws, { source_ref: `brief:${rerun1.brief.id}` }));
+
+  assert.equal(findBriefChainRoot(rerun2.brief.id), original.brief.id);
+  assert.equal(findBriefChainRoot(rerun1.brief.id), original.brief.id);
+  assert.equal(findBriefChainRoot(original.brief.id), original.brief.id);
+});
