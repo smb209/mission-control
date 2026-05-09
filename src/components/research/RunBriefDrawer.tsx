@@ -12,12 +12,18 @@ interface Props {
   workspaceId: string;
   topics: TopicOption[];
   defaultTopicId: string | null;
+  /**
+   * When set, the dispatched brief is scoped to this initiative
+   * (auto-note on completion, etc.). Used by InitiativeDetailView's
+   * Research section.
+   */
+  initiativeId?: string;
   /** Called after the brief is created + dispatched. */
   onLaunched: (briefId: string) => void;
 }
 
 export function RunBriefDrawer({
-  open, onClose, workspaceId, topics, defaultTopicId, onLaunched,
+  open, onClose, workspaceId, topics, defaultTopicId, initiativeId, onLaunched,
 }: Props) {
   const router = useRouter();
   const [topicId, setTopicId] = useState<string>(defaultTopicId ?? '');
@@ -57,6 +63,7 @@ export function RunBriefDrawer({
           title,
           prompt,
           topic_id: topicId || null,
+          initiative_id: initiativeId ?? null,
         }),
       });
       if (!createRes.ok) {

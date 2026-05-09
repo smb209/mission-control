@@ -33,11 +33,17 @@ interface Props {
   onClose: () => void;
   workspaceId: string;
   kind: 'topic' | 'brief';
+  /**
+   * When set, scope the dispatch and resulting suggestions to a
+   * specific initiative. The PM gets initiative-scoped context;
+   * accepted brief suggestions dispatch with `initiative_id` set.
+   */
+  initiativeId?: string;
   /** Called after the operator accepts ≥ 1 suggestion. */
   onAccepted: () => void;
 }
 
-export function SuggestPickerDrawer({ open, onClose, workspaceId, kind, onAccepted }: Props) {
+export function SuggestPickerDrawer({ open, onClose, workspaceId, kind, initiativeId, onAccepted }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -53,7 +59,11 @@ export function SuggestPickerDrawer({ open, onClose, workspaceId, kind, onAccept
       const res = await fetch('/api/research/suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id: workspaceId, kind }),
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          kind,
+          ...(initiativeId ? { initiative_id: initiativeId } : {}),
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -65,7 +75,7 @@ export function SuggestPickerDrawer({ open, onClose, workspaceId, kind, onAccept
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, kind]);
+  }, [workspaceId, kind, initiativeId]);
 
   // Auto-kick on open.
   useEffect(() => {

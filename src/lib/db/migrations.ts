@@ -4655,6 +4655,22 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS agent_notes_source_idx ON agent_notes(source_kind, source_ref) WHERE source_kind IS NOT NULL`);
     },
   },
+  {
+    id: '090',
+    name: 'briefs_source_ref_followup',
+    up: (db) => {
+      // Belt-and-suspenders follow-up to 089: some dev DBs (the author's
+      // included) had 089 recorded before its body included
+      // briefs.source_ref. This migration is idempotent at the column
+      // level so DBs that already have source_ref skip cleanly, and
+      // DBs that don't pick it up here.
+      const briefCols = db.prepare(`PRAGMA table_info(briefs)`).all() as Array<{ name: string }>;
+      if (!briefCols.some((c) => c.name === 'source_ref')) {
+        db.exec(`ALTER TABLE briefs ADD COLUMN source_ref TEXT`);
+        console.log('[Migration 090] briefs.source_ref added (089 follow-up).');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

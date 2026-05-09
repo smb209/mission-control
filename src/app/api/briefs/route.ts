@@ -14,6 +14,7 @@ const CreateBriefSchema = z.object({
   title: z.string().min(1).max(500),
   prompt: z.string().min(1).max(20000),
   topic_id: z.string().nullish(),
+  initiative_id: z.string().nullish(),
   requested_by: z.string().max(128).optional(),
 });
 
@@ -25,9 +26,14 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'workspace_id is required' }, { status: 400 });
     }
     const topicId = searchParams.get('topic_id') || undefined;
+    const initiativeId = searchParams.get('initiative_id') || undefined;
     const limitParam = searchParams.get('limit');
     const limit = limitParam ? Math.max(1, Math.min(500, parseInt(limitParam, 10))) : undefined;
-    return NextResponse.json(listBriefs(workspaceId, { topic_id: topicId, limit }));
+    return NextResponse.json(listBriefs(workspaceId, {
+      topic_id: topicId,
+      initiative_id: initiativeId,
+      limit,
+    }));
   } catch (error) {
     console.error('Failed to list briefs:', error);
     return NextResponse.json({ error: 'Failed to list briefs' }, { status: 500 });
@@ -47,6 +53,7 @@ export async function POST(request: NextRequest) {
     const result = createBriefWithRun({
       ...parsed.data,
       topic_id: parsed.data.topic_id ?? null,
+      initiative_id: parsed.data.initiative_id ?? null,
     });
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
