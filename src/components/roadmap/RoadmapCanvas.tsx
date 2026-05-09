@@ -38,6 +38,8 @@ export function RoadmapCanvas({
   onUpdateDates,
   scrollRef,
   onScroll,
+  onScrollWeek,
+  onScrollToToday,
 }: {
   initiatives: RoadmapInitiative[];
   visibleIds: Set<string>;
@@ -51,7 +53,30 @@ export function RoadmapCanvas({
   onUpdateDates: (id: string, start: string | null, end: string | null) => void;
   scrollRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
+  onScrollWeek: (direction: 1 | -1) => void;
+  onScrollToToday: () => void;
 }) {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      onScrollWeek(-1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      onScrollWeek(1);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      onScrollToToday();
+    }
+  };
+
+  // Browsers don't always translate shift+wheel to horizontal scroll for
+  // inner scroll containers — wire it explicitly.
+  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (!e.shiftKey || e.deltaY === 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft += e.deltaY;
+  };
   // Width = days in window * pxPerDay.
   const totalDays = daysBetween(windowStart, windowEnd) + 1;
   const totalWidth = Math.max(640, totalDays * pxPerDay);
@@ -82,7 +107,10 @@ export function RoadmapCanvas({
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 overflow-auto bg-mc-bg"
+        onKeyDown={onKeyDown}
+        onWheel={onWheel}
+        tabIndex={0}
+        className="flex-1 overflow-auto bg-mc-bg outline-none focus:ring-1 focus:ring-mc-accent/40 focus:ring-inset"
       >
         <div style={{ width: totalWidth, position: 'relative' }}>
           {/* Axis */}

@@ -9,7 +9,7 @@
  */
 
 import { useMemo } from 'react';
-import { Layers, Filter } from 'lucide-react';
+import { Layers, Filter, ChevronLeft, ChevronRight, Crosshair } from 'lucide-react';
 import type { ZoomLevel } from '@/lib/roadmap/date-math';
 import type {
   Kind,
@@ -40,12 +40,16 @@ export function RoadmapToolbar({
   zoom,
   setZoom,
   snapshot,
+  onScrollWeek,
+  onScrollToToday,
 }: {
   filters: RoadmapFilters;
   setFilters: (next: RoadmapFilters) => void;
   zoom: ZoomLevel;
   setZoom: (z: ZoomLevel) => void;
   snapshot: RoadmapSnapshot | null;
+  onScrollWeek: (direction: 1 | -1) => void;
+  onScrollToToday: () => void;
 }) {
   const productOptions = useMemo(() => {
     const set = new Set<string>();
@@ -155,8 +159,35 @@ export function RoadmapToolbar({
         ))}
       </div>
 
+      {/* Nav: ◀ week / Today / ▶ week */}
+      <div className="ml-auto flex items-center gap-1 mr-1">
+        <button
+          onClick={() => onScrollWeek(-1)}
+          className="px-2 py-1 rounded text-xs border border-mc-border text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
+          title="Scroll one week earlier (←)"
+          aria-label="Scroll one week earlier"
+        >
+          <ChevronLeft className="w-3 h-3" /> week
+        </button>
+        <button
+          onClick={onScrollToToday}
+          className="px-2 py-1 rounded text-xs border border-mc-border text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
+          title="Center on today (Home)"
+        >
+          <Crosshair className="w-3 h-3" /> Today
+        </button>
+        <button
+          onClick={() => onScrollWeek(1)}
+          className="px-2 py-1 rounded text-xs border border-mc-border text-mc-text-secondary hover:text-mc-text inline-flex items-center gap-1"
+          title="Scroll one week later (→)"
+          aria-label="Scroll one week later"
+        >
+          week <ChevronRight className="w-3 h-3" />
+        </button>
+      </div>
+
       {/* Zoom */}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="flex items-center gap-1">
         <Layers className="w-3.5 h-3.5 text-mc-text-secondary" />
         {(['week', 'month', 'quarter'] as const).map(z => (
           <button
