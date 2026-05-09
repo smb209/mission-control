@@ -266,6 +266,133 @@ test('transitionTaskStatus returns not_found for missing task', () => {
   if (!result.ok) assert.equal(result.code, 'not_found');
 });
 
+// ─── transitionTaskStatus: review-stage gates (Slice 1 of review-robust) ───
+
+function setEnv(key: string, value: string | undefined): () => void {
+  const prior = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  return () => {
+    if (prior === undefined) delete process.env[key];
+    else process.env[key] = prior;
+  };
+}
+
+function seedDeliverable(taskId: string): void {
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (?, ?, 'file', 'x', 'output', datetime('now'))`,
+    [crypto.randomUUID(), taskId],
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (?, ?, 'completed', 'done', datetime('now'))`,
+    [crypto.randomUUID(), taskId],
+  );
+}
+
+test('transitionTaskStatus → review: reviewer_required when no reviewer agent exists (strict mode)', () => {
+  const restore = setEnv('MC_REVIEW_STRICT_GATING', '1');
+  try {
+    const builder = seedAgent({ role: 'builder' });
+    const task = seedTask({ assigned: builder, status: 'in_progress' });
+    seedDeliverable(task);
+    const result = transitionTaskStatus({
+      taskId: task,
+      actingAgentId: builder,
+      newStatus: 'review',
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.code, 'reviewer_required');
+  } finally { restore(); }
+});
+
+test('transitionTaskStatus → review: auto-picks reviewer agent + writes task_roles row (strict mode)', () => {
+  const restore = setEnv('MC_REVIEW_STRICT_GATING', '1');
+  try {
+    const builder = seedAgent({ role: 'builder' });
+    seedAgent({ role: 'reviewer' });
+    const task = seedTask({ assigned: builder, status: 'in_progress' });
+    seedDeliverable(task);
+    const result = transitionTaskStatus({
+      taskId: task,
+      actingAgentId: builder,
+      newStatus: 'review',
+    });
+    assert.equal(result.ok, true);
+    const { queryOne: qOne } = require('@/lib/db') as typeof import('@/lib/db');
+    const reviewerRow = qOne<{ agent_id: string }>(
+      `SELECT agent_id FROM task_roles WHERE task_id = ? AND role = 'reviewer'`,
+      [task],
+    );
+    assert.ok(reviewerRow);
+    assert.notEqual(reviewerRow!.agent_id, builder);
+  } finally { restore(); }
+});
+
+test('transitionTaskStatus → review: self_review_blocked when only reviewer is the completer (strict mode)', () => {
+  const restore = setEnv('MC_REVIEW_STRICT_GATING', '1');
+  try {
+    // Builder agent IS itself flagged as reviewer; no other agent available.
+    const solo = seedAgent({ role: 'reviewer' });
+    const task = seedTask({ assigned: solo, status: 'in_progress' });
+    // Pre-seed an explicit reviewer row pointing at the same agent — this is
+    // how the self-review case manifests when an explicit assignment exists.
+    run(
+      `INSERT INTO task_roles (id, task_id, role, agent_id, created_at)
+       VALUES (?, ?, 'reviewer', ?, datetime('now'))`,
+      [crypto.randomUUID(), task, solo],
+    );
+    seedDeliverable(task);
+    const result = transitionTaskStatus({
+      taskId: task,
+      actingAgentId: solo,
+      newStatus: 'review',
+    });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.code, 'self_review_blocked');
+  } finally { restore(); }
+});
+
+test('transitionTaskStatus → review: respects pre-assigned reviewer (strict mode)', () => {
+  const restore = setEnv('MC_REVIEW_STRICT_GATING', '1');
+  try {
+    const builder = seedAgent({ role: 'builder' });
+    const reviewer = seedAgent({ role: 'reviewer' });
+    const task = seedTask({ assigned: builder, status: 'in_progress' });
+    run(
+      `INSERT INTO task_roles (id, task_id, role, agent_id, created_at)
+       VALUES (?, ?, 'reviewer', ?, datetime('now'))`,
+      [crypto.randomUUID(), task, reviewer],
+    );
+    seedDeliverable(task);
+    const result = transitionTaskStatus({
+      taskId: task,
+      actingAgentId: builder,
+      newStatus: 'review',
+    });
+    assert.equal(result.ok, true);
+  } finally { restore(); }
+});
+
+test('transitionTaskStatus → review: skipped when MC_REVIEW_STRICT_GATING != "1" (back-compat)', () => {
+  const restore = setEnv('MC_REVIEW_STRICT_GATING', undefined);
+  try {
+    const solo = seedAgent({ role: 'builder' });
+    const task = seedTask({ assigned: solo, status: 'in_progress' });
+    seedDeliverable(task);
+    // No reviewer in workspace, builder is completer — strict mode would
+    // reject. With flag off, the legacy behavior (just evidence gate)
+    // applies and the transition succeeds.
+    const result = transitionTaskStatus({
+      taskId: task,
+      actingAgentId: solo,
+      newStatus: 'review',
+    });
+    assert.equal(result.ok, true);
+  } finally { restore(); }
+});
+
 // ─── agent-mailbox ──────────────────────────────────────────────────
 
 test('sendAgentMail throws AuthzError on cross-task mail', async () => {

@@ -32,9 +32,15 @@ import {
   whyCannotBeDone,
   isTerminalStatus,
   auditBoardOverride,
+  pickReviewerForTask,
 } from '@/lib/task-governance';
 import { assertAgentCanActOnTask } from '@/lib/authz/agent-task';
 import type { Task, TaskStatus } from '@/lib/types';
+
+/** Slice 1 strict gating is opt-in for one cycle while operators backfill. */
+function isStrictReviewGatingEnabled(): boolean {
+  return process.env.MC_REVIEW_STRICT_GATING === '1';
+}
 
 export interface TransitionTaskStatusInput {
   taskId: string;
@@ -62,7 +68,9 @@ export type TransitionTaskStatusResult =
         | 'terminal_blocked'
         | 'evidence_gate'
         | 'status_reason_required'
-        | 'cannot_mark_done';
+        | 'cannot_mark_done'
+        | 'self_review_blocked'
+        | 'reviewer_required';
       error: string;
       missingDeliverableIds?: string[];
     };
@@ -110,6 +118,64 @@ export function transitionTaskStatus(
       code: 'terminal_blocked',
       error: `Cannot transition cancelled task to ${newStatus}. Create a new task or use board_override.`,
     };
+  }
+
+  // Review-stage gates (Slice 1 of review-stage-robustness).
+  // Run before the evidence gate so the rejection reason is unambiguous.
+  // Strict mode is opt-in via MC_REVIEW_STRICT_GATING=1 to allow a backfill
+  // cycle for in-flight workspaces without reviewer agents.
+  if (
+    newStatus === 'review' &&
+    !boardOverride &&
+    isStrictReviewGatingEnabled()
+  ) {
+    const workspaceId = (existing.workspace_id ?? 'default') as string;
+    const completerId = actingAgentId ?? existing.assigned_agent_id ?? null;
+
+    // Self-review interlock. Reviewer must differ from the agent who did
+    // the work. Prefer an explicit task_roles reviewer row when present;
+    // otherwise auto-pick now and persist the row.
+    const explicitReviewer = queryOne<{ agent_id: string }>(
+      `SELECT agent_id FROM task_roles WHERE task_id = ? AND role = 'reviewer' LIMIT 1`,
+      [taskId],
+    );
+    let reviewerAgentId: string | null = explicitReviewer?.agent_id ?? null;
+
+    if (!reviewerAgentId) {
+      const picked = pickReviewerForTask({
+        taskId,
+        workspaceId,
+        excludeAgentId: completerId,
+      });
+      reviewerAgentId = picked?.id ?? null;
+    }
+
+    if (!reviewerAgentId) {
+      return {
+        ok: false,
+        code: 'reviewer_required',
+        error:
+          'Cannot enter review: no reviewer agent available in this workspace. Onboard or enable a reviewer-role agent (or use board_override).',
+      };
+    }
+
+    if (completerId && reviewerAgentId === completerId) {
+      return {
+        ok: false,
+        code: 'self_review_blocked',
+        error:
+          'Cannot enter review: the agent who did the work cannot also be the reviewer. Onboard or enable a separate reviewer agent.',
+      };
+    }
+
+    // Idempotent reviewer assignment: only insert if no row exists.
+    if (!explicitReviewer) {
+      run(
+        `INSERT OR IGNORE INTO task_roles (id, task_id, role, agent_id, created_at)
+         VALUES (lower(hex(randomblob(16))), ?, 'reviewer', ?, datetime('now'))`,
+        [taskId, reviewerAgentId],
+      );
+    }
   }
 
   // Evidence gate for forward moves into quality stages.
