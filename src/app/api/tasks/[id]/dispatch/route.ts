@@ -14,6 +14,7 @@ import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner'
 import { getTaskWorkflow } from '@/lib/workflow-engine';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { pickDynamicAgent } from '@/lib/task-governance';
+import { enforceRosterGate } from '@/lib/dispatch/roster-gate';
 import { buildCheckpointContext, saveCheckpoint, getLatestCheckpoint } from '@/lib/checkpoint';
 import { clearStallFlag } from '@/lib/stall-detection';
 import { logDebugEvent } from '@/lib/debug-log';
@@ -111,6 +112,26 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     if (!task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    // Pre-dispatch roster gate (Slice 0 of review-stage-robustness).
+    // Refuses to dispatch when the workspace can't field every role the
+    // task will need across its lifecycle. On failure, the gate has
+    // already flipped the task to `needs_user_input` and pinged the
+    // operator — we just translate the structured result to HTTP.
+    // No-op when MC_ROSTER_GATE != '1'.
+    const rosterGate = await enforceRosterGate(id);
+    if (!rosterGate.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: rosterGate.message,
+          code: rosterGate.code,
+          missing: rosterGate.missing,
+          available_by_role: rosterGate.availableByRole,
+        },
+        { status: 422 },
+      );
     }
 
     let assignedAgentId = task.assigned_agent_id;

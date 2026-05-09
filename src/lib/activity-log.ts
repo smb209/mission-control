@@ -17,7 +17,8 @@ export type ServerActivityType =
   | 'stall_notified'   // stall scanner messaged coordinator / webhook
   | 'stall_recovered'  // coordinator / dispatch clears a stall flag
   | 'coordinator_stalled'   // convoy coordinator itself can't be reached
-  | 'coordinator_missing';  // convoy has no live coordinator
+  | 'coordinator_missing'   // convoy has no live coordinator
+  | 'roster_incomplete';    // pre-dispatch roster gate refused: workspace missing required role(s)
 
 interface LogActivityInput {
   taskId: string;
