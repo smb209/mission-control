@@ -926,7 +926,7 @@ or "carve out the onboarding flow as its own story first"`}
               // Render the saved value as markdown so links, lists, and
               // headings show up. Editing falls back to the raw textarea.
               renderDisplay={v => (
-                <div className="mc-md text-mc-text">
+                <div className="mc-md text-sm text-mc-text">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{v}</ReactMarkdown>
                 </div>
               )}
