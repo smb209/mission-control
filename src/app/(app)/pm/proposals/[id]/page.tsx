@@ -128,6 +128,11 @@ export default function ProposalDetailPage({
 
   const refine = async () => {
     if (!proposal || !refineText.trim()) return;
+    // Belt-and-suspenders: input.disabled blocks Enter on most browsers
+    // but stale state can still let a second invocation through. Guarding
+    // here ensures refineProposal can't be called twice for one click +
+    // create two child drafts.
+    if (refining) return;
     setRefining(true);
     setRefineErr(null);
     try {

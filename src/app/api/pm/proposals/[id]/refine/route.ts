@@ -81,6 +81,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     let newChanges: unknown[];
     let newPlanSuggestions: unknown = null;
 
+    // If anything in the per-branch work below throws (gateway timeout,
+    // synth blowup, etc.) we'd otherwise leave `child` as a draft row with
+    // impact_md='_(refining…)_' that's indistinguishable from a real
+    // proposal in the UI. Catch + delete so the operator sees nothing
+    // rather than a permanently-stalled placeholder.
+    try {
     if (parent.trigger_kind === 'plan_initiative') {
       const ctx = parseTriggerContext(parent.trigger_text);
       // When trigger_text is old free-text format, extract the title from
@@ -357,6 +363,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
     const refreshed = getProposal(child.id)!;
     return NextResponse.json({ proposal: refreshed }, { status: 201 });
+    } catch (innerErr) {
+      // Per-branch failure (gateway timeout, synth blowup, agent crash).
+      // Drop the placeholder child rather than leaving a `_(refining…)_`
+      // ghost in the operator's view, then re-throw to the outer handler.
+      try {
+        const { run: del } = await import('@/lib/db');
+        del('DELETE FROM pm_proposals WHERE id = ?', [child.id]);
+      } catch (cleanupErr) {
+        console.warn(
+          '[refine] orphan child cleanup failed:',
+          (cleanupErr as Error).message,
+        );
+      }
+      throw innerErr;
+    }
   } catch (err) {
     if (err instanceof PmProposalValidationError) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });

@@ -114,6 +114,11 @@ export default function PmChatPage() {
   // operator out forever. See specs/pm-chat-prompt.md PR A §4.
   const [awaitingAgent, setAwaitingAgent] = useState<{ since: number; userMessageCount: number } | null>(null);
   const [refining, setRefining] = useState<string | null>(null);
+  // Separate in-flight flag from the "which input is open" state so we
+  // can disable Send + ignore Enter while a refine POST is awaiting. A
+  // double-fire (button + Enter, or browser auto-submit) would otherwise
+  // call refineProposal twice and create two child drafts.
+  const [refineSubmitting, setRefineSubmitting] = useState(false);
   const [refineText, setRefineText] = useState('');
   const [runningStandup, setRunningStandup] = useState(false);
   const [standupBanner, setStandupBanner] = useState<string | null>(null);
@@ -616,6 +621,8 @@ export default function PmChatPage() {
 
   const onRefineSubmit = async (parentId: string) => {
     if (!refineText.trim()) return;
+    if (refineSubmitting) return;
+    setRefineSubmitting(true);
     try {
       const res = await fetch(`/api/pm/proposals/${parentId}/refine`, {
         method: 'POST',
@@ -629,6 +636,8 @@ export default function PmChatPage() {
       await loadRecent();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setRefineSubmitting(false);
     }
   };
 
@@ -875,6 +884,7 @@ export default function PmChatPage() {
                   onReject={onReject}
                   refining={refining}
                   refineText={refineText}
+                  refineSubmitting={refineSubmitting}
                   onRefineStart={(id) => { setRefining(id); setRefineText(''); }}
                   onRefineCancel={() => { setRefining(null); setRefineText(''); }}
                   onRefineSubmit={onRefineSubmit}
@@ -1154,6 +1164,9 @@ interface ChatMessageRowProps {
   onReject: (id: string) => void;
   refining: string | null;
   refineText: string;
+  /** True while a refine POST is in flight — disables Send + suppresses
+   *  Enter so a double-fire can't create two child drafts. */
+  refineSubmitting: boolean;
   onRefineStart: (id: string) => void;
   onRefineCancel: () => void;
   onRefineSubmit: (id: string) => void;
@@ -1174,6 +1187,7 @@ function ChatMessageRow({
   onReject,
   refining,
   refineText,
+  refineSubmitting,
   onRefineStart,
   onRefineCancel,
   onRefineSubmit,
@@ -1320,21 +1334,25 @@ function ChatMessageRow({
                   value={refineText}
                   onChange={e => onRefineTextChange(e.target.value)}
                   onKeyDown={e => {
+                    if (refineSubmitting) return;
                     if (e.key === 'Enter') { e.preventDefault(); onRefineSubmit(proposal.id); }
                     if (e.key === 'Escape') { onRefineCancel(); }
                   }}
                   placeholder="Add a constraint (e.g. don't slip launch)"
-                  className="flex-1 bg-mc-bg border border-mc-border rounded-sm px-2 py-1 text-xs focus:outline-hidden focus:border-mc-accent"
+                  disabled={refineSubmitting}
+                  className="flex-1 bg-mc-bg border border-mc-border rounded-sm px-2 py-1 text-xs focus:outline-hidden focus:border-mc-accent disabled:opacity-60"
                 />
                 <button
                   type="button"
                   onClick={() => onRefineSubmit(proposal.id)}
-                  className="text-xs px-2 py-1 bg-mc-accent text-mc-bg rounded-sm hover:bg-mc-accent/90"
-                >Send</button>
+                  disabled={refineSubmitting}
+                  className="text-xs px-2 py-1 bg-mc-accent text-mc-bg rounded-sm hover:bg-mc-accent/90 disabled:opacity-50 disabled:hover:bg-mc-accent"
+                >{refineSubmitting ? 'Sending…' : 'Send'}</button>
                 <button
                   type="button"
                   onClick={onRefineCancel}
-                  className="text-xs px-2 py-1 text-mc-text-secondary hover:text-mc-text"
+                  disabled={refineSubmitting}
+                  className="text-xs px-2 py-1 text-mc-text-secondary hover:text-mc-text disabled:opacity-50"
                 >Cancel</button>
               </>
             ) : (() => {
