@@ -37,6 +37,7 @@ export interface Brief {
   workspace_id: string;
   agent_run_id: string;
   topic_id: string | null;
+  initiative_id: string | null;
   template: BriefTemplate;
   title: string;
   prompt: string;
@@ -44,6 +45,8 @@ export interface Brief {
   result_md: string | null;
   citations: BriefCitation[];
   error_md: string | null;
+  summary: string | null;
+  source_ref: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,13 +56,16 @@ interface BriefRow {
   workspace_id: string;
   agent_run_id: string;
   topic_id: string | null;
+  initiative_id: string | null;
   template: BriefTemplate;
   title: string;
   prompt: string;
   requested_by: string;
+  source_ref: string | null;
   result_md: string | null;
   citations_json: string | null;
   error_md: string | null;
+  summary: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -88,6 +94,7 @@ function rowToBrief(row: BriefRow): Brief {
     workspace_id: row.workspace_id,
     agent_run_id: row.agent_run_id,
     topic_id: row.topic_id,
+    initiative_id: row.initiative_id,
     template: row.template,
     title: row.title,
     prompt: row.prompt,
@@ -95,6 +102,8 @@ function rowToBrief(row: BriefRow): Brief {
     result_md: row.result_md,
     citations: parseCitations(row.citations_json),
     error_md: row.error_md,
+    summary: row.summary,
+    source_ref: row.source_ref,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -106,6 +115,7 @@ export interface CreateBriefInput {
   title: string;
   prompt: string;
   topic_id?: string | null;
+  initiative_id?: string | null;
   requested_by?: string;
   source_kind?: AgentRunSourceKind;
   source_ref?: string | null;
@@ -154,18 +164,20 @@ export function createBriefWithRun(input: CreateBriefInput): CreateBriefResult {
     const id = uuidv4();
     run(
       `INSERT INTO briefs (
-         id, workspace_id, agent_run_id, topic_id, template,
-         title, prompt, requested_by, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+         id, workspace_id, agent_run_id, topic_id, initiative_id, template,
+         title, prompt, requested_by, source_ref, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
       [
         id,
         input.workspace_id,
         agent_run.id,
         input.topic_id ?? null,
+        input.initiative_id ?? null,
         input.template,
         input.title.trim(),
         input.prompt,
         input.requested_by ?? 'manual',
+        input.source_ref ?? null,
       ],
     );
     const row = queryOne<BriefRow>(`SELECT * FROM briefs WHERE id = ?`, [id]);
@@ -186,6 +198,7 @@ export function getBriefByAgentRun(agentRunId: string): Brief | null {
 
 export interface ListBriefsOptions {
   topic_id?: string;
+  initiative_id?: string;
   limit?: number;
 }
 
@@ -195,6 +208,10 @@ export function listBriefs(workspaceId: string, opts: ListBriefsOptions = {}): B
   if (opts.topic_id) {
     where.push('topic_id = ?');
     params.push(opts.topic_id);
+  }
+  if (opts.initiative_id) {
+    where.push('initiative_id = ?');
+    params.push(opts.initiative_id);
   }
   const limit = Math.min(opts.limit ?? 100, 500);
   const rows = queryAll<BriefRow>(
@@ -258,4 +275,48 @@ export function setBriefError(id: string, errorMd: string): Brief | null {
     [errorMd, id],
   );
   return getBrief(id);
+}
+
+/**
+ * Persist the one-line `summary` for a brief. Computed at completion
+ * time (slice 3 — see specs/initiative-research-loop-build-plan.md D1)
+ * from the first sentence of `result_md`, capped at 160 chars.
+ */
+export function setBriefSummary(id: string, summary: string): Brief | null {
+  const current = getBrief(id);
+  if (!current) return null;
+  run(
+    `UPDATE briefs SET summary = ?, updated_at = datetime('now') WHERE id = ?`,
+    [summary, id],
+  );
+  return getBrief(id);
+}
+
+/**
+ * Walk `briefs.source_ref` (`brief:<id>`) backwards to the chain root
+ * — the original brief that hasn't itself been re-run. Used by the
+ * auto-note rerun-replace path so we soft-delete the prior auto-note
+ * regardless of how many reruns deep we are.
+ *
+ * Cycle-safe via a 32-step ceiling — that's more reruns than will ever
+ * realistically happen on a single brief; if we hit the ceiling we
+ * just return the latest seen id rather than loop forever.
+ */
+export function findBriefChainRoot(id: string): string {
+  const SEEN_LIMIT = 32;
+  const seen = new Set<string>();
+  let cursor = id;
+  for (let i = 0; i < SEEN_LIMIT; i++) {
+    if (seen.has(cursor)) return cursor;
+    seen.add(cursor);
+    const row = queryOne<{ source_ref: string | null }>(
+      `SELECT source_ref FROM briefs WHERE id = ?`,
+      [cursor],
+    );
+    if (!row || !row.source_ref) return cursor;
+    const m = /^brief:(.+)$/.exec(row.source_ref);
+    if (!m) return cursor;
+    cursor = m[1];
+  }
+  return cursor;
 }

@@ -338,3 +338,38 @@ test('listNotes: workspace deletion cascades agent_notes (FK)', () => {
   );
   assert.equal(after?.n, 0);
 });
+
+test('createNote: persists source_kind / source_ref and findNotesBySource scopes by archived_at', async () => {
+  const { findNotesBySource, archiveNote } = await import('./agent-notes');
+  const ws = freshWorkspace();
+  const briefId = `brief-${uuidv4().slice(0, 8)}`;
+
+  const a = createNote(
+    baseInput(ws, {
+      body: 'auto-note from brief A',
+      source_kind: 'brief',
+      source_ref: briefId,
+    }),
+  );
+  assert.equal(a.source_kind, 'brief');
+  assert.equal(a.source_ref, briefId);
+
+  // A second note with a different source_ref is not picked up.
+  createNote(baseInput(ws, { body: 'unrelated', source_kind: 'brief', source_ref: 'other-brief' }));
+
+  const found = findNotesBySource('brief', briefId);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].id, a.id);
+
+  // Archived notes are excluded by default and included on opt-in.
+  archiveNote(a.id, 'superseded_by_rerun');
+  assert.equal(findNotesBySource('brief', briefId).length, 0);
+  assert.equal(findNotesBySource('brief', briefId, { include_archived: true }).length, 1);
+});
+
+test('createNote: source_kind / source_ref default to null', () => {
+  const ws = freshWorkspace();
+  const note = createNote(baseInput(ws, { body: 'no source' }));
+  assert.equal(note.source_kind, null);
+  assert.equal(note.source_ref, null);
+});
