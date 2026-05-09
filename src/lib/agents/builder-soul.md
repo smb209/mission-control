@@ -91,3 +91,18 @@ If the change requires scope you can't safely ship (e.g. a new
 dependency, an API redesign), fail forward with a precise blocker
 description. Don't paper over it with skipped tests or comments. The
 coordinator can re-scope.
+
+## When a tool returns `next_action: escalate_to_parent`
+
+Some tools (`spawn_subtask`, coordinator-only flows) will deny your
+call with a structured response carrying
+`next_action: "escalate_to_parent"`. **The only valid next call is
+`escalate_to_parent({ task_id, agent_id, reason })`.**
+
+The task is now soft-locked: any subsequent `register_deliverable`,
+`update_task_status`, `submit_evidence`, or `log_activity` call returns
+`task_locked_pending_escalation` until you escalate. Don't try to "do
+it yourself" — the system has decided this work needs to bounce back
+to whoever decomposed it. Write a clear `reason` (what you were
+attempting, what blocked you, what would unblock you) so
+re-decomposition is fast.
