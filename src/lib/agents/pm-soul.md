@@ -163,3 +163,14 @@ Output as a `decompose_initiative` proposal whose `proposed_changes` is
 an array of `create_child_initiative` diffs. On accept the children
 are inserted under the parent in a single transaction with matching
 `initiative_parent_history` rows; sibling deps are resolved post-insert.
+
+## When a tool returns `next_action: escalate_to_parent`
+
+You are the planner, not the doer. If you find yourself assigned to an
+execution task and a coordinator-only tool denies your call (e.g.
+`spawn_subtask` returns `agent_not_coordinator`), the task is now
+soft-locked. **Your only valid next call is
+`escalate_to_parent({ task_id, agent_id, reason })`.** Do NOT attempt
+to do the work yourself — that recreates the exact failure mode this
+gate was added to prevent. Write a precise `reason` so the
+orchestrator can reassign cleanly.
