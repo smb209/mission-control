@@ -815,29 +815,12 @@ or "carve out the onboarding flow as its own story first"`}
                 Sizing
               </div>
               <MetaRow label="owner">
-                <InlineSelect<string>
-                  value={initiative.owner_agent_id ?? ''}
-                  onSave={next =>
-                    patch({ owner_agent_id: next.length > 0 ? next : null })
-                  }
-                  options={[
-                    { value: '', label: 'Unassigned' },
-                    ...agents.map(a => ({
-                      value: a.id,
-                      label: `${a.avatar_emoji}  ${a.name}  ${a.role}`,
-                    })),
-                  ]}
-                  renderDisplay={v => {
-                    const a = agents.find(x => x.id === v);
-                    return a ? (
-                      <span>
-                        {a.avatar_emoji} {a.name}
-                      </span>
-                    ) : (
-                      <span className="text-mc-text-secondary">—</span>
-                    );
+                <OwnerPicker
+                  value={initiative.owner_agent_id}
+                  agents={agents}
+                  onSave={async next => {
+                    await patch({ owner_agent_id: next });
                   }}
-                  label="Edit owner"
                 />
               </MetaRow>
               <MetaRow label="complexity">
@@ -1002,14 +985,14 @@ or "carve out the onboarding flow as its own story first"`}
                     <button
                       type="button"
                       onClick={() => onSelectInitiative(c.id)}
-                      className="font-medium text-mc-text hover:text-mc-accent text-left"
+                      className="text-sm font-medium text-mc-text hover:text-mc-accent text-left"
                     >
                       {c.title}
                     </button>
                   ) : (
                     <Link
                       href={`/initiatives/${c.id}`}
-                      className="font-medium text-mc-text hover:text-mc-accent"
+                      className="text-sm font-medium text-mc-text hover:text-mc-accent"
                     >
                       {c.title}
                     </Link>
@@ -1894,6 +1877,142 @@ function StatusPickerPill({
                   } disabled:opacity-50`}
                 >
                   {pill.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {err && (
+        <span className="ml-2 text-[11px] text-red-400">{err}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Owner picker — replaces the native <select> InlineSelect specifically
+ * for the owner field. The native dropdown was rendering disconnected
+ * from the trigger (browser-controlled positioning anchors the selected
+ * option onto the trigger; with a long agent list the popup would land
+ * far below the actual row). This custom popover mirrors the
+ * StatusPickerPill pattern: anchored directly under the trigger with
+ * `top-full mt-1`, scoped to the trigger's relative parent, with
+ * outside-click + Escape dismissal.
+ *
+ * Selecting an option saves immediately — no Save / Cancel ActionRow,
+ * since picker semantics are "this row IS the choice".
+ */
+function OwnerPicker({
+  value,
+  agents,
+  onSave,
+}: {
+  value: string | null;
+  agents: AgentLite[];
+  onSave: (next: string | null) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const pick = async (next: string | null) => {
+    if (next === value) {
+      setOpen(false);
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSave(next);
+      setOpen(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const current = agents.find(a => a.id === value) ?? null;
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        disabled={saving}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Edit owner"
+        title="Change owner"
+        className="text-left hover:text-mc-accent disabled:opacity-50"
+      >
+        {current ? (
+          <span>
+            {current.avatar_emoji} {current.name}
+          </span>
+        ) : (
+          <span className="text-mc-text-secondary/60 italic">Click to set</span>
+        )}
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Owner options"
+          className="absolute left-0 top-full mt-1 z-30 min-w-[14rem] max-h-72 overflow-auto p-1 rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg"
+        >
+          <li>
+            <button
+              type="button"
+              role="option"
+              aria-selected={current === null}
+              onClick={() => pick(null)}
+              disabled={saving}
+              className={`w-full text-left px-2 py-1.5 rounded text-xs text-mc-text-secondary hover:bg-mc-bg ${
+                current === null ? 'ring-1 ring-mc-accent/60' : ''
+              } disabled:opacity-50`}
+            >
+              Unassigned
+            </button>
+          </li>
+          {agents.map(a => {
+            const selected = a.id === value;
+            return (
+              <li key={a.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => pick(a.id)}
+                  disabled={saving}
+                  className={`w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 text-mc-text hover:bg-mc-bg ${
+                    selected ? 'ring-1 ring-mc-accent/60' : ''
+                  } disabled:opacity-50`}
+                >
+                  <span>{a.avatar_emoji}</span>
+                  <span>{a.name}</span>
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-mc-text-secondary">
+                    {a.role}
+                  </span>
                 </button>
               </li>
             );
