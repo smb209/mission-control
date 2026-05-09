@@ -245,7 +245,11 @@ export default function ProposalDetailPage({
               )}
 
               {/* Actions */}
-              {proposal.status === 'draft' && (
+              {proposal.status !== 'accepted' && (
+                // Refine is allowed on draft, superseded, and rejected —
+                // the DB only blocks accepted (refineProposal in
+                // pm-proposals.ts). Accept/Reject still gated to draft
+                // below since those mutate state that's already moved on.
                 <div className="px-4 py-3 bg-amber-500/5 flex flex-wrap items-center gap-2">
                   {showRefineInput ? (
                     <>
@@ -290,22 +294,26 @@ export default function ProposalDetailPage({
                       >
                         <RefreshCw className="w-3 h-3" /> Refine
                       </button>
-                      <button
-                        type="button"
-                        onClick={accept}
-                        disabled={acting !== null}
-                        className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1 disabled:opacity-50"
-                      >
-                        <Check className="w-3 h-3" /> {acting === 'accept' ? 'Accepting…' : 'Accept'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={reject}
-                        disabled={acting !== null}
-                        className="text-xs px-2 py-1 bg-red-500/20 border border-red-500/40 text-red-200 rounded-sm hover:bg-red-500/30 flex items-center gap-1 disabled:opacity-50"
-                      >
-                        <X className="w-3 h-3" /> {acting === 'reject' ? 'Rejecting…' : 'Reject'}
-                      </button>
+                      {proposal.status === 'draft' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={accept}
+                            disabled={acting !== null}
+                            className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <Check className="w-3 h-3" /> {acting === 'accept' ? 'Accepting…' : 'Accept'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={reject}
+                            disabled={acting !== null}
+                            className="text-xs px-2 py-1 bg-red-500/20 border border-red-500/40 text-red-200 rounded-sm hover:bg-red-500/30 flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <X className="w-3 h-3" /> {acting === 'reject' ? 'Rejecting…' : 'Reject'}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </div>

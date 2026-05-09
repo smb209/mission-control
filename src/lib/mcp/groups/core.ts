@@ -468,11 +468,25 @@ export function registerCoreTools(server: McpServer): void {
           }
         }
 
+        // Defensive backfill: agents under tight validation pressure
+        // (body-cap retries, missing-field cascades) sometimes drop
+        // initiative_id / task_id across attempts even when the prompt
+        // told them to set it. The scope_key is canonically formed as
+        // `initiative-<uuid>:…` or `task-<uuid>:…`, so we can recover
+        // the link without re-prompting. Without this, the note writes
+        // with NULL fk and disappears from the initiative/task UI even
+        // though the audit succeeded. See May 9 audit:2 incident.
+        const scopeMatch = /^(initiative|task)-([0-9a-f-]{36}):/i.exec(args.scope_key);
+        const scopeInitiativeId =
+          scopeMatch && scopeMatch[1].toLowerCase() === 'initiative' ? scopeMatch[2] : null;
+        const scopeTaskId =
+          scopeMatch && scopeMatch[1].toLowerCase() === 'task' ? scopeMatch[2] : null;
+
         const note = createNote({
           workspace_id: deriveWorkspaceFromAgent(args.agent_id),
           agent_id: args.agent_id,
-          task_id: args.task_id ?? null,
-          initiative_id: args.initiative_id ?? null,
+          task_id: args.task_id ?? scopeTaskId ?? null,
+          initiative_id: args.initiative_id ?? scopeInitiativeId ?? null,
           scope_key: args.scope_key,
           role: args.role,
           run_group_id: args.run_group_id,

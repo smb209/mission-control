@@ -547,6 +547,50 @@ export interface CreateProposalInput {
   reverts_proposal_id?: string | null;
 }
 
+/**
+ * Walk the proposed changes and return the single initiative_id they
+ * all converge on, if any. Used by `createProposal` to auto-populate
+ * `target_initiative_id` so list-view affordances ("this initiative
+ * has a pending PM proposal") can do an indexed lookup instead of
+ * scanning the JSON blob.
+ *
+ * Strict by design: every diff must contribute the same initiative id.
+ * A single initiative-agnostic diff (add_availability, remove_dependency,
+ * reorder_initiatives, set_task_status) means the proposal isn't really
+ * "about" one initiative, and we don't want to auto-link it — the FK is
+ * `ON DELETE CASCADE`, so a wrong link can vaporize a multi-purpose
+ * proposal when an unrelated initiative is deleted.
+ */
+export function inferTargetInitiativeId(changes: PmDiff[]): string | null {
+  if (changes.length === 0) return null;
+  const ids = new Set<string>();
+  for (const c of changes) {
+    let id: string | undefined;
+    switch (c.kind) {
+      case 'shift_initiative_target':
+      case 'set_initiative_status':
+      case 'add_dependency':
+      case 'update_status_check':
+      case 'create_task_under_initiative':
+        id = c.initiative_id;
+        break;
+      case 'create_child_initiative':
+        id = c.parent_initiative_id;
+        break;
+      default:
+        // Initiative-agnostic kind (add_availability, remove_dependency,
+        // reorder_initiatives, set_task_status) — bail out, proposal
+        // stays untargeted.
+        return null;
+    }
+    // Placeholder ids ($N) reference siblings created in the same
+    // proposal; they don't anchor the target.
+    if (!id || id.startsWith('$')) return null;
+    ids.add(id);
+  }
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
 export function createProposal(input: CreateProposalInput): PmProposal {
   if (!input.workspace_id) throw new PmProposalValidationError('workspace_id required');
   if (!input.trigger_text) throw new PmProposalValidationError('trigger_text required');
@@ -566,6 +610,12 @@ export function createProposal(input: CreateProposalInput): PmProposal {
     );
   }
 
+  // Fall back to inferring a single-initiative target from the diff so
+  // the initiative list can render a "pending PM proposal" chip without
+  // scanning the proposed_changes JSON. Caller-supplied value wins.
+  const resolvedTargetId =
+    input.target_initiative_id ?? inferTargetInitiativeId(input.proposed_changes ?? []);
+
   const id = uuidv4();
   const now = new Date().toISOString();
   run(
@@ -582,7 +632,7 @@ export function createProposal(input: CreateProposalInput): PmProposal {
       JSON.stringify(input.proposed_changes ?? []),
       input.plan_suggestions != null ? JSON.stringify(input.plan_suggestions) : null,
       input.parent_proposal_id ?? null,
-      input.target_initiative_id ?? null,
+      resolvedTargetId,
       input.dispatch_state ?? 'agent_complete',
       input.reverts_proposal_id ?? null,
       now,
