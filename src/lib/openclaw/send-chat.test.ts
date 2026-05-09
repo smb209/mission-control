@@ -352,6 +352,85 @@ test('sendChatAndAwaitReply: custom isDone predicate fires before default state=
   }
 });
 
+test('sendChatAndAwaitReply: idle timeout fires before hard ceiling when stream goes silent', async () => {
+  const sk = 'agent:mc-project-manager:main';
+  const stub = makeStub({
+    callImpl: async () => {
+      // Emit one streaming event, then stop. The idle clock should
+      // start fresh on this event and elapse well before the hard
+      // ceiling, ending the wait at idle.
+      queueMicrotask(() => {
+        stub.emit({ sessionKey: sk, state: 'streaming', message: 'partial' });
+      });
+      return undefined;
+    },
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const t0 = Date.now();
+    const result = await sendChatAndAwaitReply({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 2_000,
+      idleTimeoutMs: 80,
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(result.timedOut, true);
+    assert.equal(result.timeoutReason, 'idle');
+    assert.equal(result.doneEvent, undefined);
+    assert.ok(elapsed < 1_000, `should resolve at idle (~80ms + activity), got ${elapsed}ms`);
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatAndAwaitReply: idle timer resets on every event; hard ceiling still bounds the wait', async () => {
+  const sk = 'agent:mc-project-manager:main';
+  const stub = makeStub({
+    callImpl: async () => {
+      // Heartbeat-style: emit an event every 30ms forever. With idle=80ms
+      // and ceiling=200ms, idle should NEVER fire (each event resets it),
+      // but the hard ceiling should still cut us off at ~200ms.
+      const interval = setInterval(() => {
+        stub.emit({ sessionKey: sk, state: 'streaming', message: 'tick' });
+      }, 30);
+      // Auto-clear after 500ms so the test process doesn't leak a timer.
+      setTimeout(() => clearInterval(interval), 500).unref?.();
+      return undefined;
+    },
+  });
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatAndAwaitReply({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 200,
+      idleTimeoutMs: 80,
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.timeoutReason, 'max');
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
+test('sendChatAndAwaitReply: idle disabled (no idleTimeoutMs) keeps legacy single-timer behavior', async () => {
+  const stub = makeStub();
+  __setSendChatClientForTests(stub.client);
+  try {
+    const result = await sendChatAndAwaitReply({
+      agent: FAKE_AGENT,
+      message: 'hi',
+      timeoutMs: 100,
+      // no idleTimeoutMs
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.timeoutReason, 'max');
+  } finally {
+    __setSendChatClientForTests(null);
+  }
+});
+
 // ─── timeoutMs + response (sendChatToAgent) ─────────────────────────
 
 test('sendChatToAgent: timeoutMs triggers reason=timeout when send exceeds the budget', async () => {

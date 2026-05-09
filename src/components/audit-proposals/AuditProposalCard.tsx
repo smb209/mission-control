@@ -371,8 +371,11 @@ function Evidence({ refs }: { refs: AuditProposalBody['repo_evidence'] }) {
             </code>
           )}
           {r.kind === 'git' && (
-            <code className="px-1.5 py-0.5 bg-mc-bg-secondary border border-mc-border rounded font-mono">
-              {r.ref.slice(0, 7)}
+            <code
+              className="px-1.5 py-0.5 bg-mc-bg-secondary border border-mc-border rounded font-mono"
+              title={r.ref}
+            >
+              {/^[0-9a-f]{7,40}(:.+)?$/i.test(r.ref) ? r.ref.slice(0, 7) : r.ref}
             </code>
           )}
           {r.kind === 'pr' && /^https?:\/\//.test(r.ref) ? (

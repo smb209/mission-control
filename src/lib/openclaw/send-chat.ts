@@ -123,8 +123,28 @@ export interface ChatEvent {
 }
 
 export interface SendChatAndAwaitInput extends SendChatInput {
-  /** Wall-clock budget for the round-trip. Default 60_000ms. */
+  /**
+   * Hard wall-clock ceiling for the round-trip. Default 60_000ms. The
+   * wait will resolve as `timedOut: true` once this elapses, even if
+   * activity is still arriving on the session. Treat this as the
+   * upper bound on a single dispatch.
+   */
   timeoutMs?: number;
+  /**
+   * Optional soft (idle) timeout. When set, the wait also resolves as
+   * `timedOut: true` if no `chat_event` or `agent_event` for this
+   * sessionKey has arrived within `idleTimeoutMs`. The clock resets on
+   * every matching frame. The hard `timeoutMs` ceiling still applies.
+   *
+   * Use case: dispatch-side recovery from a missed `state: 'final'`
+   * frame. If the agent really is done (no further tool calls / token
+   * deltas) but the gateway didn't tag a `final`, idle-detection ends
+   * the wait at `idleTimeoutMs` instead of burning the full ceiling.
+   *
+   * Set to 0 / undefined to disable (legacy single-timer behavior).
+   * Values >= `timeoutMs` are equivalent to disabled.
+   */
+  idleTimeoutMs?: number;
   /**
    * Predicate to recognise the agent's "done" frame. The default matches
    * `event.state === 'final'` — same signal the existing chat-listener
@@ -138,6 +158,10 @@ export interface SendChatAndAwaitInput extends SendChatInput {
    * calls, tool results, and status transitions ride this channel.
    * Filtered by sessionKey the same way chat_events are. Caller-side
    * exceptions are swallowed so a noisy tap can't break the wait.
+   *
+   * Note: independent of this tap, an agent_event listener is always
+   * attached when `idleTimeoutMs` is set, so tool-call activity bumps
+   * the idle clock without the caller needing to opt in.
    */
   onAgentEvent?: (event: AgentEvent) => void;
 }
@@ -148,6 +172,12 @@ export interface SendChatAndAwaitResult extends SendChatResult {
   doneEvent?: ChatEvent;
   /** True when the deadline elapsed before `isDone` fired. */
   timedOut?: boolean;
+  /**
+   * When `timedOut: true`, why — `'idle'` if `idleTimeoutMs` elapsed
+   * with no activity, `'max'` if the hard `timeoutMs` ceiling fired.
+   * Absent on success.
+   */
+  timeoutReason?: 'idle' | 'max';
 }
 
 // ─── Test seam ──────────────────────────────────────────────────────
@@ -349,6 +379,8 @@ export async function sendChatAndAwaitReply(
   const sessionKey = buildAgentSessionKey(input.agent, input.sessionSuffix);
   const idempotencyKey = input.idempotencyKey ?? uuidv4();
   const timeoutMs = input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS;
+  const idleTimeoutMs = input.idleTimeoutMs ?? 0;
+  const idleEnabled = idleTimeoutMs > 0 && idleTimeoutMs < timeoutMs;
   const isDone = input.isDone ?? DEFAULT_IS_DONE;
   const client = getClient();
 
@@ -364,9 +396,25 @@ export async function sendChatAndAwaitReply(
     resolveDone = resolve;
   });
 
+  // Idle-timer infrastructure. Re-armed every time matching activity
+  // (chat_event OR agent_event) arrives. When the timer fires we
+  // resolve `donePromise` with null and stamp `timeoutReason='idle'`.
+  // Disabled when `idleEnabled === false` — armIdle becomes a no-op.
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let timeoutReason: 'idle' | 'max' | null = null;
+  const armIdle = (): void => {
+    if (!idleEnabled) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      timeoutReason = 'idle';
+      resolveDone?.(null);
+    }, idleTimeoutMs);
+  };
+
   const listener = (payload: ChatEvent) => {
     if (!payload || payload.sessionKey !== sessionKey) return;
     collected.push(payload);
+    armIdle();
     try {
       input.onEvent?.(payload);
     } catch {
@@ -379,12 +427,14 @@ export async function sendChatAndAwaitReply(
   };
 
   // Sibling listener for agent_event (tool calls, tool results,
-  // status transitions). Only attached when the caller supplies
-  // `onAgentEvent` — most callers don't care about non-chat
-  // activity. sessionKey filter mirrors the chat_event path.
-  const agentEventListener = input.onAgentEvent
+  // status transitions). Always attached when idle tracking is on so
+  // tool-call activity bumps the idle clock; otherwise attached only
+  // when the caller supplied `onAgentEvent`.
+  const wantsAgentEvents = idleEnabled || !!input.onAgentEvent;
+  const agentEventListener = wantsAgentEvents
     ? (payload: AgentEvent) => {
         if (!payload || payload.sessionKey !== sessionKey) return;
+        armIdle();
         try {
           input.onAgentEvent?.(payload);
         } catch {
@@ -419,14 +469,22 @@ export async function sendChatAndAwaitReply(
       };
     }
 
-    // Race the `done` event against the deadline.
+    // Arm the idle clock once the send is acked; we don't want
+    // pre-send latency to count as agent silence.
+    armIdle();
+
+    // Race the `done` event (or idle expiry) against the hard ceiling.
     let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<null>(resolve => {
-      timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
+      timeoutHandle = setTimeout(() => {
+        if (timeoutReason === null) timeoutReason = 'max';
+        resolve(null);
+      }, timeoutMs);
     });
 
     const winner = await Promise.race([donePromise, timeoutPromise]);
     if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (idleTimer) clearTimeout(idleTimer);
 
     if (winner === null && !doneEvent) {
       return {
@@ -434,6 +492,7 @@ export async function sendChatAndAwaitReply(
         sessionKey,
         reply: collected,
         timedOut: true,
+        timeoutReason: timeoutReason ?? 'max',
       };
     }
 
@@ -447,5 +506,6 @@ export async function sendChatAndAwaitReply(
   } finally {
     client.off('chat_event', listener);
     if (agentEventListener) client.off('agent_event', agentEventListener);
+    if (idleTimer) clearTimeout(idleTimer);
   }
 }
