@@ -196,6 +196,17 @@ export function PageWithRails({
     [resizableLeftRail, leftRailStorageKey, leftRailMinWidth, leftRailMaxWidth],
   );
 
+  // When a sticky page `header` is rendered above the rails, the rails
+  // need to clear it (top-[4.5rem]) and trim their max-height to match.
+  // When there's no page header, the rails should align with the main
+  // column's natural top (py-6 = 1.5rem) — otherwise sticky positioning
+  // pins the rails 48px lower than where the main column starts, which
+  // looks misaligned at scroll=0.
+  const stickyTopClass = header ? 'top-[4.5rem]' : 'top-6';
+  const stickyMaxHClass = header
+    ? 'max-h-[calc(100vh-5.5rem)]'
+    : 'max-h-[calc(100vh-2rem)]';
+
   return (
     <div className="min-h-screen bg-mc-bg text-mc-text flex flex-col">
       {header && (
@@ -212,37 +223,46 @@ export function PageWithRails({
             <>
               <aside
                 className={clsx(
-                  'hidden lg:block shrink-0',
+                  'hidden lg:block shrink-0 relative',
                   // When collapsed, override the configured width with
                   // a thin chevron-only column. Otherwise fall back to
                   // the tailwind class (resizable mode replaces this
                   // via inline style once dragged).
                   leftRailCollapsed ? 'w-12' : leftRailWidth,
-                  'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
+                  'sticky self-start overflow-y-auto',
+                  stickyTopClass,
+                  stickyMaxHClass,
                 )}
                 style={!leftRailCollapsed && resizableLeftRail && resizedWidth != null ? { width: resizedWidth } : undefined}
               >
-                {collapsibleLeftRail && (
-                  // When expanded, float the chevron over the rail
-                  // (negative bottom-margin pulls subsequent SectionNav
-                  // up so its "On this page" header aligns with the
-                  // adjacent main-column card header). When collapsed,
-                  // the chevron has a normal column header.
-                  <div className={clsx(
-                    'flex items-center px-1.5',
-                    leftRailCollapsed
-                      ? 'justify-center py-1 border-b border-mc-border/60 mb-2'
-                      : 'justify-end -mb-7 relative z-10',
-                  )}>
+                {collapsibleLeftRail && !leftRailCollapsed && (
+                  // Expanded: chevron floats absolutely at top-right of
+                  // the rail so the rail's own header (e.g. "On this
+                  // page") sits flush with it on the same row. Avoids
+                  // the prior negative-margin trick which clipped under
+                  // the aside's overflow:auto.
+                  <button
+                    type="button"
+                    onClick={toggleLeftRailCollapsed}
+                    className="absolute top-1 right-1 z-10 p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
+                    title="Collapse sections"
+                    aria-label="Collapse sections"
+                    aria-expanded={true}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                )}
+                {collapsibleLeftRail && leftRailCollapsed && (
+                  <div className="flex items-center justify-center px-1.5 py-1 border-b border-mc-border/60 mb-2">
                     <button
                       type="button"
                       onClick={toggleLeftRailCollapsed}
                       className="p-1 rounded-sm text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary"
-                      title={leftRailCollapsed ? 'Expand sections' : 'Collapse sections'}
-                      aria-label={leftRailCollapsed ? 'Expand sections' : 'Collapse sections'}
-                      aria-expanded={!leftRailCollapsed}
+                      title="Expand sections"
+                      aria-label="Expand sections"
+                      aria-expanded={false}
                     >
-                      {leftRailCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+                      <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
                 )}
@@ -257,7 +277,8 @@ export function PageWithRails({
                   title="Drag to resize"
                   className={clsx(
                     'hidden lg:block shrink-0 w-1 -mx-1.5 cursor-col-resize',
-                    'sticky top-[4.5rem] self-stretch z-10',
+                    'sticky self-stretch z-10',
+                    stickyTopClass,
                     'before:absolute before:inset-y-0 before:left-1/2 before:-translate-x-1/2 before:w-px before:bg-mc-border before:hover:bg-mc-accent/60',
                     dragging && 'before:bg-mc-accent',
                   )}
@@ -269,26 +290,26 @@ export function PageWithRails({
           <main className={clsx('flex-1 min-w-0', mainMaxWidth, 'mx-auto lg:mx-0')}>
             {leftRail && (
               // Below the lg breakpoint the dedicated left aside is
-              // hidden; this <details> is the fallback nav. Pin it to
-              // the top of the viewport (just under the page header at
-              // top-0 / z-20) so the operator can collapse/expand the
-              // tree-controls panel without scrolling back up. Solid
-              // background — translucent + backdrop-blur let scrolling
-              // content read THROUGH the toggle, which the operator
-              // (correctly) called out as visually weird.
-              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary sticky top-[4.5rem] z-10">
+              // hidden; this <details> is the fallback nav. Sits
+              // inline at the top of main and scrolls with the page —
+              // earlier this was sticky at top-[4.5rem] but the
+              // operator (correctly) flagged that as page content
+              // disappearing behind a floating toggle as you scroll.
+              <details className="lg:hidden mb-4 rounded-lg border border-mc-border/60 bg-mc-bg-secondary">
                 <summary className="px-3 py-2 text-xs uppercase tracking-wide text-mc-text-secondary cursor-pointer">
                   Sections
                 </summary>
-                {/* No top padding: the leftRail's first child is its
-                    own sticky toolbar (New / Search / filters) and it
-                    needs to sit flush against the summary border. Top
-                    padding here would leave a 12px transparent strip
-                    above the sticky toolbar that scrolling content
-                    bleeds through, which the operator (correctly)
-                    flagged as another bleed-through gap. Keep horizontal
-                    + bottom padding for the tree rows below. */}
-                <div className="px-3 pb-3 border-t border-mc-border/60 max-h-[calc(100vh-9rem)] overflow-y-auto">
+                {/* IMPORTANT: do NOT add top padding here. The body
+                    is overflow-y-auto, which clips scrolled content at
+                    the *padding box* edge (the outer edge of any
+                    padding), not the content edge. Any pt-* on this
+                    div lets tree rows visibly scroll THROUGH that pad
+                    zone before being clipped — the operator caught
+                    this twice. The leftRail's first child (its sticky
+                    toolbar) can provide its own internal pt-1, which
+                    gives the inner content breathing room without
+                    creating a bleed-through gap above it. */}
+                <div className="px-3 pb-3 border-t border-mc-border/60 bg-mc-bg-secondary max-h-[calc(100vh-9rem)] overflow-y-auto">
                   {leftRail}
                 </div>
               </details>
@@ -315,7 +336,9 @@ export function PageWithRails({
                 RIGHT_RAIL_VISIBLE_CLASS[rightRailMinViewport],
                 'shrink-0',
                 rightRailWidth,
-                'sticky top-[4.5rem] self-start max-h-[calc(100vh-5.5rem)] overflow-y-auto',
+                'sticky self-start overflow-y-auto',
+                stickyTopClass,
+                stickyMaxHClass,
               )}
             >
               {rightRail}

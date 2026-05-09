@@ -512,10 +512,12 @@ export default function InitiativesPage() {
           )}
         </div>
 
-        {/* Filter row — Show-cancelled toggle lives here now (was in
-            the page header), grouped with the other tree-scoped
-            filters. */}
-        <div className="flex items-center justify-between gap-2 px-1">
+        {/* Filter / metadata / tree-control row — all on one line so
+            the toolbar doesn't burn two rows of vertical space. Left
+            cluster: Show-cancelled toggle. Right cluster: count +
+            expand/collapse buttons. Wraps to two rows only at very
+            narrow widths via flex-wrap on the parent. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1">
           <label
             className="inline-flex items-center gap-1.5 text-[11px] text-mc-text-secondary cursor-pointer select-none"
             title="Toggle visibility of cancelled initiatives. Persisted in URL (?show_cancelled=1) and localStorage."
@@ -531,34 +533,32 @@ export default function InitiativesPage() {
               <span className="text-[10px] text-mc-text-secondary/70">({cancelledCount})</span>
             )}
           </label>
-          <span className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
-            {trimmedSearch
-              ? `${filterResult.matchCount} match${filterResult.matchCount === 1 ? '' : 'es'}`
-              : `${flat.length} total`}
-          </span>
-        </div>
-
-        {/* Expand/Collapse — now disabled while search is active since
-            search controls visibility instead of the collapsed-set. */}
-        <div className="flex items-center justify-end gap-1 px-1">
-          <button
-            type="button"
-            onClick={expandAll}
-            disabled={allExpanded || !!trimmedSearch}
-            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
-            title={trimmedSearch ? 'Clear search to use Expand all' : 'Expand every subtree'}
-          >
-            Expand all
-          </button>
-          <button
-            type="button"
-            onClick={collapseAll}
-            disabled={allCollapsed || !!trimmedSearch}
-            className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
-            title={trimmedSearch ? 'Clear search to use Collapse all' : 'Collapse every subtree'}
-          >
-            Collapse all
-          </button>
+          <div className="inline-flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70">
+              {trimmedSearch
+                ? `${filterResult.matchCount} match${filterResult.matchCount === 1 ? '' : 'es'}`
+                : `${flat.length} total`}
+            </span>
+            <span className="w-px h-3 bg-mc-border/50" aria-hidden />
+            <button
+              type="button"
+              onClick={expandAll}
+              disabled={allExpanded || !!trimmedSearch}
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg disabled:opacity-30 disabled:hover:bg-transparent"
+              title={trimmedSearch ? 'Clear search to use Expand all' : 'Expand every subtree'}
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              onClick={collapseAll}
+              disabled={allCollapsed || !!trimmedSearch}
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg disabled:opacity-30 disabled:hover:bg-transparent"
+              title={trimmedSearch ? 'Clear search to use Collapse all' : 'Collapse every subtree'}
+            >
+              Collapse all
+            </button>
+          </div>
         </div>
       </div>
       {error && (
