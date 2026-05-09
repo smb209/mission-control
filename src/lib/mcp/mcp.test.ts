@@ -81,6 +81,9 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     'spawn_subtask',
     'list_my_subtasks',
     'update_subtask',
+    // Slice 3 of review-stage-robustness: escape hatch when an agent
+    // hits a capability denial.
+    'escalate_to_parent',
   ]) {
     assert.ok(names.has(expected), `missing tool: ${expected}`);
   }
@@ -121,7 +124,7 @@ test('PM-scoped server (core+read+pm) excludes worker + crud tools', async () =>
   }
   // Worker absent
   for (const t of ['register_deliverable', 'submit_evidence', 'update_task_status', 'fail_task',
-                   'spawn_subtask', 'update_subtask',
+                   'spawn_subtask', 'update_subtask', 'escalate_to_parent',
                    'register_subagent_dispatch', 'update_note']) {
     assert.ok(!names.has(t), `pm mount must not expose worker tool ${t}`);
   }
@@ -157,10 +160,9 @@ test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () 
 
 test('default server (no groups arg) keeps full union of 45 tools', async () => {
   const names = await listToolsForGroups(undefined);
-  // 45 tools after slice-4 of initiative-research-loop adds read_brief.
-  // 44 tools post-PR4+PR5: accept/reject/cancel_subtask → update_subtask
-  // and mark_note_consumed/archive_note → update_note (47 - 3 + 1 - 2 + 1).
-  assert.equal(names.size, 45, `expected 45 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  // 46 tools after Slice 3 of review-stage-robustness adds escalate_to_parent.
+  // (45 after read_brief; 44 after the update_subtask / update_note collapses.)
+  assert.equal(names.size, 46, `expected 46 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
   assert.ok(names.has('read_brief'), 'read_brief should be present');
   // Make absences explicit so a regression has a clear failure.
   for (const removed of ['accept_subtask', 'reject_subtask', 'cancel_subtask', 'mark_note_consumed', 'archive_note']) {
@@ -803,4 +805,166 @@ test('take_note leaves non-audit kinds untouched (no JSON requirement on observa
     },
   });
   assert.equal(res.isError, undefined);
+});
+
+// ─── escalate_to_parent (Slice 3 of review-stage-robustness) ─────────
+
+test('spawn_subtask: agent_not_coordinator sets soft-lock and returns next_action=escalate_to_parent', async () => {
+  const { client } = await makePair();
+  // Agent is assigned to task but is NOT a coordinator (role=builder, no
+  // task_roles coordinator row, not creator). spawn_subtask must reject
+  // with the structured next_action shape AND set the lock.
+  const me = seedAgent({ role: 'builder' });
+  const peer = seedAgent({ role: 'builder', gateway: 'mc-builder-peer' });
+  const task = seedTask({ assigned: me });
+
+  const res = await client.callTool({
+    name: 'spawn_subtask',
+    arguments: {
+      agent_id: me,
+      task_id: task,
+      peer_gateway_id: 'mc-builder-peer',
+      slice: 'do the thing properly',
+      message: 'please do this work',
+      expected_deliverables: [{ title: 'x', kind: 'file' }],
+      acceptance_criteria: ['everything works end-to-end'],
+      expected_duration_minutes: 30,
+    },
+  });
+  assert.equal(res.isError, true);
+  const payload = parseStructured<{ error: string; next_action: string; blocked_tools: string[] }>(res);
+  assert.ok(payload, `expected structuredContent; got ${JSON.stringify(res)}`);
+  assert.equal(payload.error, 'agent_not_coordinator');
+  assert.equal(payload.next_action, 'escalate_to_parent');
+  assert.ok(payload.blocked_tools.includes('register_deliverable'));
+
+  const row = queryOne<{ locked_for_completion: number }>(
+    'SELECT locked_for_completion FROM tasks WHERE id = ?',
+    [task],
+  );
+  assert.equal(row?.locked_for_completion, 1, 'task must be soft-locked after denial');
+
+  // Sanity: peer agent exists so spawn would otherwise validate.
+  void peer;
+});
+
+test('locked task: register_deliverable rejected with task_locked_pending_escalation', async () => {
+  const { client } = await makePair();
+  const me = seedAgent({ role: 'builder' });
+  const task = seedTask({ assigned: me });
+  // Set the lock directly to simulate a prior denial.
+  run(`UPDATE tasks SET locked_for_completion = 1 WHERE id = ?`, [task]);
+
+  const res = await client.callTool({
+    name: 'register_deliverable',
+    arguments: {
+      agent_id: me,
+      task_id: task,
+      deliverable_type: 'artifact',
+      title: 'should-not-land',
+    },
+  });
+  assert.equal(res.isError, true);
+  // The MCP layer wraps AuthzError; surface should mention the code.
+  const text = (res as { content: Array<{ text?: string }> }).content?.[0]?.text || '';
+  const struct = parseStructured<Record<string, unknown>>(res);
+  const blob = `${text} ${JSON.stringify(struct)}`;
+  assert.match(blob, /task_locked_pending_escalation/);
+});
+
+test('escalate_to_parent: clears lock + bounces child + writes parent activity (convoy parent)', async () => {
+  const { client } = await makePair();
+  const coordinator = seedAgent({ role: 'coordinator' });
+  const peer = seedAgent({ role: 'builder' });
+  const parentTask = seedTask({ assigned: coordinator, status: 'convoy_active' });
+  const childTask = seedTask({ assigned: peer, status: 'in_progress' });
+
+  // Wire up the convoy + subtask.
+  const convoyId = crypto.randomUUID();
+  run(
+    `INSERT INTO convoys (id, parent_task_id, name, status, created_at, updated_at)
+     VALUES (?, ?, 'c', 'active', datetime('now'), datetime('now'))`,
+    [convoyId, parentTask],
+  );
+  run(`UPDATE tasks SET convoy_id = ? WHERE id = ?`, [convoyId, childTask]);
+  run(
+    `INSERT INTO convoy_subtasks (id, convoy_id, task_id, sort_order, suggested_role, slice, created_at)
+     VALUES (?, ?, ?, 0, 'builder', 's', datetime('now'))`,
+    [crypto.randomUUID(), convoyId, childTask],
+  );
+  run(`UPDATE tasks SET locked_for_completion = 1 WHERE id = ?`, [childTask]);
+
+  const res = await client.callTool({
+    name: 'escalate_to_parent',
+    arguments: {
+      agent_id: peer,
+      task_id: childTask,
+      reason: 'cannot delegate; please redecompose',
+    },
+  });
+  assert.equal(res.isError, undefined, JSON.stringify(res));
+
+  // Lock cleared.
+  const lockRow = queryOne<{ locked_for_completion: number }>(
+    'SELECT locked_for_completion FROM tasks WHERE id = ?',
+    [childTask],
+  );
+  assert.equal(lockRow?.locked_for_completion, 0);
+
+  // Child bounced.
+  const childRow = queryOne<{ status: string; is_failed: number; status_reason: string | null }>(
+    'SELECT status, is_failed, status_reason FROM tasks WHERE id = ?',
+    [childTask],
+  );
+  assert.equal(childRow?.status, 'assigned');
+  assert.equal(childRow?.is_failed, 1);
+  assert.match(childRow?.status_reason ?? '', /child_escalated/);
+
+  // Parent gets activity row.
+  const parentActivity = queryOne<{ activity_type: string }>(
+    `SELECT activity_type FROM task_activities WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [parentTask],
+  );
+  assert.equal(parentActivity?.activity_type, 'escalation');
+});
+
+test('escalate_to_parent: top-level task flips to needs_user_input', async () => {
+  const { client } = await makePair();
+  const me = seedAgent({ role: 'builder' });
+  const task = seedTask({ assigned: me });
+  run(`UPDATE tasks SET locked_for_completion = 1 WHERE id = ?`, [task]);
+
+  const res = await client.callTool({
+    name: 'escalate_to_parent',
+    arguments: { agent_id: me, task_id: task, reason: 'stuck' },
+  });
+  assert.equal(res.isError, undefined, JSON.stringify(res));
+
+  const row = queryOne<{ status: string; locked_for_completion: number }>(
+    'SELECT status, locked_for_completion FROM tasks WHERE id = ?',
+    [task],
+  );
+  assert.equal(row?.status, 'needs_user_input');
+  assert.equal(row?.locked_for_completion, 0);
+});
+
+test('escalate_to_parent: idempotent within 60s', async () => {
+  const { client } = await makePair();
+  const me = seedAgent({ role: 'builder' });
+  const task = seedTask({ assigned: me });
+  run(`UPDATE tasks SET locked_for_completion = 1 WHERE id = ?`, [task]);
+
+  const first = await client.callTool({
+    name: 'escalate_to_parent',
+    arguments: { agent_id: me, task_id: task, reason: 'first' },
+  });
+  assert.equal(first.isError, undefined);
+
+  const second = await client.callTool({
+    name: 'escalate_to_parent',
+    arguments: { agent_id: me, task_id: task, reason: 'second' },
+  });
+  assert.equal(second.isError, undefined);
+  const struct = parseStructured<{ already_escalated?: boolean }>(second);
+  assert.equal(struct.already_escalated, true);
 });
