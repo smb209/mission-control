@@ -109,8 +109,44 @@ export function checkStageEvidence(
 
   // Convoy subtasks don't each carry the parent's spec — they carry their
   // own descriptions. Reconciliation happens at the parent level when the
-  // convoy transitions. So for subtasks we fall back to the baseline bar.
-  if (task?.convoy_id) {
+  // convoy transitions. So for subtasks we skip *spec reconciliation* but
+  // still enforce per-subtask evidence gates from
+  // convoy_subtasks.required_evidence_gates (Slice 2 of
+  // review-stage-robustness). Legacy subtasks with NULL keep the prior
+  // bypass — only the strict-mode gate above (when any task_evidence row
+  // exists) and the baseline deliverable+activity check fire for them.
+  if (task?.convoy_id && newStatus) {
+    const subtask = queryOne<{ required_evidence_gates: string | null }>(
+      `SELECT required_evidence_gates FROM convoy_subtasks WHERE task_id = ?`,
+      [taskId],
+    );
+    if (subtask?.required_evidence_gates) {
+      try {
+        const required = JSON.parse(subtask.required_evidence_gates) as EvidenceGate[];
+        // Only enforce on transitions into the review stage (testing/done
+        // gates are workflow-engine concerns and remain stage-keyed).
+        if (newStatus === 'review' && Array.isArray(required) && required.length > 0) {
+          for (const gate of required) {
+            const latest = getLatestEvidence(taskId, gate);
+            if (!latest) {
+              return {
+                ok: false,
+                reason: `Evidence gate: ${gate} required to enter review (subtask). Submit raw command output via submit_evidence.`,
+              };
+            }
+            if (latest.passed !== 1) {
+              return {
+                ok: false,
+                reason: `Evidence gate: latest ${gate} run did not pass${latest.reject_reason ? ` (${latest.reject_reason})` : ''}. Re-run and resubmit.`,
+              };
+            }
+          }
+          return { ok: true };
+        }
+      } catch {
+        // Malformed JSON: fall through to legacy bypass.
+      }
+    }
     return { ok: true };
   }
 
