@@ -17,6 +17,18 @@ export function ChatConversation({ taskId, onMarkRead }: ChatConversationProps) 
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevNotesLenRef = useRef(0);
+  // Track whether the user is "stuck to the bottom" of the scroll
+  // viewport. While true, new messages auto-scroll the view down.
+  // Once they scroll up to read history, this flips to false and
+  // we leave their viewport alone — otherwise the 2s poll yanks
+  // them back to the bottom on every refresh. Defaults to true so
+  // the initial mount lands on the latest message.
+  const stuckToBottomRef = useRef(true);
+  // Distance-from-bottom threshold (px) below which we consider the
+  // user "at the bottom". A few pixels of slack handles
+  // sub-pixel rounding + thin sticky footers without breaking the
+  // intuition.
+  const STUCK_THRESHOLD_PX = 24;
 
   const loadNotes = useCallback(async () => {
     try {
@@ -50,7 +62,20 @@ export function ChatConversation({ taskId, onMarkRead }: ChatConversationProps) 
     return age < 15000;
   }, [notes]);
 
+  // Update stuckToBottomRef as the user scrolls. Pure ref write —
+  // no setState, no re-render.
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stuckToBottomRef.current = distanceFromBottom <= STUCK_THRESHOLD_PX;
+  }, []);
+
   useEffect(() => {
+    // Auto-scroll only when the user was already at (or near) the
+    // bottom. If they've scrolled up to read history, leave their
+    // viewport in place — the 2s poll loop must not yank them back.
+    if (!stuckToBottomRef.current) return;
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -76,6 +101,9 @@ export function ChatConversation({ taskId, onMarkRead }: ChatConversationProps) 
       }
 
       setMessage('');
+      // The user just sent something — they want to see it land.
+      // Force the next auto-scroll regardless of where they were.
+      stuckToBottomRef.current = true;
       await loadNotes();
     } catch {
       setError('Network error — please try again');
@@ -87,7 +115,11 @@ export function ChatConversation({ taskId, onMarkRead }: ChatConversationProps) 
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-2.5">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-3 space-y-2.5"
+      >
         {notes.length === 0 && !waiting && (
           <div className="text-center py-8">
             <MessageSquare className="w-7 h-7 text-mc-text-secondary mx-auto mb-2 opacity-40" />
