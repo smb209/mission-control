@@ -172,6 +172,58 @@ export function getFailureCountInStage(taskId: string, stage: string): number {
   return Number(row?.count || 0);
 }
 
+/**
+ * Pick a reviewer for a task entering the review stage. Mirrors
+ * `ensureFixerExists` selection but never auto-creates: reviewers must
+ * be onboarded explicitly. Excludes the agent who did the work
+ * (self-review interlock — Slice 1 of review-stage-robustness).
+ *
+ * Selection order:
+ *  1. agents with role='reviewer' in the task's workspace, online + active
+ *  2. agents with gateway_agent_id like 'mc-reviewer*' as a fallback for
+ *     workspaces where role isn't set on the catalog row
+ *
+ * Returns null when no eligible reviewer exists. The caller decides
+ * whether to reject the transition or fall back to operator escalation.
+ */
+export function pickReviewerForTask(input: {
+  taskId: string;
+  workspaceId: string;
+  excludeAgentId?: string | null;
+}): { id: string; name: string } | null {
+  const { workspaceId, excludeAgentId } = input;
+  const exclude = excludeAgentId ?? '';
+
+  const byRole = queryOne<{ id: string; name: string }>(
+    `SELECT id, name FROM agents
+     WHERE COALESCE(workspace_id, 'default') = ?
+       AND status != 'offline'
+       AND COALESCE(is_active, 1) = 1
+       AND id != ?
+       AND role = 'reviewer'
+     ORDER BY
+       (gateway_agent_id IS NOT NULL OR session_key_prefix IS NOT NULL) DESC,
+       updated_at DESC
+     LIMIT 1`,
+    [workspaceId, exclude],
+  );
+  if (byRole) return byRole;
+
+  // Fallback: gateway-id-derivation for legacy rows without role column set.
+  const byGateway = queryOne<{ id: string; name: string }>(
+    `SELECT id, name FROM agents
+     WHERE COALESCE(workspace_id, 'default') = ?
+       AND status != 'offline'
+       AND COALESCE(is_active, 1) = 1
+       AND id != ?
+       AND (gateway_agent_id LIKE 'mc-reviewer%')
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [workspaceId, exclude],
+  );
+  return byGateway ?? null;
+}
+
 export function ensureFixerExists(workspaceId: string): { id: string; name: string; created: boolean } {
   const existing = queryOne<{ id: string; name: string }>(
     `SELECT id, name FROM agents WHERE workspace_id = ? AND role IN ('fixer','senior') AND status != 'offline' ORDER BY role = 'fixer' DESC, updated_at DESC LIMIT 1`,
