@@ -909,9 +909,12 @@ function InitiativeRow({
           aria-label={childrenExpanded ? 'Collapse subtree' : 'Expand subtree'}
           aria-expanded={childrenExpanded}
           disabled={directChildrenCount === 0}
-          className="p-0.5 mt-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent shrink-0"
+          // ~32px tap target — was a 14px chevron + p-0.5 padding, which
+          // was easy to miss especially on touchpads. Now p-1.5 +
+          // larger 18px chevron lands at ~30×30px hit area.
+          className="p-1.5 mt-0.5 rounded hover:bg-mc-bg text-mc-text-secondary hover:text-mc-text disabled:opacity-30 disabled:hover:bg-transparent shrink-0"
         >
-          {childrenExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          {childrenExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </button>
         <button
           type="button"
