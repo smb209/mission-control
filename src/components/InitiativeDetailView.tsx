@@ -759,9 +759,12 @@ or "carve out the onboarding flow as its own story first"`}
                 setShowInvestigateModal(true);
               }}
             />
-            {/* Secondary icon strip + overflow — pinned right at desktop,
-                wraps below at narrow via flex-wrap on the parent. */}
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            {/* Secondary icon strip + overflow — sits adjacent to the
+                primary CTAs (no `ml-auto` push), so the cluster reads
+                as one continuous toolbar instead of two parties at
+                opposite ends of the room. Wraps below at narrow via
+                flex-wrap on the parent. */}
+            <div className="flex flex-wrap items-center gap-1.5">
               <IconButton
                 ariaLabel="Promote to task"
                 title={
@@ -906,11 +909,11 @@ or "carve out the onboarding flow as its own story first"`}
             </div>
           </div>
 
-          {/* Description — the largest editable surface */}
-          <div id="description" className="mt-5 scroll-mt-20">
-            <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
-              Description
-            </div>
+          {/* Description — the largest editable surface. Header
+              sized to match the Section component so the eye can
+              chunk these as page sections, not as field labels. */}
+          <div id="description" className="mt-6 scroll-mt-20">
+            <h2 className="font-medium text-mc-text mb-2">Description</h2>
             <InlineTextarea
               value={initiative.description ?? ''}
               onSave={next =>
@@ -931,10 +934,8 @@ or "carve out the onboarding flow as its own story first"`}
             />
           </div>
 
-          <div id="status-check" className="mt-4 scroll-mt-20">
-            <div className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 mb-1">
-              Status check
-            </div>
+          <div id="status-check" className="mt-6 scroll-mt-20">
+            <h2 className="font-medium text-mc-text mb-2">Status check</h2>
             <div className="p-3 rounded border border-mc-border/60 bg-mc-bg">
               <InlineTextarea
                 value={initiative.status_check_md ?? ''}
