@@ -155,11 +155,13 @@ test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () 
   }
 });
 
-test('default server (no groups arg) keeps full union of 44 tools', async () => {
+test('default server (no groups arg) keeps full union of 45 tools', async () => {
   const names = await listToolsForGroups(undefined);
+  // 45 tools after slice-4 of initiative-research-loop adds read_brief.
   // 44 tools post-PR4+PR5: accept/reject/cancel_subtask → update_subtask
   // and mark_note_consumed/archive_note → update_note (47 - 3 + 1 - 2 + 1).
-  assert.equal(names.size, 44, `expected 44 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  assert.equal(names.size, 45, `expected 45 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  assert.ok(names.has('read_brief'), 'read_brief should be present');
   // Make absences explicit so a regression has a clear failure.
   for (const removed of ['accept_subtask', 'reject_subtask', 'cancel_subtask', 'mark_note_consumed', 'archive_note']) {
     assert.ok(!names.has(removed), `${removed} should not be present`);

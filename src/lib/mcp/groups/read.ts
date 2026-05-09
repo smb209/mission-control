@@ -25,6 +25,8 @@ import {
   listProposals,
   type PmProposalStatus,
 } from '@/lib/db/pm-proposals';
+import { getBrief } from '@/lib/db/briefs';
+import { getAgentRun } from '@/lib/db/agent-runs';
 
 import {
   agentIdArg,
@@ -180,6 +182,44 @@ export function registerReadTools(server: McpServer): void {
       owner_agent_id: args.owner_agent_id,
       ratio: computeVelocity({ owner_agent_id: args.owner_agent_id, since_days: args.since_days }),
     })),
+  );
+
+  server.registerTool(
+    'read_brief',
+    {
+      title: 'Fetch one research brief',
+      description:
+        'Returns title, prompt, full result_md, citations, status, completed_at, and initiative_id for a brief. ' +
+        'Use this when an initiative-scoped suggest prompt mentions a prior brief by id whose summary hints it might be relevant — ' +
+        'pulling the full body lets you avoid duplicating prior research.',
+      inputSchema: {
+        agent_id: agentIdArg,
+        brief_id: z.string().min(1),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async (args) => safeWrap(() => {
+      const brief = getBrief(args.brief_id);
+      if (!brief) throw new Error(`brief ${args.brief_id} not found`);
+      const run = getAgentRun(brief.agent_run_id);
+      return {
+        id: brief.id,
+        workspace_id: brief.workspace_id,
+        initiative_id: brief.initiative_id,
+        topic_id: brief.topic_id,
+        template: brief.template,
+        title: brief.title,
+        prompt: brief.prompt,
+        result_md: brief.result_md,
+        summary: brief.summary,
+        citations: brief.citations,
+        error_md: brief.error_md,
+        status: run?.status ?? 'unknown',
+        completed_at: run?.completed_at ?? null,
+        created_at: brief.created_at,
+        updated_at: brief.updated_at,
+      };
+    }),
   );
 
   server.registerTool(
