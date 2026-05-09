@@ -719,10 +719,10 @@ export function InitiativeDetailView({
               guidancePlaceholder={`e.g. "size for v1 only — defer fertility/pregnancy features"
 or "treat memory + checklist as MVP, exclude dashboard widgets"`}
               guidanceCta="Plan with guidance"
-              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'PM proposes refined description / sizing / window'}
+              title={hasDraftProposal ? 'Resolve the existing draft proposal first' : 'Plan with PM — proposes refined description / sizing / window'}
               disabled={hasDraftProposal}
             >
-              Plan with PM
+              Plan
             </SplitToolbarButton>
             {(initiative.kind === 'epic' || initiative.kind === 'milestone') && (
               <SplitToolbarButton
@@ -733,10 +733,10 @@ or "treat memory + checklist as MVP, exclude dashboard widgets"`}
                 guidancePlaceholder={`e.g. "split by frontend / backend / data"
 or "carve out the onboarding flow as its own story first"`}
                 guidanceCta="Decompose with guidance"
-                title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Ask the PM to propose 3-7 child initiatives'}
+                title={hasDraftDecomposeProposal ? 'Resolve the existing draft decomposition first' : 'Decompose with PM — propose 3-7 child initiatives'}
                 disabled={hasDraftDecomposeProposal}
               >
-                Decompose with PM
+                Decompose
               </SplitToolbarButton>
             )}
             {initiative.kind === 'story' && (
@@ -759,58 +759,21 @@ or "carve out the onboarding flow as its own story first"`}
                 setShowInvestigateModal(true);
               }}
             />
-            {/* Secondary icon strip + overflow — sits adjacent to the
-                primary CTAs (no `ml-auto` push), so the cluster reads
-                as one continuous toolbar instead of two parties at
-                opposite ends of the room. Wraps below at narrow via
-                flex-wrap on the parent. */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <IconButton
-                ariaLabel="Promote to task"
-                title={
-                  initiative.kind === 'story'
-                    ? 'Create a draft task linked to this initiative'
-                    : 'Only story-kind initiatives can be promoted to tasks. Convert this initiative to a story first.'
-                }
-                onClick={() => setShowPromoteModal(true)}
-                disabled={initiative.kind !== 'story'}
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </IconButton>
-              <IconButton
-                ariaLabel="Move"
-                title="Move (change parent initiative)"
-                onClick={() => setShowMoveModal(true)}
-              >
-                <MoveRight className="w-3.5 h-3.5" />
-              </IconButton>
-              <IconButton
-                ariaLabel="Convert kind"
-                title="Convert kind"
-                onClick={() => setShowConvertModal(true)}
-              >
-                <Shuffle className="w-3.5 h-3.5" />
-              </IconButton>
-              <IconButton
-                ariaLabel="Add dependency"
-                title="Add dependency"
-                onClick={() => setShowAddDepModal(true)}
-              >
-                <Link2 className="w-3.5 h-3.5" />
-              </IconButton>
-              <IconButton
-                ariaLabel="View history"
-                title="View parent-change history"
-                onClick={() => setShowHistoryDrawer(true)}
-              >
-                <History className="w-3.5 h-3.5" />
-              </IconButton>
-              <OverflowMenu
-                hasParent={!!initiative.parent_initiative_id}
-                onDetach={detach}
-                onDelete={deleteInitiative}
-              />
-            </div>
+            {/* Everything that isn't a primary CTA lives behind one
+                ⋯ overflow button, so the toolbar fits on a single
+                line at desktop and the standard actions read with
+                their full labels (icons-only are easy to misread). */}
+            <OverflowMenu
+              isStory={initiative.kind === 'story'}
+              hasParent={!!initiative.parent_initiative_id}
+              onPromote={() => setShowPromoteModal(true)}
+              onMove={() => setShowMoveModal(true)}
+              onConvertKind={() => setShowConvertModal(true)}
+              onAddDependency={() => setShowAddDepModal(true)}
+              onViewHistory={() => setShowHistoryDrawer(true)}
+              onDetach={detach}
+              onDelete={deleteInitiative}
+            />
           </div>
 
           {/*
@@ -1378,33 +1341,34 @@ const INVESTIGATE_OPTIONS: InvestigateOption[] = [
  * SplitToolbarButton primary CTAs (text-xs px-2.5 py-1.5 → ~32px tall)
  * so the two strips align on the same row.
  */
-function IconButton({
-  ariaLabel,
-  title,
+/**
+ * Single labelled row inside the OverflowMenu popover. Consistent
+ * height + icon-gap so all the menu items line up vertically. The
+ * destructive variant flips to a red palette so Delete reads as a
+ * different class of action.
+ */
+function MenuItem({
+  icon,
   onClick,
-  disabled,
+  destructive,
   children,
 }: {
-  ariaLabel: string;
-  title: string;
+  icon: React.ReactNode;
   onClick: () => void;
-  disabled?: boolean;
+  destructive?: boolean;
   children: React.ReactNode;
 }) {
+  const palette = destructive
+    ? 'text-red-300 hover:bg-red-500/10'
+    : 'text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg';
   return (
     <button
       type="button"
-      aria-label={ariaLabel}
-      title={title}
+      role="menuitem"
       onClick={onClick}
-      disabled={disabled}
-      className={`inline-flex items-center justify-center w-8 h-8 rounded border ${
-        disabled
-          ? 'border-mc-border/40 text-mc-text-secondary/40 cursor-not-allowed'
-          : 'border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40'
-      }`}
+      className={`w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 ${palette}`}
     >
-      {children}
+      {icon} {children}
     </button>
   );
 }
@@ -1416,11 +1380,23 @@ function IconButton({
  * having a parent; Delete renders with red text always.
  */
 function OverflowMenu({
+  isStory,
   hasParent,
+  onPromote,
+  onMove,
+  onConvertKind,
+  onAddDependency,
+  onViewHistory,
   onDetach,
   onDelete,
 }: {
+  isStory: boolean;
   hasParent: boolean;
+  onPromote: () => void;
+  onMove: () => void;
+  onConvertKind: () => void;
+  onAddDependency: () => void;
+  onViewHistory: () => void;
   onDetach: () => void;
   onDelete: () => void;
 }) {
@@ -1443,6 +1419,13 @@ function OverflowMenu({
     };
   }, [open]);
 
+  // Inline closure so menu items don't have to remember to close
+  // the popover after firing their handler.
+  const wrap = (handler: () => void) => () => {
+    setOpen(false);
+    handler();
+  };
+
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -1461,32 +1444,49 @@ function OverflowMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1 z-30 min-w-[10rem] rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg p-1"
+          className="absolute right-0 top-full mt-1 z-30 min-w-[12rem] rounded-md border border-mc-border bg-mc-bg-secondary shadow-lg p-1"
         >
-          {hasParent && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onDetach();
-              }}
-              className="w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg"
-            >
-              <CornerUpLeft className="w-3.5 h-3.5" /> Detach
-            </button>
+          {/* Standard actions, in the order they used to appear in
+              the toolbar's icon strip. Promote is hidden on
+              non-story kinds (the previous icon-strip rendered it
+              disabled with a tooltip; the menu treatment is to
+              just omit it). */}
+          {isStory && (
+            <MenuItem icon={<Plus className="w-3.5 h-3.5" />} onClick={wrap(onPromote)}>
+              Promote to task
+            </MenuItem>
           )}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onDelete();
-            }}
-            className="w-full text-left px-2 py-1.5 rounded text-xs inline-flex items-center gap-2 text-red-300 hover:bg-red-500/10"
+          <MenuItem icon={<MoveRight className="w-3.5 h-3.5" />} onClick={wrap(onMove)}>
+            Move
+          </MenuItem>
+          <MenuItem icon={<Shuffle className="w-3.5 h-3.5" />} onClick={wrap(onConvertKind)}>
+            Convert kind
+          </MenuItem>
+          <MenuItem icon={<Link2 className="w-3.5 h-3.5" />} onClick={wrap(onAddDependency)}>
+            Add dependency
+          </MenuItem>
+          <MenuItem icon={<History className="w-3.5 h-3.5" />} onClick={wrap(onViewHistory)}>
+            View history
+          </MenuItem>
+
+          {/* Destructive group — separated by a divider + red palette
+              so the eye registers them as a different class of action. */}
+          <div className="my-1 border-t border-mc-border/60" aria-hidden />
+          {hasParent && (
+            <MenuItem
+              icon={<CornerUpLeft className="w-3.5 h-3.5" />}
+              onClick={wrap(onDetach)}
+            >
+              Detach
+            </MenuItem>
+          )}
+          <MenuItem
+            icon={<Trash2 className="w-3.5 h-3.5" />}
+            onClick={wrap(onDelete)}
+            destructive
           >
-            <Trash2 className="w-3.5 h-3.5" /> Delete
-          </button>
+            Delete
+          </MenuItem>
         </div>
       )}
     </div>
