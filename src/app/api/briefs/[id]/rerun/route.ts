@@ -38,6 +38,10 @@ export async function POST(
       title: original.title,
       prompt: original.prompt,
       topic_id: original.topic_id,
+      // Carry initiative_id from the original so the rerun's auto-note
+      // (slice 3 of initiative-research-loop) lands on the same
+      // initiative and replaces the prior auto-note via chain dedupe.
+      initiative_id: original.initiative_id,
       requested_by: `rerun:${original.id}`,
       source_kind: 'manual',
       source_ref: `brief:${original.id}`,

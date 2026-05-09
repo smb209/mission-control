@@ -41,13 +41,20 @@ import {
   markRunning,
 } from '@/lib/db/agent-runs';
 import {
+  findBriefChainRoot,
   getBrief,
   setBriefError,
   setBriefResult,
+  setBriefSummary,
   type Brief,
   type BriefCitation,
   type BriefTemplate,
 } from '@/lib/db/briefs';
+import {
+  archiveNote,
+  createNote,
+  findNotesBySource,
+} from '@/lib/db/agent-notes';
 import { getTopic } from '@/lib/db/topics';
 import { recordBriefOutcome } from '@/lib/db/recurring-jobs';
 import { broadcast } from '@/lib/events';
@@ -525,7 +532,31 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
 
   const citations = parseCitations(body);
   setBriefResult(briefId, { result_md: body, citations });
+
+  // Compute + persist summary BEFORE markComplete so any reader that
+  // wakes up on the brief_completed event sees a populated `summary`.
+  const summary = extractBriefSummary(body);
+  if (summary) setBriefSummary(briefId, summary);
+
   markComplete(brief.agent_run_id);
+
+  // Initiative-research-loop slice 3: when a brief is scoped to an
+  // initiative, write an auto-note so refine/decompose pull the result
+  // into context via the existing read_notes channel. Rerun chain
+  // dedupe lives inside this helper. Failures are logged + swallowed —
+  // the brief itself is complete and shouldn't fail because of an
+  // auto-note write.
+  if (brief.initiative_id) {
+    try {
+      writeBriefAutoNote(brief, body);
+    } catch (err) {
+      console.error(
+        `[run-brief] failed to write auto-note for brief ${brief.id} on initiative ${brief.initiative_id}:`,
+        err,
+      );
+    }
+  }
+
   emit('brief_completed', briefShape(brief, {
     citation_count: citations.length,
     scope_key: result.scope_key,
@@ -535,6 +566,72 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
   // also providing a hook if we want to surface researcher attribution
   // in completion events later.
   void researcher;
+}
+
+/**
+ * First-sentence-of-result summary, capped at 160 chars. Used as the
+ * one-liner index entry in the suggest prompt's prior-briefs block.
+ * Intentionally simple — see specs/initiative-research-loop-build-plan.md
+ * §D1 (LLM-generate is a deferred follow-up).
+ */
+export function extractBriefSummary(resultMd: string | null): string | null {
+  if (!resultMd) return null;
+  // Strip leading whitespace and any leading markdown-heading prefix so
+  // a brief that starts with "# Title" doesn't summarize as the title.
+  const trimmed = resultMd.replace(/^\s+/, '').replace(/^#+\s+[^\n]*\n+/, '');
+  if (!trimmed) return null;
+  const sentenceMatch = /^([\s\S]*?[.!?])(?:\s|$)/.exec(trimmed);
+  const raw = sentenceMatch ? sentenceMatch[1] : trimmed.split(/\n/, 1)[0];
+  const collapsed = raw.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return null;
+  if (collapsed.length <= 160) return collapsed;
+  return collapsed.slice(0, 159).trimEnd() + '…';
+}
+
+/** First ~600 chars of result_md, on a sentence boundary if convenient. */
+function excerptResult(resultMd: string, maxLen = 600): string {
+  if (resultMd.length <= maxLen) return resultMd;
+  const sliced = resultMd.slice(0, maxLen);
+  const lastSentence = Math.max(sliced.lastIndexOf('. '), sliced.lastIndexOf('? '), sliced.lastIndexOf('! '));
+  if (lastSentence > maxLen * 0.6) return sliced.slice(0, lastSentence + 1) + '…';
+  return sliced.trimEnd() + '…';
+}
+
+function writeBriefAutoNote(brief: Brief, resultMd: string): void {
+  if (!brief.initiative_id) return;
+
+  // Use the chain root id as the source_ref so reruns dedupe cleanly:
+  // every brief in the chain writes its auto-note keyed by the
+  // original brief's id, regardless of how many reruns deep we are.
+  const chainRoot = findBriefChainRoot(brief.id);
+
+  // Soft-archive any prior non-archived auto-notes for this chain.
+  const existing = findNotesBySource('brief', chainRoot);
+  for (const prior of existing) {
+    archiveNote(prior.id, 'superseded_by_rerun');
+  }
+
+  const briefUrl = `/research/briefs/${brief.id}`;
+  const excerpt = excerptResult(resultMd);
+  const body =
+    `**Research: ${brief.title}**\n\n` +
+    `${excerpt}\n\n` +
+    `[Full brief](${briefUrl})`;
+
+  createNote({
+    workspace_id: brief.workspace_id,
+    agent_id: null,
+    initiative_id: brief.initiative_id,
+    scope_key: `brief-${brief.id}:auto-note:0`,
+    role: 'researcher',
+    run_group_id: brief.agent_run_id,
+    kind: 'discovery',
+    audience: 'pm',
+    body,
+    importance: 2,
+    source_kind: 'brief',
+    source_ref: chainRoot,
+  });
 }
 
 function briefShape(brief: Brief, extras: Record<string, unknown> = {}): Record<string, unknown> {

@@ -87,6 +87,10 @@ export async function POST(
         title: p.title,
         prompt: p.prompt,
         topic_id: p.topic_id ?? null,
+        // Initiative-scoped suggestions stamp `initiative_id` on the
+        // payload (see lib/research/suggest.ts). Propagate it onto the
+        // dispatched brief so slice-3's auto-note path kicks in.
+        initiative_id: p.initiative_id ?? null,
         requested_by: `suggestion:${suggestion.id}`,
       });
       const updated = markAccepted(id, created.brief.id);
