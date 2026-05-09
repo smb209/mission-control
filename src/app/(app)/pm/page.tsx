@@ -1306,7 +1306,11 @@ function ChatMessageRow({
               : undefined
           }
         />
-        {proposal.status === 'draft' && (
+        {proposal.status !== 'accepted' && (
+          // Refine is allowed on draft, superseded, and rejected — the DB
+          // only blocks accepted (refineProposal at pm-proposals.ts).
+          // Accept/Reject still gated to status === 'draft' below since
+          // those mutate state that's already moved on for non-drafts.
           <div className="px-3 py-2 border-t border-amber-500/30 bg-amber-500/5 flex flex-wrap items-center gap-2">
             {refining === proposal.id ? (
               <>
@@ -1338,6 +1342,7 @@ function ChatMessageRow({
               const sel = selectedIndexes.size;
               const allSelected = sel === total;
               const noneSelected = sel === 0;
+              const isDraft = proposal.status === 'draft';
               const applyLabel = decomposeLocked
                 ? 'Apply all'
                 : allSelected
@@ -1354,7 +1359,7 @@ function ChatMessageRow({
                   >
                     <RefreshCw className="w-3 h-3" /> Refine
                   </button>
-                  {!decomposeLocked && (
+                  {isDraft && !decomposeLocked && (
                     <>
                       <button
                         type="button"
@@ -1380,30 +1385,33 @@ function ChatMessageRow({
                   )}
                   {/* Apply: when all selected, hits /accept with no
                       filter (back-compat). When none, hits /reject.
-                      Otherwise, /accept with accepted_indexes. */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (noneSelected) {
-                        onReject(proposal.id);
-                        return;
-                      }
-                      const indexes = Array.from(selectedIndexes).sort(
-                        (a, b) => a - b,
-                      );
-                      onAccept(
-                        proposal,
-                        allSelected ? undefined : { accepted_indexes: indexes },
-                      );
-                    }}
-                    className={`text-xs px-2 py-1 rounded-sm flex items-center gap-1 ${
-                      noneSelected
-                        ? 'bg-red-500/20 border border-red-500/40 text-red-200 hover:bg-red-500/30'
-                        : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/30'
-                    }`}
-                  >
-                    <Check className="w-3 h-3" /> {applyLabel}
-                  </button>
+                      Otherwise, /accept with accepted_indexes. Hidden for
+                      non-draft proposals — those have already moved on. */}
+                  {isDraft && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (noneSelected) {
+                          onReject(proposal.id);
+                          return;
+                        }
+                        const indexes = Array.from(selectedIndexes).sort(
+                          (a, b) => a - b,
+                        );
+                        onAccept(
+                          proposal,
+                          allSelected ? undefined : { accepted_indexes: indexes },
+                        );
+                      }}
+                      className={`text-xs px-2 py-1 rounded-sm flex items-center gap-1 ${
+                        noneSelected
+                          ? 'bg-red-500/20 border border-red-500/40 text-red-200 hover:bg-red-500/30'
+                          : 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/30'
+                      }`}
+                    >
+                      <Check className="w-3 h-3" /> {applyLabel}
+                    </button>
+                  )}
                 </>
               );
             })()}

@@ -83,8 +83,12 @@ export interface AgentNote {
   pm_proposal_ids: string | null;
 }
 
-/** Maximum body length per note (matches the role-soul guidance). */
-export const NOTE_BODY_MAX = 3000;
+/** Maximum body length per note. Sized to fit a full multi-section
+ *  audit observation (6 sections w/ file paths + commit shas) without
+ *  forcing the agent into a truncate-and-retry loop, which empirically
+ *  causes it to drop other required fields across attempts. The prompt
+ *  still asks for tight notes; this is a ceiling, not a target. */
+export const NOTE_BODY_MAX = 8000;
 
 // ─── Create ─────────────────────────────────────────────────────────
 

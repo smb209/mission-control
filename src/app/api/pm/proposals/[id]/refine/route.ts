@@ -13,7 +13,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getProposal, refineProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { dispatchPm, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
-import { synthesizePlanInitiative, synthesizeDecompose } from '@/lib/agents/pm-agent';
+import {
+  synthesizePlanInitiative,
+  synthesizeDecompose,
+  synthesizeStoryToTasks,
+} from '@/lib/agents/pm-agent';
 import { getRoadmapSnapshot } from '@/lib/db/roadmap';
 import { getInitiative } from '@/lib/db/initiatives';
 import { parseSuggestionsFromImpactMd } from '@/lib/pm/planSuggestionsSidecar';
@@ -148,8 +152,26 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // the synth placeholder, and (if the named agent responded) a
       // separate agent row that supersedes it. Refine has its own
       // pre-allocated child row to copy content onto, so both transient
-      // rows are cleaned up.
+      // rows are cleaned up — but first re-key any chat-message rows
+      // that referenced them, otherwise the /pm chat's structured card
+      // lookup misses and falls back to plain markdown.
       const { run: del } = await import('@/lib/db');
+      if (settled.final.id !== child.id) {
+        del(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, settled.final.id],
+        );
+      }
+      if (dispatch.proposal.id !== child.id && dispatch.proposal.id !== settled.final.id) {
+        del(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, dispatch.proposal.id],
+        );
+      }
       if (dispatch.proposal.id !== child.id) {
         del('DELETE FROM pm_proposals WHERE id = ?', [dispatch.proposal.id]);
       }
@@ -177,6 +199,86 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       const synth = synthesizeDecompose(init, combinedHint.trim());
       newImpactMd = synth.impact_md;
       newChanges = synth.changes;
+    } else if (parent.trigger_kind === 'decompose_story') {
+      // Story-aware refine. Mirrors the decompose_story dispatch: synth
+      // floor via `synthesizeStoryToTasks`, then routes the LLM through
+      // `dispatchPmSynthesized` with an agent_prompt that explicitly
+      // hands the prior proposal's impact_md + proposed_changes to the
+      // PM so it can preserve the original detail rather than re-deriving
+      // a generic single task. Without this branch the refine fell into
+      // the disruption-analysis fallback and dropped all the per-task
+      // context (file paths, line numbers, classifications).
+      const ctx = parseTriggerContext(parent.trigger_text);
+      const initiativeId = ctx?.initiative_id as string | undefined;
+      const story = initiativeId ? getInitiative(initiativeId) : undefined;
+      if (!story) {
+        return NextResponse.json(
+          { error: 'Original story no longer exists; cannot refine' },
+          { status: 400 },
+        );
+      }
+      const combinedHint =
+        ((ctx?.hint as string | null) ?? '') +
+        (ctx?.hint ? '\n' : '') +
+        `Refine: ${parsed.data.additional_constraint}`;
+      const synth = synthesizeStoryToTasks(story, combinedHint.trim());
+
+      const dispatch = dispatchPmSynthesized({
+        workspace_id: parent.workspace_id,
+        trigger_text: child.trigger_text,
+        trigger_kind: 'decompose_story',
+        target_initiative_id: story.id,
+        timeoutMs: 120_000,
+        synth: { impact_md: synth.impact_md, changes: synth.changes },
+        agent_prompt:
+          `Refine the task decomposition for story ${story.id} ("${story.title}").\n\n` +
+          `Operator refinement request: "${parsed.data.additional_constraint}"\n\n` +
+          `### Prior proposal — preserve relevant detail\n` +
+          `Impact summary:\n${parent.impact_md}\n\n` +
+          `Prior proposed_changes (verbatim JSON):\n` +
+          `\`\`\`json\n${JSON.stringify(parent.proposed_changes, null, 2)}\n\`\`\`\n\n` +
+          `Apply the operator's refinement to that prior proposal — keep file ` +
+          `paths, line numbers, classifications, and any specific call-site detail ` +
+          `the prior tasks captured. Don't re-derive from scratch unless the ` +
+          `refinement explicitly asks to.\n\n` +
+          `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
+          `\`create_task_under_initiative\` diff per task, all targeting ` +
+          `initiative_id='${story.id}'. Output discipline: tool call FIRST, then ` +
+          `a single-line \`Proposal {id}.\` reply — no freeform summary (the ` +
+          `operator UI discards it).`,
+      });
+      const settled = await dispatch.completion;
+      newImpactMd = settled.final.impact_md;
+      newChanges = settled.final.proposed_changes;
+
+      const { run: del } = await import('@/lib/db');
+      // Re-key chat messages that were posted against the transient
+      // dispatch rows so the structured task-card render in /pm chat
+      // resolves to the surviving `child.id` row. Without this the
+      // chat falls back to plain markdown because the proposal_id
+      // metadata points at a row we're about to delete.
+      if (settled.final.id !== child.id) {
+        del(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, settled.final.id],
+        );
+      }
+      if (dispatch.proposal.id !== child.id && dispatch.proposal.id !== settled.final.id) {
+        del(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, dispatch.proposal.id],
+        );
+      }
+      if (dispatch.proposal.id !== child.id) {
+        del('DELETE FROM pm_proposals WHERE id = ?', [dispatch.proposal.id]);
+      }
+      if (settled.final.id !== dispatch.proposal.id && settled.final.id !== child.id) {
+        del('DELETE FROM pm_proposals WHERE id = ?', [settled.final.id]);
+      }
     } else {
       // Default disruption-analysis path. We borrow dispatchPm's
       // synthesizer and patch the result onto the pre-allocated child
@@ -189,10 +291,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       // trigger that combines the original parent context with the
       // operator's new constraint, plus an explicit "use propose_changes"
       // instruction so the agent stays on the right tool.
+      // Hand the agent the parent's impact_md + proposed_changes so it
+      // can preserve specific detail (file paths, line numbers, prior
+      // rationale) when applying the operator's refinement, rather than
+      // re-deriving generic content from the bare trigger_text.
       const cleanTrigger =
         `Operator refinement of an earlier ${parent.trigger_kind} proposal.\n\n` +
         `Original context:\n${(parent.trigger_text || '').replace(/\n*\[refine\][\s\S]*$/, '').trim()}\n\n` +
+        `### Prior proposal — preserve relevant detail\n` +
+        `Impact summary:\n${parent.impact_md}\n\n` +
+        `Prior proposed_changes (verbatim JSON):\n` +
+        `\`\`\`json\n${JSON.stringify(parent.proposed_changes, null, 2)}\n\`\`\`\n\n` +
         `New constraint to incorporate: ${parsed.data.additional_constraint}\n\n` +
+        `Apply the operator's refinement to that prior proposal — keep file paths, ` +
+        `line numbers, and any specific detail the prior changes captured. Don't ` +
+        `re-derive from scratch unless the refinement explicitly asks to.\n\n` +
         `Respond by calling \`propose_changes\` with an updated impact_md + diff list. ` +
         `Do NOT call \`refine_proposal\` — that's an operator-only tool and would create a dispatch loop.`;
       const synthesized = dispatchPm({
@@ -207,6 +320,26 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       newImpactMd = settled.final.impact_md;
       newChanges = settled.final.proposed_changes;
       const { run } = await import('@/lib/db');
+      // Re-key chat messages off the transient rows onto child.id BEFORE
+      // deleting them — otherwise the /pm chat's structured proposal
+      // card lookup misses (id no longer exists) and falls back to plain
+      // markdown rendering.
+      if (settled.final.id !== child.id) {
+        run(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, settled.final.id],
+        );
+      }
+      if (synthesized.proposal.id !== child.id && synthesized.proposal.id !== settled.final.id) {
+        run(
+          `UPDATE agent_chat_messages
+              SET metadata = json_set(metadata, '$.proposal_id', ?)
+            WHERE json_extract(metadata, '$.proposal_id') = ?`,
+          [child.id, synthesized.proposal.id],
+        );
+      }
       // Clean up both the placeholder and (if separate) the agent's row.
       if (synthesized.proposal.id !== child.id) {
         run(`DELETE FROM pm_proposals WHERE id = ?`, [synthesized.proposal.id]);
