@@ -606,13 +606,19 @@ export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelega
     const dueAt = new Date(Date.now() + input.expectedDurationMinutes * 60_000).toISOString();
 
     const subtaskId = uuidv4();
+    // Slice 2 of review-stage-robustness: every spawned subtask gets a
+    // default required_evidence_gates of ['test_full'] so the strict-mode
+    // evidence gate fires for review transitions. Legacy subtasks (no
+    // row updated) keep the bypass; new subtasks must produce real
+    // test evidence to enter review.
+    const defaultRequiredGates = JSON.stringify(['test_full']);
     run(
       `INSERT INTO convoy_subtasks (
          id, convoy_id, task_id, sort_order, depends_on, suggested_role,
          slice, expected_deliverables, acceptance_criteria,
          expected_duration_minutes, checkin_interval_minutes,
-         dispatched_at, due_at, deliverables_registered_count, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+         dispatched_at, due_at, deliverables_registered_count, required_evidence_gates, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         subtaskId,
         convoy.id,
@@ -629,6 +635,7 @@ export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelega
         input.checkinIntervalMinutes,
         now,
         dueAt,
+        defaultRequiredGates,
         now,
       ]
     );

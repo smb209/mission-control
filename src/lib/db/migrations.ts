@@ -4671,6 +4671,21 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '091',
+    name: 'convoy_subtasks_required_evidence_gates',
+    up: (db) => {
+      // Slice 2 of review-stage-robustness. Closes the convoy-subtask
+      // evidence-gate bypass: subtasks now declare which evidence gates
+      // they must satisfy to enter review. JSON array (e.g. ["test_full"]).
+      // Null/missing keeps the legacy bypass intact for in-flight rows.
+      const cols = db.prepare(`PRAGMA table_info(convoy_subtasks)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'required_evidence_gates')) {
+        db.exec(`ALTER TABLE convoy_subtasks ADD COLUMN required_evidence_gates TEXT`);
+        console.log('[Migration 091] convoy_subtasks.required_evidence_gates added.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
