@@ -229,3 +229,127 @@ test('generateSuggestions: returns failed when PM reply has no JSON', async () =
   assert.equal(result.state, 'failed');
   assert.match(result.reason ?? '', /JSON/i);
 });
+
+// ─── Initiative-scoped context (slice 2 of initiative research loop) ──
+
+import { gatherInitiativeContext, buildInitiativeSuggestPrompt } from './suggest';
+import { createBriefWithRun, setBriefSummary } from '@/lib/db/briefs';
+import { createNote } from '@/lib/db/agent-notes';
+import { markComplete, markRunning } from "@/lib/db/agent-runs";
+
+function seedInitiative(workspaceId: string, overrides: { parent?: string; description?: string } = {}): string {
+  const id = `init-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO initiatives (id, workspace_id, parent_initiative_id, kind, title, description, status, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, 'theme', 'Test theme', ?, 'planned', 0, datetime('now'), datetime('now'))`,
+    [id, workspaceId, overrides.parent ?? null, overrides.description ?? 'A theme to research.'],
+  );
+  return id;
+}
+
+test('gatherInitiativeContext: returns null for foreign workspace', () => {
+  const ws = freshWorkspace();
+  const other = freshWorkspace();
+  const initId = seedInitiative(ws);
+  const ctx = gatherInitiativeContext(other, initId);
+  assert.equal(ctx, null);
+});
+
+test('gatherInitiativeContext: parent chain + recent PM notes + prior briefs index', () => {
+  const ws = freshWorkspace();
+  const root = seedInitiative(ws, { description: 'root theme' });
+  const child = seedInitiative(ws, { parent: root, description: 'child' });
+
+  // Add a PM-audience note above the importance threshold.
+  createNote({
+    workspace_id: ws,
+    agent_id: null,
+    initiative_id: child,
+    scope_key: 'agent:test:ws:none:builder:1',
+    role: 'builder',
+    run_group_id: 'rg-1',
+    kind: 'discovery',
+    audience: 'pm',
+    body: 'A discovery worth surfacing',
+    importance: 2,
+  });
+  // Importance-0 note is filtered out (gather uses min_importance: 1).
+  createNote({
+    workspace_id: ws,
+    agent_id: null,
+    initiative_id: child,
+    scope_key: 'agent:test:ws:none:builder:1',
+    role: 'builder',
+    run_group_id: 'rg-1',
+    kind: 'observation',
+    audience: 'pm',
+    body: 'low signal',
+    importance: 0,
+  });
+
+  // A prior brief on this initiative, completed.
+  const { brief, agent_run } = createBriefWithRun({
+    workspace_id: ws,
+    template: 'general_brief',
+    title: 'Prior brief',
+    prompt: 'What is X?',
+    initiative_id: child,
+  });
+  markRunning(agent_run.id);
+  markComplete(agent_run.id);
+  setBriefSummary(brief.id, 'X is well-understood and mature.');
+
+  const ctx = gatherInitiativeContext(ws, child);
+  assert.ok(ctx, 'context should be present');
+  assert.equal(ctx!.initiative.id, child);
+  assert.equal(ctx!.parent_chain.length, 1);
+  assert.equal(ctx!.parent_chain[0].id, root);
+
+  assert.equal(ctx!.recent_notes.length, 1);
+  assert.equal(ctx!.recent_notes[0].body, 'A discovery worth surfacing');
+
+  assert.equal(ctx!.prior_briefs.length, 1);
+  assert.equal(ctx!.prior_briefs[0].id, brief.id);
+  assert.equal(ctx!.prior_briefs[0].summary, 'X is well-understood and mature.');
+  assert.equal(ctx!.prior_briefs[0].status, 'complete');
+});
+
+test('buildInitiativeSuggestPrompt: prompt body is initiative-scoped, not workspace-scoped', () => {
+  const ws = freshWorkspace();
+  const initId = seedInitiative(ws, { description: 'unique-marker-string' });
+  const ctx = gatherInitiativeContext(ws, initId);
+  assert.ok(ctx);
+  const prompt = buildInitiativeSuggestPrompt('brief', ctx!);
+  assert.match(prompt, /initiative-scoped/);
+  assert.match(prompt, /unique-marker-string/);
+  // Workspace-scoped buckets should NOT appear in this prompt.
+  assert.doesNotMatch(prompt, /Tasks needing attention/);
+});
+
+test('generateSuggestions: rejects unknown initiative_id', async () => {
+  const ws = freshWorkspace();
+  ensurePm(ws);
+  const result = await generateSuggestions({ workspace_id: ws, kind: 'brief', initiative_id: 'does-not-exist' });
+  assert.equal(result.state, 'rejected');
+  assert.match(result.reason ?? '', /not found/);
+});
+
+test('generateSuggestions: stamps initiative_id onto brief suggestion payloads', async () => {
+  const ws = freshWorkspace();
+  ensurePm(ws);
+  const initId = seedInitiative(ws);
+  __setSendChatClientForTests(makeStubClient(
+    `\`\`\`json
+{ "suggestions": [{ "title": "T1", "prompt": "?", "topic_id": null, "rationale": "r" }] }
+\`\`\``,
+  ));
+  const result = await generateSuggestions({ workspace_id: ws, kind: 'brief', initiative_id: initId });
+  assert.equal(result.state, 'ok');
+  assert.equal(result.suggestions.length, 1);
+  const payload = result.suggestions[0].payload as { initiative_id?: string };
+  assert.equal(payload.initiative_id, initId);
+  // listSuggestions filter by initiative_id finds it.
+  const filtered = listSuggestions(ws, { initiative_id: initId, status: 'pending' });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].id, result.suggestions[0].id);
+});

@@ -15,6 +15,10 @@ const ALLOWED_STATUSES: SuggestionStatus[] = ['pending', 'accepted', 'rejected',
 const PostSchema = z.object({
   workspace_id: z.string().min(1),
   kind: z.enum(['topic', 'brief']),
+  /** When set, scope the dispatch to a specific initiative — the PM
+   *  gets initiative-scoped context and brief suggestions carry
+   *  `payload.initiative_id`. */
+  initiative_id: z.string().min(1).optional(),
 });
 
 /**
@@ -36,9 +40,11 @@ export async function GET(request: NextRequest) {
     if (statusParam && !ALLOWED_STATUSES.includes(statusParam as SuggestionStatus)) {
       return NextResponse.json({ error: `status must be one of: ${ALLOWED_STATUSES.join(', ')}` }, { status: 400 });
     }
+    const initiativeIdParam = searchParams.get('initiative_id') || undefined;
     return NextResponse.json(listSuggestions(workspaceId, {
       kind: (kindParam as SuggestionKind | null) ?? undefined,
       status: statusParam as SuggestionStatus,
+      initiative_id: initiativeIdParam,
     }));
   } catch (error) {
     console.error('Failed to list research_suggestions:', error);
@@ -65,6 +71,7 @@ export async function POST(request: NextRequest) {
     const result = await generateSuggestions({
       workspace_id: parsed.data.workspace_id,
       kind: parsed.data.kind,
+      initiative_id: parsed.data.initiative_id,
     });
     if (result.state === 'rejected') {
       return NextResponse.json(

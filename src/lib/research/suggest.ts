@@ -21,7 +21,8 @@ import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { getPmAgent } from '@/lib/agents/pm-resolver';
 import { listTopics } from '@/lib/db/topics';
 import { listBriefs } from '@/lib/db/briefs';
-import { listInitiatives } from '@/lib/db/initiatives';
+import { listNotes } from '@/lib/db/agent-notes';
+import { getInitiative, listInitiatives } from '@/lib/db/initiatives';
 import {
   createSuggestion,
   dismissPendingForWorkspaceKind,
@@ -30,6 +31,7 @@ import {
   type TopicSuggestionPayload,
   type BriefSuggestionPayload,
 } from '@/lib/db/research-suggestions';
+import type { Initiative } from '@/lib/db/initiatives';
 import { extractReplyText } from '@/lib/research/run-brief';
 import type { ChatEvent } from '@/lib/openclaw/send-chat';
 
@@ -40,6 +42,15 @@ export interface SuggestOptions {
   workspace_id: string;
   /** Either 'topic' or 'brief'. recurring_brief is reserved (phase 2). */
   kind: 'topic' | 'brief';
+  /**
+   * When set, scope the suggest pipeline to a single initiative. The PM
+   * gets initiative-specific context (title/description/parent chain +
+   * recent PM-audience notes + index of prior briefs on this initiative)
+   * instead of the workspace-wide snapshot. Generated `brief` suggestions
+   * carry `payload.initiative_id` so accept-flow propagates it onto the
+   * dispatched brief. See specs/initiative-research-loop.md.
+   */
+  initiative_id?: string;
   timeoutMs?: number;
 }
 
@@ -90,12 +101,44 @@ interface WorkspaceContext {
   topics: TopicSummary[];
 }
 
+interface PriorBriefIndexEntry {
+  id: string;
+  title: string;
+  summary: string | null;
+  status: string;
+}
+
+interface InitiativeNoteSummary {
+  kind: string;
+  importance: number;
+  body: string;
+  created_at: string;
+}
+
+interface InitiativeContext {
+  initiative: InitiativeSummary;
+  /** Root → leaf, this initiative last. Empty when initiative is a root. */
+  parent_chain: InitiativeSummary[];
+  recent_notes: InitiativeNoteSummary[];
+  /** {id, title, summary} per prior brief on this initiative. The PM
+   *  fetches full bodies via `read_brief` (slice 4) when a summary
+   *  hints at relevance. */
+  prior_briefs: PriorBriefIndexEntry[];
+  /** Existing topics in the same workspace — passed through so the
+   *  PM can still anchor a `brief` suggestion to a topic if it fits. */
+  topics: TopicSummary[];
+}
+
 /** Cap how much we feed the PM. Beyond a few dozen rows the prompt
  *  bloats and the PM's signal-to-noise drops. Tune on real usage. */
 const MAX_INITIATIVES = 30;
 const MAX_TASKS_PER_BUCKET = 15;
 const MAX_BRIEFS = 20;
 const MAX_TOPICS = 30;
+const MAX_NOTES_PER_INITIATIVE = 10;
+const MAX_PARENT_CHAIN = 4;
+const MAX_PRIOR_BRIEFS_INDEX = 25;
+const NOTE_BODY_TRUNCATE = 400;
 
 export function gatherWorkspaceContext(workspaceId: string): WorkspaceContext {
   const initiatives = listInitiatives({ workspace_id: workspaceId })
@@ -149,6 +192,200 @@ export function gatherWorkspaceContext(workspaceId: string): WorkspaceContext {
       description: t.description,
     })),
   };
+}
+
+function toSummary(i: Initiative | InitiativeSummary): InitiativeSummary {
+  return {
+    id: i.id,
+    kind: i.kind,
+    title: i.title,
+    status: i.status,
+    description: 'description' in i ? i.description ?? null : null,
+    target_end: 'target_end' in i ? i.target_end ?? null : null,
+  };
+}
+
+/**
+ * Gather initiative-scoped context for the suggest prompt: the
+ * initiative itself + its parent chain (so the PM understands where
+ * it sits in the roadmap), recent PM-audience notes (`importance≥1`
+ * so the PM sees discoveries/blockers but not pure observations), and
+ * a lightweight `{id,title,summary}` index of prior briefs scoped to
+ * this initiative. Workspace topics pass through so the PM can anchor
+ * a brief to a topic if one fits.
+ *
+ * Returns `null` when the initiative isn't found in this workspace —
+ * caller should fall back to workspace-scoped context.
+ */
+export function gatherInitiativeContext(
+  workspace_id: string,
+  initiative_id: string,
+): InitiativeContext | null {
+  const initiative = getInitiative(initiative_id);
+  if (!initiative || initiative.workspace_id !== workspace_id) return null;
+
+  // Walk the parent chain (oldest ancestor first).
+  const chain: InitiativeSummary[] = [];
+  let cursor = initiative.parent_initiative_id;
+  let steps = 0;
+  while (cursor && steps < MAX_PARENT_CHAIN) {
+    const parent = getInitiative(cursor);
+    if (!parent) break;
+    chain.unshift(toSummary(parent));
+    cursor = parent.parent_initiative_id;
+    steps++;
+  }
+
+  const notes = listNotes({
+    workspace_id,
+    initiative_id,
+    audience: 'pm',
+    min_importance: 1,
+    limit: MAX_NOTES_PER_INITIATIVE,
+    order: 'desc',
+  });
+  const recent_notes: InitiativeNoteSummary[] = notes.map(n => ({
+    kind: n.kind,
+    importance: n.importance,
+    body: n.body.length > NOTE_BODY_TRUNCATE
+      ? `${n.body.slice(0, NOTE_BODY_TRUNCATE)}…`
+      : n.body,
+    created_at: n.created_at,
+  }));
+
+  const prior = listBriefs(workspace_id, {
+    initiative_id,
+    limit: MAX_PRIOR_BRIEFS_INDEX,
+  });
+  // Pull each brief's status from agent_runs in a single batched
+  // lookup so the PM can see which prior briefs actually completed.
+  const runIds = prior.map(b => b.agent_run_id).filter(Boolean);
+  const statuses = new Map<string, string>();
+  if (runIds.length > 0) {
+    const placeholders = runIds.map(() => '?').join(',');
+    const rows = queryAll<{ id: string; status: string }>(
+      `SELECT id, status FROM agent_runs WHERE id IN (${placeholders})`,
+      runIds,
+    );
+    for (const r of rows) statuses.set(r.id, r.status);
+  }
+  const prior_briefs: PriorBriefIndexEntry[] = prior.map(b => ({
+    id: b.id,
+    title: b.title,
+    summary: b.summary,
+    status: statuses.get(b.agent_run_id) ?? 'unknown',
+  }));
+
+  const topics = listTopics(workspace_id).slice(0, MAX_TOPICS);
+
+  return {
+    initiative: toSummary(initiative),
+    parent_chain: chain,
+    recent_notes,
+    prior_briefs,
+    topics: topics.map(t => ({ id: t.id, name: t.name, description: t.description })),
+  };
+}
+
+/** Initiative-scoped variant of `buildSuggestPrompt`. Composed onto
+ *  the same reply-format footer so the parser stays unchanged. */
+export function buildInitiativeSuggestPrompt(
+  kind: 'topic' | 'brief',
+  ctx: InitiativeContext,
+): string {
+  const sections: string[] = [];
+  sections.push(
+    `# Research suggestion request — initiative-scoped`,
+    `\nYou are being asked to propose up to ${MAX_SUGGESTIONS_PER_RUN} candidate ` +
+    `**research ${kind === 'topic' ? 'topics' : 'briefs'}** that *advance this specific initiative*: ` +
+    `fill gaps in the current understanding, validate assumptions in the description, or surface ` +
+    `unknowns blocking decomposition into milestones/epics.\n` +
+    `\n**This is NOT a Mission Control task.** Do NOT call \`register_deliverable\` / ` +
+    `\`update_task_status\` / \`log_activity\` / \`propose_changes\`. Reply with the JSON block ` +
+    `specified at the bottom of this prompt and nothing else after it.`,
+  );
+
+  // Parent chain → root...→ this. Helps the PM see where this sits.
+  if (ctx.parent_chain.length > 0) {
+    sections.push(
+      `## Parent chain`,
+      ctx.parent_chain
+        .map((p, i) => `${'  '.repeat(i)}- **${p.kind}** \`${p.status}\` — ${p.title}`)
+        .join('\n'),
+    );
+  }
+
+  const i = ctx.initiative;
+  sections.push(
+    `## This initiative`,
+    `- **${i.kind}** \`${i.status}\` — ${i.title}` +
+      (i.description ? `\n- description: ${i.description.slice(0, 1500)}` : '') +
+      (i.target_end ? `\n- target_end: ${i.target_end}` : ''),
+  );
+
+  if (ctx.recent_notes.length > 0) {
+    sections.push(
+      `## Recent PM-audience notes (importance ≥ 1)`,
+      ctx.recent_notes
+        .map(n => `- (${n.kind}, importance ${n.importance}) ${n.body}`)
+        .join('\n'),
+    );
+  }
+
+  if (ctx.prior_briefs.length > 0) {
+    sections.push(
+      `## Prior briefs on this initiative (${ctx.prior_briefs.length})`,
+      ctx.prior_briefs
+        .map(b => `- \`${b.id}\` [${b.status}] **${b.title}**` + (b.summary ? ` — ${b.summary}` : ''))
+        .join('\n'),
+      `\n_Use \`read_brief({brief_id})\` to fetch the full body of any prior brief if a summary hints ` +
+      `it might be directly relevant. Avoid duplicating prior briefs._`,
+    );
+  } else {
+    sections.push(`## Prior briefs on this initiative\n\n_(none yet — open territory)_`);
+  }
+
+  if (ctx.topics.length > 0) {
+    sections.push(
+      `## Existing workspace topics (you may anchor a brief to one if it fits)`,
+      ctx.topics.map(t => `- \`${t.id}\` **${t.name}** — ${t.description.slice(0, 200) || '(no description)'}`).join('\n'),
+    );
+  }
+
+  sections.push(
+    `## Reply format`,
+    `\nReply with a single fenced JSON code block (\`\`\`json … \`\`\`) and nothing else after it. ` +
+    `Shape:\n` +
+    (kind === 'topic'
+      ? `\n\`\`\`json
+{
+  "suggestions": [
+    {
+      "name": "Short topic name (≤ 80 chars)",
+      "description": "Why this topic matters; what we'd track over time (1–3 sentences).",
+      "tags": ["short", "tags"],
+      "rationale": "1 sentence: WHY you suggested this, referencing this initiative's specific gaps."
+    }
+  ]
+}
+\`\`\`\n`
+      : `\n\`\`\`json
+{
+  "suggestions": [
+    {
+      "title": "Short brief title (≤ 100 chars)",
+      "prompt": "Specific research question. Be precise about scope, depth, and what would make the answer useful for this initiative.",
+      "topic_id": null,
+      "rationale": "1 sentence: WHY you suggested this, referencing this initiative's specific gaps."
+    }
+  ]
+}
+\`\`\`\n` +
+        `If a brief naturally belongs to one of the existing topics above, set \`topic_id\` to that topic's id; otherwise leave null.\n`),
+    `\nReturn between 1 and ${MAX_SUGGESTIONS_PER_RUN} candidates. Quality over quantity.`,
+  );
+
+  return sections.join('\n\n');
 }
 
 export function buildSuggestPrompt(
@@ -358,9 +595,29 @@ export async function generateSuggestions(opts: SuggestOptions): Promise<Suggest
     };
   }
 
-  const ctx = gatherWorkspaceContext(opts.workspace_id);
-  const triggerBody = buildSuggestPrompt(opts.kind, ctx);
-  const validTopicIds = new Set(ctx.topics.map(t => t.id));
+  let triggerBody: string;
+  let validTopicIds: Set<string>;
+  let initiativeCtx: InitiativeContext | null = null;
+  let sessionTag: string;
+
+  if (opts.initiative_id) {
+    initiativeCtx = gatherInitiativeContext(opts.workspace_id, opts.initiative_id);
+    if (!initiativeCtx) {
+      return {
+        state: 'rejected',
+        reason: `Initiative ${opts.initiative_id} not found in this workspace.`,
+        suggestions: [],
+      };
+    }
+    triggerBody = buildInitiativeSuggestPrompt(opts.kind, initiativeCtx);
+    validTopicIds = new Set(initiativeCtx.topics.map(t => t.id));
+    sessionTag = `init-${opts.initiative_id.slice(0, 8)}`;
+  } else {
+    const ctx = gatherWorkspaceContext(opts.workspace_id);
+    triggerBody = buildSuggestPrompt(opts.kind, ctx);
+    validTopicIds = new Set(ctx.topics.map(t => t.id));
+    sessionTag = 'workspace';
+  }
 
   let result;
   try {
@@ -368,7 +625,7 @@ export async function generateSuggestions(opts: SuggestOptions): Promise<Suggest
       workspace_id: opts.workspace_id,
       role: 'pm',
       agent: pm,
-      session_suffix: `research-suggest-${opts.kind}-${Date.now()}`,
+      session_suffix: `research-suggest-${opts.kind}-${sessionTag}-${Date.now()}`,
       trigger_body: triggerBody,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       attempt_strategy: 'fresh',
@@ -414,17 +671,25 @@ export async function generateSuggestions(opts: SuggestOptions): Promise<Suggest
   }
 
   // Dismiss any prior pending suggestions of this kind so the picker
-  // shows only the latest batch.
+  // shows only the latest batch. (Workspace-wide; initiative-scoped
+  // dismissal is coarser than ideal but matches the existing UX —
+  // suggestions queue is workspace-wide.)
   dismissPendingForWorkspaceKind(opts.workspace_id, opts.kind);
 
-  const inserted = candidates.map(c =>
-    createSuggestion({
+  const inserted = candidates.map(c => {
+    // For brief suggestions in initiative-scoped mode, stamp the
+    // initiative_id onto the payload so accept-flow propagates it.
+    let payload = c.payload;
+    if (opts.initiative_id && opts.kind === 'brief') {
+      payload = { ...(payload as BriefSuggestionPayload), initiative_id: opts.initiative_id };
+    }
+    return createSuggestion({
       workspace_id: opts.workspace_id,
       kind: opts.kind as SuggestionKind,
-      payload: c.payload,
+      payload,
       rationale: c.rationale,
-    }),
-  );
+    });
+  });
 
   return { state: 'ok', suggestions: inserted, raw: body };
 }

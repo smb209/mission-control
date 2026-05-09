@@ -31,6 +31,9 @@ export interface BriefSuggestionPayload {
   title: string;
   prompt: string;
   topic_id?: string | null;
+  /** When set, the accepted brief will be dispatched with this
+   *  `initiative_id`. Slice 2 of the initiative research loop. */
+  initiative_id?: string | null;
   template: 'general_brief';
 }
 
@@ -166,6 +169,11 @@ export interface ListSuggestionsOptions {
   kind?: SuggestionKind;
   status?: SuggestionStatus;
   source_run_id?: string;
+  /** When set, restrict to suggestions whose `payload_json` references
+   *  this initiative_id (matched as a JSON-string substring). Used by
+   *  the InitiativeDetailView Research section so initiative-scoped
+   *  suggestions don't pollute the workspace-wide queue. */
+  initiative_id?: string;
   limit?: number;
 }
 
@@ -186,6 +194,14 @@ export function listSuggestions(
   if (opts.source_run_id) {
     where.push('source_run_id = ?');
     params.push(opts.source_run_id);
+  }
+  if (opts.initiative_id) {
+    // payload_json is JSON; match the value as a string. We accept the
+    // false-positive risk on a payload that mentions the id elsewhere
+    // (the JSON shape is small and dedicated, and the alternative is
+    // a generated column / json_extract which adds schema cost).
+    where.push(`payload_json LIKE ?`);
+    params.push(`%"initiative_id":"${opts.initiative_id}"%`);
   }
   const limit = Math.min(opts.limit ?? 100, 500);
   const rows = queryAll<SuggestionRow>(
