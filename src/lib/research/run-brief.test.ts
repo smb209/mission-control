@@ -579,3 +579,136 @@ test('runBrief: topic context flows into the assembled prompt', async () => {
   const runRow = getAgentRun(agent_run.id);
   assert.equal(runRow?.status, 'failed');
 });
+
+// ─── slice 3 of initiative-research-loop: auto-note ─────────────────
+
+import { extractBriefSummary } from './run-brief';
+import { findNotesBySource, listNotes } from '@/lib/db/agent-notes';
+
+function seedInitiativeForBrief(workspaceId: string): string {
+  const id = `init-${uuidv4().slice(0, 8)}`;
+  run(
+    `INSERT INTO initiatives (id, workspace_id, kind, title, description, status, sort_order, created_at, updated_at)
+     VALUES (?, ?, 'theme', 'Test theme', 'Need research.', 'planned', 0, datetime('now'), datetime('now'))`,
+    [id, workspaceId],
+  );
+  return id;
+}
+
+test('extractBriefSummary: first sentence, ≤160 chars, strips heading + collapses whitespace', () => {
+  assert.equal(
+    extractBriefSummary('# Heading\n\nWebGPU is broadly supported. Browsers vary.'),
+    'WebGPU is broadly supported.',
+  );
+  assert.equal(extractBriefSummary(null), null);
+  assert.equal(extractBriefSummary(''), null);
+
+  const long = 'X'.repeat(200);
+  const out = extractBriefSummary(long)!;
+  assert.ok(out.length <= 160);
+  assert.ok(out.endsWith('…'));
+
+  // Whitespace collapsed
+  assert.equal(
+    extractBriefSummary('Some\n  multi-line   answer.  More text.'),
+    'Some multi-line answer.',
+  );
+});
+
+test('runBrief: when initiative-scoped, completion writes one auto-note + populates summary', async () => {
+  const ws = freshWorkspace();
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
+  const initId = seedInitiativeForBrief(ws);
+
+  const { brief } = createBriefWithRun({
+    workspace_id: ws,
+    template: 'general_brief',
+    title: 'WebGPU survey',
+    prompt: 'Survey WebGPU.',
+    initiative_id: initId,
+  });
+
+  __setSendChatClientForTests(makeStubClient({
+    body: 'WebGPU is broadly supported across modern browsers. Notable gaps: Safari prior to 17, older Edge.',
+  }));
+
+  await runBrief(brief.id, { awaitCompletionForTesting: true });
+
+  const reloaded = getBrief(brief.id)!;
+  assert.equal(reloaded.summary, 'WebGPU is broadly supported across modern browsers.');
+
+  const notes = listNotes({ workspace_id: ws, initiative_id: initId });
+  assert.equal(notes.length, 1);
+  const note = notes[0];
+  assert.equal(note.kind, 'discovery');
+  assert.equal(note.audience, 'pm');
+  assert.equal(note.importance, 2);
+  assert.equal(note.source_kind, 'brief');
+  assert.equal(note.source_ref, brief.id);
+  assert.match(note.body, /WebGPU survey/);
+  assert.match(note.body, /\/research\/briefs\/[a-f0-9-]+/);
+});
+
+test('runBrief: when NOT initiative-scoped, no auto-note is written', async () => {
+  const ws = freshWorkspace();
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
+  const { brief } = createBriefWithRun({
+    workspace_id: ws,
+    template: 'general_brief',
+    title: 'No-init brief',
+    prompt: '?',
+  });
+  __setSendChatClientForTests(makeStubClient({ body: 'Result.' }));
+  await runBrief(brief.id, { awaitCompletionForTesting: true });
+  const notes = listNotes({ workspace_id: ws });
+  assert.equal(notes.length, 0);
+});
+
+test('runBrief: rerun completion soft-archives prior auto-note (chain dedupe)', async () => {
+  const ws = freshWorkspace();
+  ensureResearcherRosterEntry(ws);
+  ensureRunner();
+  const initId = seedInitiativeForBrief(ws);
+
+  // Original brief.
+  const { brief: original } = createBriefWithRun({
+    workspace_id: ws,
+    template: 'general_brief',
+    title: 'Original',
+    prompt: 'p1',
+    initiative_id: initId,
+  });
+  __setSendChatClientForTests(makeStubClient({ body: 'Original finding.' }));
+  await runBrief(original.id, { awaitCompletionForTesting: true });
+
+  // Rerun — same chain root (original). Mirror what the rerun route does.
+  const { brief: rerun } = createBriefWithRun({
+    workspace_id: ws,
+    template: 'general_brief',
+    title: 'Original',
+    prompt: 'p1',
+    initiative_id: initId,
+    requested_by: `rerun:${original.id}`,
+    source_kind: 'manual',
+    source_ref: `brief:${original.id}`,
+  });
+  __setSendChatClientForTests(makeStubClient({ body: 'Updated finding.' }));
+  await runBrief(rerun.id, { awaitCompletionForTesting: true });
+
+  // chain root id is original.id — both auto-notes keyed on it.
+  const allForRoot = findNotesBySource('brief', original.id, { include_archived: true });
+  assert.equal(allForRoot.length, 2, 'two notes total — original archived, rerun active');
+  const archived = allForRoot.filter(n => n.archived_at !== null);
+  const active = allForRoot.filter(n => n.archived_at === null);
+  assert.equal(archived.length, 1);
+  assert.equal(archived[0].archived_reason, 'superseded_by_rerun');
+  assert.equal(active.length, 1);
+  assert.match(active[0].body, /Updated finding/);
+
+  // listNotes default (excludes archived) returns only the rerun's note.
+  const visible = listNotes({ workspace_id: ws, initiative_id: initId, audience: 'pm', min_importance: 2 });
+  assert.equal(visible.length, 1);
+  assert.match(visible[0].body, /Updated finding/);
+});
