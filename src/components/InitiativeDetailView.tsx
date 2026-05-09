@@ -783,9 +783,9 @@ or "carve out the onboarding flow as its own story first"`}
             up vertically and the strip reads as a structured table
             instead of the prior wrap-anywhere flex chain.
           */}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1 text-sm">
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+              <div className="text-xs uppercase tracking-wide text-mc-text-secondary/70 mb-1.5">
                 Schedule
               </div>
               <MetaRow label="target start">
@@ -811,7 +811,7 @@ or "carve out the onboarding flow as its own story first"`}
               </MetaRow>
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-mc-text-secondary/70 mb-1">
+              <div className="text-xs uppercase tracking-wide text-mc-text-secondary/70 mb-1.5">
                 Sizing
               </div>
               <MetaRow label="owner">
@@ -1483,8 +1483,8 @@ function OverflowMenu({
  */
 function MetaRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-2 py-0.5">
-      <span className="uppercase tracking-wide text-[10px] text-mc-text-secondary/70 w-20 shrink-0">
+    <div className="flex items-baseline gap-3 py-1">
+      <span className="uppercase tracking-wide text-xs text-mc-text-secondary/70 w-24 shrink-0">
         {label}
       </span>
       <span className="text-mc-text min-w-0">{children}</span>
