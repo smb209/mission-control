@@ -4686,6 +4686,21 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '092',
+    name: 'tasks_locked_for_completion',
+    up: (db) => {
+      // Slice 3 of review-stage-robustness. Soft-lock that fires when an
+      // agent hits a capability denial (e.g. agent_not_coordinator) — while
+      // the lock is set, forward-only mutations on the task are rejected
+      // and the agent's only valid next call is escalate_to_parent.
+      const cols = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'locked_for_completion')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN locked_for_completion INTEGER NOT NULL DEFAULT 0`);
+        console.log('[Migration 092] tasks.locked_for_completion added (default 0).');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

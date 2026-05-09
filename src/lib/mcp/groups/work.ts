@@ -758,6 +758,158 @@ export function registerWorkTools(server: McpServer): void {
     }),
   );
 
+  // escalate_to_parent ────────────────────────────────────────────
+  // Slice 3 of review-stage-robustness. The escape hatch for an agent
+  // that's hit a capability denial: instead of "doing it themselves",
+  // they escalate back to the convoy coordinator (or operator for
+  // top-level tasks). The child task bounces to assigned/is_failed=1
+  // and the lock clears.
+  server.registerTool(
+    'escalate_to_parent',
+    {
+      title: 'Escalate this task back to its coordinator / operator',
+      description:
+        "Use when you cannot make further progress yourself — typically after `spawn_subtask` returned `agent_not_coordinator`. The task is bounced to its parent (convoy coordinator, or operator for top-level tasks). After this call, your work on this task is finished.",
+      inputSchema: {
+        agent_id: agentIdArg,
+        task_id: taskIdArg,
+        reason: z.string().min(1).max(2000).describe('Why you cannot complete this task. Be specific — the parent uses this to decide what to do.'),
+      },
+      annotations: { destructiveHint: true, openWorldHint: false },
+    },
+    trace('escalate_to_parent', async (args) => {
+      const { assertAgentActive, clearTaskCompletionLock } = await import('@/lib/authz/agent-task');
+      assertAgentActive(args.agent_id);
+
+      const task = queryOne<{ id: string; status: string; assigned_agent_id: string | null; convoy_id: string | null; workspace_id: string; title: string }>(
+        `SELECT id, status, assigned_agent_id, convoy_id, workspace_id, title FROM tasks WHERE id = ?`,
+        [args.task_id],
+      );
+      if (!task) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `task ${args.task_id} not found` }],
+          structuredContent: { error: 'task_not_found' },
+        };
+      }
+      if (task.assigned_agent_id !== args.agent_id) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: 'You are not assigned to this task; only the assigned agent can escalate it.' }],
+          structuredContent: { error: 'agent_not_on_task' },
+        };
+      }
+
+      // Idempotency: if an escalation activity was logged within the last
+      // 60s, return the same response without writing again. Avoids
+      // double-escalations when the agent retries after a transient error.
+      const recent = queryOne<{ id: string; created_at: string }>(
+        `SELECT id, created_at FROM task_activities
+         WHERE task_id = ? AND activity_type = 'escalation'
+         ORDER BY created_at DESC LIMIT 1`,
+        [args.task_id],
+      );
+      const recentlyEscalated =
+        recent && (Date.now() - new Date(recent.created_at).getTime()) < 60_000;
+      if (recentlyEscalated) {
+        return textResult(`Task ${args.task_id} was already escalated ${recent.created_at}. No-op.`, {
+          task_id: args.task_id,
+          already_escalated: true,
+          escalation_id: recent.id,
+        });
+      }
+
+      const now = new Date().toISOString();
+      let parentTaskId: string | null = null;
+      let coordinatorId: string | null = null;
+
+      if (task.convoy_id) {
+        // Convoy child — find the convoy parent + its coordinator.
+        const convoyRow = queryOne<{ parent_task_id: string; coordinator_id: string | null }>(
+          `SELECT c.parent_task_id AS parent_task_id, p.assigned_agent_id AS coordinator_id
+             FROM convoys c
+             JOIN tasks p ON p.id = c.parent_task_id
+            WHERE c.id = ?`,
+          [task.convoy_id],
+        );
+        parentTaskId = convoyRow?.parent_task_id ?? null;
+        coordinatorId = convoyRow?.coordinator_id ?? null;
+      }
+
+      // Bounce the child task back to assigned with is_failed=1, clear the
+      // lock so a future re-dispatch path can pick it up.
+      run(
+        `UPDATE tasks
+            SET status = 'assigned',
+                is_failed = 1,
+                status_reason = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        [`Failed: child_escalated — ${args.reason.slice(0, 200)}`, now, args.task_id],
+      );
+      clearTaskCompletionLock(args.task_id);
+
+      // Activity row on the child for audit.
+      run(
+        `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, metadata, created_at)
+         VALUES (lower(hex(randomblob(16))), ?, ?, 'escalation', ?, ?, ?)`,
+        [args.task_id, args.agent_id, `Escalated to parent: ${args.reason}`, JSON.stringify({ reason: args.reason, parent_task_id: parentTaskId }), now],
+      );
+
+      if (parentTaskId) {
+        // Activity row on parent for the coordinator's feed.
+        run(
+          `INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, metadata, created_at)
+           VALUES (lower(hex(randomblob(16))), ?, ?, 'escalation', ?, ?, ?)`,
+          [parentTaskId, args.agent_id, `Child task ${args.task_id} escalated: ${args.reason}`, JSON.stringify({ child_task_id: args.task_id, reason: args.reason }), now],
+        );
+        run(
+          `UPDATE tasks SET status_reason = ?, updated_at = ? WHERE id = ?`,
+          [`child_escalated:${args.reason.slice(0, 200)}`, now, parentTaskId],
+        );
+        if (coordinatorId) {
+          sendAgentMail({
+            fromAgentId: args.agent_id,
+            toAgentId: coordinatorId,
+            subject: `ESCALATION: ${task.title.slice(0, 80)}`,
+            body: `Child task ${args.task_id} has been escalated.\n\n**Reason:** ${args.reason}\n\nThe child is bounced to assigned with is_failed=1. You can: re-decompose via update_subtask, reassign, or board_override.`,
+            taskId: parentTaskId,
+            push: true,
+          }).catch((err: unknown) => {
+            console.warn('[escalate_to_parent] coordinator notify failed:', (err as Error).message);
+          });
+        }
+      } else {
+        // Top-level task — operator becomes the implicit parent. Flip to
+        // needs_user_input and ping the workspace PM.
+        run(
+          `UPDATE tasks SET status = 'needs_user_input', updated_at = ? WHERE id = ?`,
+          [now, args.task_id],
+        );
+        const { getPmAgent } = await import('@/lib/agents/pm-resolver');
+        const pm = getPmAgent(task.workspace_id);
+        if (pm) {
+          sendAgentMail({
+            fromAgentId: args.agent_id,
+            toAgentId: pm.id,
+            subject: `ESCALATION: ${task.title.slice(0, 80)} (top-level)`,
+            body: `Top-level task ${args.task_id} has been escalated by its assignee.\n\n**Reason:** ${args.reason}\n\nTask is now needs_user_input. Reassign or board_override to continue.`,
+            taskId: args.task_id,
+            push: true,
+          }).catch((err: unknown) => {
+            console.warn('[escalate_to_parent] operator notify failed:', (err as Error).message);
+          });
+        }
+      }
+
+      return textResult(`Escalated task ${args.task_id} to parent. Bounced to assigned with is_failed=1.`, {
+        task_id: args.task_id,
+        parent_task_id: parentTaskId,
+        coordinator_notified: Boolean(coordinatorId),
+      });
+    }),
+  );
+
   // save_checkpoint ───────────────────────────────────────────────
   server.registerTool(
     'save_checkpoint',
@@ -1045,11 +1197,37 @@ export function registerWorkTools(server: McpServer): void {
       annotations: { destructiveHint: true, openWorldHint: false },
     },
     trace('spawn_subtask', async (args) => {
-      const { assertAgentCanActOnTask } = await import('@/lib/authz/agent-task');
+      const { assertAgentCanActOnTask, AuthzError, setTaskCompletionLock } =
+        await import('@/lib/authz/agent-task');
       // Reuse the 'delegate' authz action — same policy (coordinator-only
       // on this task). Action names are internal enum values, not
       // user-facing, so renaming isn't worth a schema change.
-      assertAgentCanActOnTask(args.agent_id, args.task_id, 'delegate');
+      try {
+        assertAgentCanActOnTask(args.agent_id, args.task_id, 'delegate');
+      } catch (err) {
+        // Slice 3 of review-stage-robustness: capability-denial soft-lock.
+        // When the caller isn't a coordinator on this task, set the lock
+        // and force the next-action to escalate_to_parent. Without this
+        // rail the agent would silently switch to "do it myself" mode and
+        // strand the task in review with no reviewer.
+        if (err instanceof AuthzError && err.code === 'agent_not_coordinator') {
+          setTaskCompletionLock(args.task_id, 'agent_not_coordinator');
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: 'You are not the coordinator for this task and cannot delegate. The task is now locked pending escalation: your only valid next call is escalate_to_parent({ task_id, agent_id, reason }).',
+            }],
+            structuredContent: {
+              error: 'agent_not_coordinator',
+              next_action: 'escalate_to_parent',
+              next_action_args_hint: { task_id: args.task_id, agent_id: args.agent_id, reason: '<why I cannot dispatch this myself>' },
+              blocked_tools: ['register_deliverable', 'update_task_status', 'submit_evidence'],
+            },
+          };
+        }
+        throw err;
+      }
 
       // Explicit sub-delegation guard: if the caller's task is itself a
       // subtask, reject. Authz above only checks coordinator-role-on-task;

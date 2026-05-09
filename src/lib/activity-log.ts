@@ -18,7 +18,8 @@ export type ServerActivityType =
   | 'stall_recovered'  // coordinator / dispatch clears a stall flag
   | 'coordinator_stalled'   // convoy coordinator itself can't be reached
   | 'coordinator_missing'   // convoy has no live coordinator
-  | 'roster_incomplete';    // pre-dispatch roster gate refused: workspace missing required role(s)
+  | 'roster_incomplete'     // pre-dispatch roster gate refused: workspace missing required role(s)
+  | 'escalation';           // child task escalated to parent / operator (Slice 3 of review-stage-robustness)
 
 interface LogActivityInput {
   taskId: string;

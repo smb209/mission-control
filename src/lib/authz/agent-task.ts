@@ -20,7 +20,7 @@
  * HTTP status (403) or MCP error responses uniformly.
  */
 
-import { queryOne } from '@/lib/db';
+import { queryOne, run } from '@/lib/db';
 
 export type AuthzAction =
   | 'read'
@@ -37,7 +37,8 @@ export type AuthzErrorCode =
   | 'task_not_found'
   | 'workspace_mismatch'
   | 'agent_not_on_task'
-  | 'agent_not_coordinator';
+  | 'agent_not_coordinator'
+  | 'task_locked_pending_escalation';
 
 export class AuthzError extends Error {
   constructor(
@@ -62,6 +63,42 @@ interface TaskRow {
   workspace_id: string | null;
   assigned_agent_id: string | null;
   created_by_agent_id: string | null;
+  locked_for_completion: number | null;
+}
+
+/** Forward-only mutating actions blocked while a task is soft-locked. */
+const FORWARD_MUTATING_ACTIONS = new Set<AuthzAction>([
+  'status',
+  'deliverable',
+  'activity',
+  'checkpoint',
+  'fail',
+]);
+
+/** Mark a task as locked: the assigned agent can no longer advance it.
+ *  Slice 3 of review-stage-robustness. The lock is cleared by
+ *  `clearTaskCompletionLock` (called by `escalate_to_parent` and on
+ *  reassignment / forward transition). */
+export function setTaskCompletionLock(taskId: string, _reason: string): void {
+  run(
+    `UPDATE tasks SET locked_for_completion = 1, updated_at = datetime('now') WHERE id = ?`,
+    [taskId],
+  );
+}
+
+export function clearTaskCompletionLock(taskId: string): void {
+  run(
+    `UPDATE tasks SET locked_for_completion = 0, updated_at = datetime('now') WHERE id = ?`,
+    [taskId],
+  );
+}
+
+export function isTaskCompletionLocked(taskId: string): boolean {
+  const row = queryOne<{ locked_for_completion: number | null }>(
+    `SELECT locked_for_completion FROM tasks WHERE id = ?`,
+    [taskId],
+  );
+  return Number(row?.locked_for_completion ?? 0) === 1;
 }
 
 function loadAgent(agentId: string): AgentRow {
@@ -83,7 +120,7 @@ function loadAgent(agentId: string): AgentRow {
 
 function loadTask(taskId: string): TaskRow {
   const row = queryOne<TaskRow>(
-    `SELECT id, workspace_id, assigned_agent_id, created_by_agent_id
+    `SELECT id, workspace_id, assigned_agent_id, created_by_agent_id, locked_for_completion
        FROM tasks WHERE id = ?`,
     [taskId],
   );
@@ -160,6 +197,22 @@ export function assertAgentCanActOnTask(
       );
     }
     return;
+  }
+
+  // Soft-lock check (Slice 3 of review-stage-robustness). When a task is
+  // locked, only the coordinator (escalation acknowledgment) and read-only
+  // actions are permitted. The locked agent's only valid next call is
+  // escalate_to_parent — which clears the lock as part of its work.
+  if (
+    Number(task.locked_for_completion ?? 0) === 1 &&
+    FORWARD_MUTATING_ACTIONS.has(action) &&
+    !isCoordinator
+  ) {
+    throw new AuthzError(
+      'task_locked_pending_escalation',
+      `task ${taskId} is locked pending escalation. The agent must call escalate_to_parent rather than continue advancing this task.`,
+      { agentId, taskId, action },
+    );
   }
 
   if (!isAssigned && !hasAnyRole && !isCoordinator) {
