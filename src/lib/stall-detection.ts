@@ -15,6 +15,22 @@ const ACTIVE_STATUSES = ['assigned', 'in_progress', 'convoy_active', 'testing', 
 /** Default threshold. Override via STALL_DETECTION_MINUTES env var. */
 const DEFAULT_STALL_MINUTES = 30;
 
+/** Default review-stage threshold. Tighter than the global because the
+ *  only legitimate work in review is reviewer evaluation. Override via
+ *  STALL_DETECTION_MINUTES_REVIEW env var. Slice 4 of review-stage-robustness. */
+const DEFAULT_REVIEW_STALL_MINUTES = 20;
+
+function getReviewThresholdMinutes(): number {
+  const raw = process.env.STALL_DETECTION_MINUTES_REVIEW;
+  if (!raw) return DEFAULT_REVIEW_STALL_MINUTES;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_REVIEW_STALL_MINUTES;
+}
+
+function isReviewAutobounceEnabled(): boolean {
+  return process.env.MC_REVIEW_AUTOBOUNCE === '1';
+}
+
 /** Consider the coordinator itself stalled if its last heartbeat is older than this. */
 const COORDINATOR_STALL_MINUTES = 10;
 
@@ -175,7 +191,143 @@ export async function scanStalledTasks(): Promise<StallReport> {
     });
   }
 
+  // Slice 4 of review-stage-robustness: separate scan for review-status
+  // tasks. The main loop above skips tasks with deliverable_count > 0,
+  // which means review-stage tasks (which always have deliverables)
+  // were never flagged. This scan owns the review SLA explicitly.
+  await scanStalledReviews(report);
+
   return report;
+}
+
+interface ReviewerInfo {
+  reviewerAgentId: string | null;
+}
+
+function getReviewerForTask(taskId: string): ReviewerInfo {
+  const row = queryOne<{ agent_id: string }>(
+    `SELECT agent_id FROM task_roles WHERE task_id = ? AND role = 'reviewer' LIMIT 1`,
+    [taskId],
+  );
+  return { reviewerAgentId: row?.agent_id ?? null };
+}
+
+/**
+ * Review-stage SLA scanner. Two-stage cadence:
+ *   - At 1× threshold: log `reviewer_stalled` + mailbox-ping reviewer.
+ *   - At 2× threshold (and `MC_REVIEW_AUTOBOUNCE=1`): bounce
+ *     `review → assigned`, `is_failed=1`, `status_reason='Failed: reviewer
+ *     unresponsive…'` and notify coordinator.
+ */
+async function scanStalledReviews(report: StallReport): Promise<void> {
+  const threshold = getReviewThresholdMinutes();
+  const reviews = queryAll<Task & { last_activity_at: string | null }>(
+    `SELECT t.*,
+            (SELECT MAX(created_at) FROM task_activities WHERE task_id = t.id) as last_activity_at
+       FROM tasks t
+      WHERE t.status = 'review'`,
+  );
+  const nowMs = Date.now();
+
+  for (const task of reviews) {
+    const lastTick = task.last_activity_at || task.updated_at;
+    const minutesIdle = (nowMs - new Date(lastTick).getTime()) / 60_000;
+    if (minutesIdle < threshold) continue;
+
+    const { reviewerAgentId } = getReviewerForTask(task.id);
+
+    // First-stage notification (throttled). One reviewer_stalled row
+    // per task per NOTIFY_THROTTLE_MINUTES window.
+    const recent = queryOne<{ created_at: string }>(
+      `SELECT created_at FROM task_activities
+       WHERE task_id = ? AND activity_type = 'reviewer_stalled'
+       ORDER BY created_at DESC LIMIT 1`,
+      [task.id],
+    );
+    const recentlyNotified = recent &&
+      (nowMs - new Date(recent.created_at).getTime()) / 60_000 < NOTIFY_THROTTLE_MINUTES;
+
+    if (!recentlyNotified) {
+      logTaskActivity({
+        taskId: task.id,
+        type: 'reviewer_stalled',
+        message: `Reviewer idle for ${Math.round(minutesIdle)}m (threshold ${threshold}m)`,
+        metadata: {
+          minutes_idle: Math.round(minutesIdle),
+          threshold_minutes: threshold,
+          reviewer_agent_id: reviewerAgentId,
+        },
+        agentId: reviewerAgentId,
+      });
+
+      // Mailbox-ping the reviewer if known. Fire-and-forget; failure is
+      // non-fatal (next scan retries).
+      if (reviewerAgentId) {
+        const { sendMail } = await import('@/lib/mailbox');
+        sendMail({
+          taskId: task.id,
+          fromAgentId: reviewerAgentId,
+          toAgentId: reviewerAgentId,
+          subject: `REVIEW SLA: idle ${Math.round(minutesIdle)}m`,
+          body: `Task ${task.id} ("${task.title}") has been waiting on review for ${Math.round(minutesIdle)} minutes (threshold ${threshold}m). Please act or escalate.`,
+        }).catch((err) => {
+          console.warn('[ReviewSLA] reviewer mailbox ping failed:', (err as Error).message);
+        });
+      }
+    }
+
+    // Second-stage auto-bounce. Behind MC_REVIEW_AUTOBOUNCE so operators
+    // can audit existing in-flight reviews before flipping the switch.
+    if (minutesIdle >= threshold * 2 && isReviewAutobounceEnabled()) {
+      const now = new Date().toISOString();
+      const reason = `Failed: reviewer unresponsive (idle ${Math.round(minutesIdle)}m)`;
+      run(
+        `UPDATE tasks
+            SET status = 'assigned',
+                is_failed = 1,
+                status_reason = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        [reason, now, task.id],
+      );
+      logTaskActivity({
+        taskId: task.id,
+        type: 'review_autobounced',
+        message: `Auto-bounced from review after ${Math.round(minutesIdle)}m (2× threshold)`,
+        metadata: {
+          minutes_idle: Math.round(minutesIdle),
+          threshold_minutes: threshold,
+          reviewer_agent_id: reviewerAgentId,
+        },
+      });
+
+      // Convoy-aware coordinator notify.
+      const convoy = resolveConvoyMembership(task);
+      if (convoy?.coordinatorAgentId) {
+        const { sendMail } = await import('@/lib/mailbox');
+        sendMail({
+          taskId: task.id,
+          convoyId: convoy.convoyId,
+          fromAgentId: convoy.coordinatorAgentId,
+          toAgentId: convoy.coordinatorAgentId,
+          subject: `REVIEW SLA: child auto-bounced — ${task.title.slice(0, 60)}`,
+          body: `Subtask ${task.id} sat in review for ${Math.round(minutesIdle)}m without progress. Auto-bounced to assigned with is_failed=1. Reassign reviewer or board_override to continue.`,
+          push: true,
+        }).catch((err) => {
+          console.warn('[ReviewSLA] coordinator mailbox ping failed:', (err as Error).message);
+        });
+      }
+
+      report.flagged.push({
+        task_id: task.id,
+        title: task.title,
+        status: 'review',
+        minutes_idle: Math.round(minutesIdle),
+        mode: convoy ? 'convoy' : 'solo',
+        notified: convoy?.coordinatorAgentId ? 'coordinator' : 'webhook',
+      });
+    }
+  }
 }
 
 interface ConvoyMembership {
