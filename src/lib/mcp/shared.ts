@@ -275,7 +275,7 @@ export const DiffSchema = z.discriminatedUnion('kind', [
     parent_initiative_id: z.string().min(1),
     title: z.string().min(1),
     description: z.string().nullish(),
-    child_kind: z.enum(['epic', 'story']),
+    child_kind: z.enum(['milestone', 'epic', 'story']),
     complexity: z.enum(['S', 'M', 'L', 'XL']).nullish(),
     estimated_effort_hours: z.number().nullish(),
     sort_order: z.number().optional(),

@@ -1771,7 +1771,7 @@ function ApplyPlanToInitiativeModal({
         <header className="p-4 border-b border-mc-border">
           <h2 className="text-lg font-semibold">Apply PM suggestions to an initiative</h2>
           <p className="text-xs text-mc-text-secondary mt-1">
-            Plan with PM produces an advisory proposal. Pick which initiative these suggestions
+            Enrich with PM produces an advisory proposal. Pick which initiative these suggestions
             should land on — the server will patch its fields and create the suggested
             dependencies in one go.
           </p>

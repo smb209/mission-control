@@ -133,12 +133,12 @@ export type PmDiff =
       // can carry placeholder ids (`$0`, `$1`, …) that point to other
       // siblings created in the SAME accept call (resolved post-insert) or
       // real ids for existing initiatives. `child_kind` is constrained to
-      // {epic, story} — themes/milestones are operator-driven only.
+      // {milestone, epic, story} — themes are operator-driven only.
       kind: 'create_child_initiative';
       parent_initiative_id: string;
       title: string;
       description?: string | null;
-      child_kind: 'epic' | 'story';
+      child_kind: 'milestone' | 'epic' | 'story';
       complexity?: 'S' | 'M' | 'L' | 'XL' | null;
       estimated_effort_hours?: number | null;
       sort_order?: number;
@@ -440,11 +440,12 @@ export function validateProposedChanges(
         if (!c.title || typeof c.title !== 'string') {
           errors.push(`changes[${i}]: title required`);
         }
-        // Hard-coded allowlist for child_kind — themes/milestones are
-        // operator-driven and never proposed by the PM.
-        if (c.child_kind !== 'epic' && c.child_kind !== 'story') {
+        // Hard-coded allowlist for child_kind — themes are
+        // operator-driven and never proposed by the PM. Milestones are
+        // permitted so a theme parent can be split into milestones.
+        if (c.child_kind !== 'milestone' && c.child_kind !== 'epic' && c.child_kind !== 'story') {
           errors.push(
-            `changes[${i}]: child_kind must be 'epic' or 'story' (got '${c.child_kind}')`,
+            `changes[${i}]: child_kind must be 'milestone', 'epic', or 'story' (got '${c.child_kind}')`,
           );
         }
         if (c.complexity != null && !['S', 'M', 'L', 'XL'].includes(c.complexity)) {

@@ -182,7 +182,7 @@ export async function POST(request: NextRequest) {
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,
         role: 'user',
-        content: `Plan with PM: "${parsed.data.draft.title}"`,
+        content: `Enrich: "${parsed.data.draft.title}"`,
       });
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,

@@ -339,6 +339,13 @@ export function synthesizeDecompose(
   const baseDesc = parent.description?.trim() ?? '';
   const hintBlock = hint ? `\n\n_Operator hint: ${hint.trim()}_` : '';
 
+  // Default child_kind is one tier below the parent: theme→milestone,
+  // milestone→epic, epic→story. Theme is never proposed as a child.
+  const childKind: 'milestone' | 'epic' | 'story' =
+    parent.kind === 'theme' ? 'milestone'
+    : parent.kind === 'milestone' ? 'epic'
+    : 'story';
+
   const changes: PmDiff[] = [];
   for (let i = 0; i < titles.length; i++) {
     const t = titles[i];
@@ -354,7 +361,7 @@ export function synthesizeDecompose(
         `${t} for parent initiative "${x}".` +
         (baseDesc ? `\n\nParent context:\n${baseDesc}` : '') +
         hintBlock,
-      child_kind: 'story',
+      child_kind: childKind,
       complexity: 'M',
       sort_order: i,
       depends_on_initiative_ids: deps,

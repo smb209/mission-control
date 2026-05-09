@@ -44,7 +44,7 @@ interface ChildDiff {
   parent_initiative_id: string;
   title: string;
   description?: string | null;
-  child_kind: 'epic' | 'story';
+  child_kind: 'milestone' | 'epic' | 'story';
   complexity?: 'S' | 'M' | 'L' | 'XL' | null;
   estimated_effort_hours?: number | null;
   sort_order?: number;
@@ -277,6 +277,10 @@ export default function DecomposeWithPmModal({
   };
 
   const addChild = () => {
+    const defaultChildKind: 'milestone' | 'epic' | 'story' =
+      initiative.kind === 'theme' ? 'milestone'
+      : initiative.kind === 'milestone' ? 'epic'
+      : 'story';
     setChildren(prev => [
       ...prev,
       {
@@ -284,7 +288,7 @@ export default function DecomposeWithPmModal({
         parent_initiative_id: initiative.id,
         title: 'New child',
         description: null,
-        child_kind: 'story',
+        child_kind: defaultChildKind,
         complexity: 'M',
       },
     ]);
@@ -299,7 +303,7 @@ export default function DecomposeWithPmModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Decompose initiative with PM"
+      aria-label="Split initiative with PM"
     >
       <div
         className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-5xl h-[88vh] flex flex-col text-mc-text"
@@ -308,7 +312,7 @@ export default function DecomposeWithPmModal({
         <header className="flex items-center justify-between px-5 py-3 border-b border-mc-border">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-mc-accent" />
-            <h2 className="text-lg font-semibold">Decompose &ldquo;{initiative.title}&rdquo;</h2>
+            <h2 className="text-lg font-semibold">Split &ldquo;{initiative.title}&rdquo;</h2>
           </div>
           <button
             onClick={onClose}
@@ -403,12 +407,13 @@ export default function DecomposeWithPmModal({
                           </div>
                           <select
                             value={c.child_kind}
-                            onChange={e => updateChild(i, { child_kind: e.target.value as 'epic' | 'story' })}
+                            onChange={e => updateChild(i, { child_kind: e.target.value as 'milestone' | 'epic' | 'story' })}
                             className="px-2 py-1 rounded bg-mc-bg-secondary border border-mc-border text-xs"
                             aria-label="Child kind"
                           >
                             <option value="story">story</option>
                             <option value="epic">epic</option>
+                            <option value="milestone">milestone</option>
                           </select>
                           <input
                             type="text"

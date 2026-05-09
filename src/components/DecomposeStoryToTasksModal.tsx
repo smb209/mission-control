@@ -267,7 +267,7 @@ export default function DecomposeStoryToTasksModal({
   };
 
   const displayMd = impactMd.replace(/<!--pm-plan-suggestions[\s\S]*?-->/g, '').trim();
-  const headerLabel = agentLabel ? `Decompose with ${agentLabel}` : 'Decompose to tasks';
+  const headerLabel = agentLabel ? `Create tasks with ${agentLabel}` : 'Create tasks';
 
   return (
     <div
@@ -275,7 +275,7 @@ export default function DecomposeStoryToTasksModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Decompose story into tasks"
+      aria-label="Create tasks from story"
     >
       <div
         className="bg-mc-bg-secondary border border-mc-border rounded-lg w-full max-w-5xl h-[88vh] flex flex-col text-mc-text"

@@ -302,7 +302,7 @@ export default function PlanWithPmPanel({
     <aside
       className="border border-mc-accent/30 rounded-lg bg-mc-bg p-4 mt-4"
       role="region"
-      aria-label="Plan with PM suggestions"
+      aria-label="Enrich with PM suggestions"
     >
       <header className="flex items-center gap-2 mb-3">
         <Sparkles className="w-4 h-4 text-mc-accent" />
