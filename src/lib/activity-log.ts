@@ -19,7 +19,9 @@ export type ServerActivityType =
   | 'coordinator_stalled'   // convoy coordinator itself can't be reached
   | 'coordinator_missing'   // convoy has no live coordinator
   | 'roster_incomplete'     // pre-dispatch roster gate refused: workspace missing required role(s)
-  | 'escalation';           // child task escalated to parent / operator (Slice 3 of review-stage-robustness)
+  | 'escalation'            // child task escalated to parent / operator (Slice 3 of review-stage-robustness)
+  | 'reviewer_stalled'      // review-stage task idled past first threshold (Slice 4 of review-stage-robustness)
+  | 'review_autobounced';   // review-stage task auto-bounced after 2× threshold (Slice 4)
 
 interface LogActivityInput {
   taskId: string;
