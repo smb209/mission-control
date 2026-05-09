@@ -41,6 +41,7 @@ import { InvestigatePicker, type InvestigateOption } from '@/components/inline/I
 import InvestigateModal from '@/components/InvestigateModal';
 import { NotesRail } from '@/components/notes/NotesRail';
 import { InitiativeRunsStrip } from '@/components/initiative/InitiativeRunsStrip';
+import { AuditProposalsSection } from '@/components/audit-proposals/AuditProposalsSection';
 import { useAgentNotes } from '@/hooks/useAgentNotes';
 import { countPriorAudits } from '@/components/inline/investigate-helpers';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -1099,6 +1100,11 @@ or "carve out the onboarding flow as its own story first"`}
             </ul>
           )}
         </Section>
+
+        {/* Audit Proposals — operator-facing review queue produced by
+            the subtree-audit pipeline. Auto-hides when there's nothing
+            to show. See specs/subtree-audit-proposals-spec.md §8. */}
+        <AuditProposalsSection initiativeId={initiative.id} />
 
         {/* Activity — live + recent agent_runs touching this initiative.
             Closes the "what did I just queue?" gap after page refresh and
