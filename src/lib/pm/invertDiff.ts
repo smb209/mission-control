@@ -215,22 +215,36 @@ function invertOne(diff: PmDiff, index: number): InvertedDiff {
     }
 
     case 'set_task_status': {
-      // Already-revert-shaped diff. Inverting a set_task_status('cancelled')
-      // means restoring the captured prev_task_status. The PM never
-      // forwards this kind, so the only way to hit this branch is when
-      // someone reverts a previous revert — which the spec explicitly
-      // says should "just produce another inverse" without special-casing.
+      // Inverting set_task_status restores the captured prev_task_status.
+      // The wider status union (added with confirm_task_done) lets us
+      // emit a real inverse instead of marking limited; the validator
+      // permits any status when trigger_kind === 'revert'.
       if (!diff.prev_task_status) {
         return limited(index, 'pre-capture proposal: prior task status was not recorded');
       }
-      // We can't emit a generic forward `set_task_status` since the type
-      // narrowly only allows status='cancelled'. Mark limited; future
-      // generalization (slice 3 polish) can widen the type.
       return {
         original_index: index,
-        status: 'limited',
-        inverse: null,
-        reason: `set_task_status revert needs a wider task-status diff kind (prev was '${diff.prev_task_status}')`,
+        status: 'inverted',
+        inverse: {
+          kind: 'set_task_status',
+          task_id: diff.task_id,
+          status: diff.prev_task_status as Extract<PmDiff, { kind: 'set_task_status' }>['status'],
+        },
+      };
+    }
+
+    case 'confirm_task_done': {
+      if (!diff.prev_task_status) {
+        return limited(index, 'pre-capture proposal: prior task status was not recorded');
+      }
+      return {
+        original_index: index,
+        status: 'inverted',
+        inverse: {
+          kind: 'set_task_status',
+          task_id: diff.task_id,
+          status: diff.prev_task_status as Extract<PmDiff, { kind: 'set_task_status' }>['status'],
+        },
       };
     }
 

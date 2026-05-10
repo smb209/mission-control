@@ -877,3 +877,233 @@ test('acceptProposal: omitting accepted_indexes is back-compat (full accept)', (
   assert.equal(result.changes_applied, 1);
   assert.deepEqual(result.rejected_indexes, []);
 });
+
+// ─── confirm_task_done diff kind ───────────────────────────────────
+
+function seedTaskInWorkspace(opts: {
+  workspace: string;
+  initiativeId?: string;
+  status?: string;
+}): string {
+  const id = uuidv4();
+  run(
+    `INSERT INTO tasks (id, title, status, priority, workspace_id, business_id, initiative_id, created_at, updated_at)
+     VALUES (?, 'T', ?, 'normal', ?, ?, ?, datetime('now'), datetime('now'))`,
+    [id, opts.status ?? 'review', opts.workspace, opts.workspace, opts.initiativeId ?? null],
+  );
+  return id;
+}
+
+function seedDoneEvidence(taskId: string): void {
+  // Minimum viable evidence to satisfy whyCannotBeDone's legacy bar:
+  // one role='output' deliverable + one 'completed' activity row.
+  run(
+    `INSERT INTO task_deliverables (id, task_id, deliverable_type, title, role, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'file', 'out.txt', 'output', datetime('now'))`,
+    [taskId],
+  );
+  run(
+    `INSERT INTO task_activities (id, task_id, activity_type, message, created_at)
+     VALUES (lower(hex(randomblob(16))), ?, 'completed', 'work done', datetime('now'))`,
+    [taskId],
+  );
+}
+
+test('confirm_task_done: rejects task in inbox (must be late-stage)', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'inbox' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'audit confirms',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'confirm_task_done',
+            task_id: taskId,
+            evidence_md: 'Audit confirms shipped — see commit 1234abc.',
+            commit_sha: '1234abc',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('confirm_task_done: rejects when no structured evidence pointer is provided', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'audit confirms',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'confirm_task_done',
+            task_id: taskId,
+            evidence_md: 'Looked at it, looks done. No specific pointer.',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('confirm_task_done: rejects evidence_md shorter than 20 chars', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'audit confirms',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'confirm_task_done',
+            task_id: taskId,
+            evidence_md: 'shipped',
+            commit_sha: '1234abc',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('confirm_task_done: rejects audit_proposal_id pointing at a draft proposal', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  // Create a draft (not accepted) proposal in the same workspace.
+  const draftAudit = createProposal({
+    workspace_id: ws,
+    trigger_text: 'audit',
+    impact_md: '.',
+    proposed_changes: [],
+  });
+  assert.equal(draftAudit.status, 'draft');
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: 'audit confirms',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'confirm_task_done',
+            task_id: taskId,
+            evidence_md: 'Pointing at the audit proposal that confirmed completion.',
+            audit_proposal_id: draftAudit.id,
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});
+
+test('confirm_task_done: happy path transitions task to done + emits attestation event', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  seedDoneEvidence(taskId);
+
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 'audit confirms',
+    impact_md: '.',
+    proposed_changes: [
+      {
+        kind: 'confirm_task_done',
+        task_id: taskId,
+        evidence_md: 'Audit verified all alert() replacements landed in commit 483d5de.',
+        commit_sha: '483d5de',
+      },
+    ],
+  });
+  const result = acceptProposal(p.id);
+  assert.equal(result.changes_applied, 1);
+  const after = queryOne<{ status: string }>('SELECT status FROM tasks WHERE id = ?', [taskId]);
+  assert.equal(after?.status, 'done');
+
+  const events = queryAll<{ type: string }>(
+    `SELECT type FROM events WHERE task_id = ? AND type = 'task_status_attested_done'`,
+    [taskId],
+  );
+  assert.equal(events.length, 1);
+});
+
+test('confirm_task_done: revert restores prev_status', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  seedDoneEvidence(taskId);
+
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 'audit confirms',
+    impact_md: '.',
+    proposed_changes: [
+      {
+        kind: 'confirm_task_done',
+        task_id: taskId,
+        evidence_md: 'Audit verified all alert() replacements landed in commit 483d5de.',
+        commit_sha: '483d5de',
+      },
+    ],
+  });
+  acceptProposal(p.id);
+
+  // Re-read the proposal so prev_status capture is visible on the diff.
+  const accepted = getProposal(p.id);
+  assert.ok(accepted);
+  const diff = accepted!.proposed_changes[0];
+  assert.equal((diff as { prev_task_status?: string }).prev_task_status, 'review');
+
+  // Build a revert proposal that restores prev_status, then accept it.
+  const revert = createProposal({
+    workspace_id: ws,
+    trigger_text: `revert ${p.id}`,
+    trigger_kind: 'revert',
+    impact_md: '.',
+    proposed_changes: [
+      {
+        kind: 'set_task_status',
+        task_id: taskId,
+        status: 'review',
+      },
+    ],
+  });
+  acceptProposal(revert.id);
+
+  const after = queryOne<{ status: string }>('SELECT status FROM tasks WHERE id = ?', [taskId]);
+  assert.equal(after?.status, 'review');
+});
+
+test('set_task_status: forward proposal still rejects status != cancelled', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const taskId = seedTaskInWorkspace({ workspace: ws, initiativeId: init.id, status: 'review' });
+  assert.throws(
+    () =>
+      createProposal({
+        workspace_id: ws,
+        trigger_text: '.',
+        impact_md: '.',
+        proposed_changes: [
+          {
+            kind: 'set_task_status',
+            task_id: taskId,
+            status: 'in_progress',
+          },
+        ],
+      }),
+    PmProposalValidationError,
+  );
+});

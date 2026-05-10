@@ -291,7 +291,37 @@ export const DiffSchema = z.discriminatedUnion('kind', [
     title: z.string().min(1).max(500),
     description: z.string().nullish(),
     status_check_md: z.string().nullish(),
-    assigned_agent_id: z.string().nullish(),
+    // .min(1) so callers can't pass "" — that bypassed the
+    // `if (c.assigned_agent_id)` validator and tripped the
+    // tasks.assigned_agent_id FK at apply time (see PR #325).
+    assigned_agent_id: z.string().min(1).nullish(),
     priority: z.enum(['low', 'normal', 'high']).optional(),
+  }),
+  z.object({
+    // PM may close out a task that's already in a late workflow state
+    // when concrete evidence (audit proposal, commit, PR) confirms it
+    // shipped. The apply pass routes through `transitionTaskStatus` so
+    // existing workflow gates still run.
+    kind: z.literal('confirm_task_done'),
+    task_id: z.string().min(1),
+    evidence_md: z
+      .string()
+      .min(20)
+      .describe(
+        'REQUIRED. Human-readable explanation of why the task is done. Min 20 chars; PM should not ship one-word attestations.',
+      ),
+    audit_proposal_id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'Optional. Id of a previously-accepted PM audit proposal that confirms the work shipped.',
+      ),
+    commit_sha: z
+      .string()
+      .regex(/^[0-9a-f]{7,40}$/i)
+      .optional()
+      .describe('Optional. Hex commit sha (7-40 chars) verifying the work landed.'),
+    pr_url: z.string().url().optional().describe('Optional. URL to the merged PR.'),
   }),
 ]);
