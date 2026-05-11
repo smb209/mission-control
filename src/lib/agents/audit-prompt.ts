@@ -268,6 +268,24 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
   body: <full report>,
 })`;
 
+  // Companion verdict note. Structured row that lets downstream
+  // tooling decide whether to auto-route the audit to PM. See
+  // specs/audit-action-recommended.md.
+  const verdictCall = `take_note({
+  initiative_id: "${initiative.id}",
+  kind: 'audit_verdict',
+  audience: 'pm',
+  importance: 1,
+  body: JSON.stringify({
+    version: 1,
+    observation_note_id: "<id of the observation note you just created>",
+    verdict: "on_track|partially_done|stale_rescope|never_built|done_in_entirety|cancelled_in_effect|audit_failed",
+    action_recommended: true|false,
+    recommended_action_hint: "cancel|mark_done|decompose|modify_scope|modify_dates|investigate_further" | null,
+    short_rationale: "<20–800 chars, why this verdict>",
+  }),
+})`;
+
   return `**Initiative audit (mode: ${mode})**
 
 Target: ${initiative.title}  (kind=${initiative.kind}, status=${initiative.status}, id=${initiative.id})
@@ -303,14 +321,24 @@ Save the report by calling:
 
 - ${takeNoteCall}
 
-This is the audit trail. The note surfaces on the initiative detail page and feeds the PM on a later Plan dispatch. Don't try to call \`register_deliverable\` for this — the deliverables system is task-scoped today and won't accept an initiative-only deliverable.
+Then, **immediately after**, call \`take_note\` a second time with the structured verdict row:
 
-Don't call propose_changes; you don't have it on your mount. The PM will pick up your note when the operator decides to act.
+- ${verdictCall}
+
+The observation note is the prose audit trail; the verdict note is the structured signal that downstream tooling (the PM auto-dispatch toggle) reads to decide whether to route the finding to PM right away. Both notes surface on the initiative detail page.
+
+Verdict guidance:
+- \`on_track\` → \`action_recommended: false\`. PM doesn't need to act.
+- \`done_in_entirety\` / \`cancelled_in_effect\` / \`never_built\` → \`action_recommended: true\`, hint \`mark_done\` / \`cancel\` / \`cancel\`. Operator likely wants to close out.
+- \`partially_done\` / \`stale_rescope\` → \`action_recommended: true\` only when scope clearly needs to change; otherwise false (just informational).
+- \`audit_failed\` → \`action_recommended: true\`, hint \`investigate_further\`. Use only when you genuinely could not complete the audit (missing repo, permissions, etc.) — not as a default.
+
+Don't try to call \`register_deliverable\` for this — the deliverables system is task-scoped today and won't accept an initiative-only deliverable. Don't call propose_changes; you don't have it on your mount. The PM picks up your notes when either the operator clicks "Ask PM" or the workspace's auto-spawn toggle fires off your verdict.
 
 **Strict output discipline for this dispatch:**
 
-- Make **exactly ONE** \`take_note\` call — the summary observation defined above. No \`breadcrumb\`/\`discovery\`/\`question\` notes during the audit, even if you'd normally drop them while researching. Build all observations into the single summary instead.
-- This applies to BOTH fresh runs and re-audits where prior findings are inlined above. On a re-audit, your single \`take_note\` is a fresh standalone summary that supersedes the priors — not an incremental update or set of follow-up breadcrumbs. Read the priors, factor them in, but emit ONE consolidated summary.
+- Make **exactly TWO** \`take_note\` calls: the observation, then the audit_verdict. No \`breadcrumb\`/\`discovery\`/\`question\` notes during the audit, even if you'd normally drop them while researching. Build all observations into the single summary instead.
+- This applies to BOTH fresh runs and re-audits where prior findings are inlined above. On a re-audit, your single observation + verdict pair supersedes the priors — not an incremental update or set of follow-up breadcrumbs. Read the priors, factor them in, but emit ONE consolidated summary + ONE verdict.
 - The audit-trail accumulates by virtue of each summary being its own row; the operator reads them newest-first. Multiple breadcrumbs per dispatch fragment that trail and make it harder to compare audit passes.
 
 If the initiative has no associated code yet (planned-only, no tasks, nothing in the repo to point at), early-exit with a short verdict ("never built — planned-only, no audit work to do"). Don't burn ten minutes of exec on greenfield.

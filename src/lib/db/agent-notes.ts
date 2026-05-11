@@ -26,7 +26,8 @@ export type NoteKind =
   | 'breadcrumb'
   | 'audit_manifest'
   | 'audit_proposal'
-  | 'audit_synthesis';
+  | 'audit_synthesis'
+  | 'audit_verdict';
 
 export const NOTE_KINDS: ReadonlyArray<NoteKind> = [
   'discovery',
@@ -39,20 +40,23 @@ export const NOTE_KINDS: ReadonlyArray<NoteKind> = [
   'audit_manifest',
   'audit_proposal',
   'audit_synthesis',
+  'audit_verdict',
 ];
 
 /**
  * Note kinds emitted by the subtree-audit pipeline (see
- * specs/subtree-audit-proposals-spec.md). These are excluded by default
- * from cross-audit reads (briefing builder, Notes Rail, default
- * `listNotes` calls) so audit artifacts don't bleed into unrelated
- * agent context. The proposal queue UI and the audit orchestrator
- * itself read them explicitly via the `kinds` filter.
+ * specs/subtree-audit-proposals-spec.md) plus the narrow-audit verdict
+ * row introduced by specs/audit-action-recommended.md. These are
+ * excluded by default from cross-audit reads (briefing builder, Notes
+ * Rail, default `listNotes` calls) so audit artifacts don't bleed into
+ * unrelated agent context. The proposal queue UI and the audit
+ * orchestrator itself read them explicitly via the `kinds` filter.
  */
 export const AUDIT_NOTE_KINDS: ReadonlyArray<NoteKind> = [
   'audit_manifest',
   'audit_proposal',
   'audit_synthesis',
+  'audit_verdict',
 ];
 
 export type NoteImportance = 0 | 1 | 2;

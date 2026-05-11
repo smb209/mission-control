@@ -36,6 +36,7 @@ import {
 } from '@/lib/agents/audit-proposals/schemas';
 import { getRunByGroupId } from '@/lib/db/agent-runs';
 import { broadcast } from '@/lib/events';
+import { maybeAutoSpawnPmFromVerdict } from '@/lib/agents/audit-auto-spawn';
 
 import {
   agentIdArg,
@@ -521,6 +522,20 @@ export function registerCoreTools(server: McpServer): void {
               (chatErr as Error).message,
             );
           }
+        }
+
+        // Audit → PM bridge. When the workspace setting is on and the
+        // verdict recommends action, fire a notes_intake PM dispatch
+        // bundling the verdict + paired observation. Fire-and-forget;
+        // failures are logged inside the helper and never surface to
+        // the auditor agent. See specs/audit-action-recommended.md.
+        if (note.kind === 'audit_verdict') {
+          maybeAutoSpawnPmFromVerdict(note).catch((err) => {
+            console.warn(
+              '[take_note] audit auto-spawn unhandled rejection:',
+              (err as Error).message,
+            );
+          });
         }
 
         return textResult(JSON.stringify(payload, null, 2), payload);

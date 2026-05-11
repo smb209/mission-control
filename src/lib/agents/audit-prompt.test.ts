@@ -51,6 +51,23 @@ test('audit-prompt: take_note call shape is exact (load-bearing)', () => {
   );
 });
 
+test('audit-prompt: emits audit_verdict instruction with required fields', () => {
+  // specs/audit-action-recommended.md: the narrow auditor must emit a
+  // second take_note with kind=audit_verdict so the auto-spawn hook
+  // can decide whether to route to PM. Lock the field names so a
+  // future re-flow doesn't silently strip the structured signal.
+  const out = buildAuditPrompt({
+    initiative: baseInitiative,
+    tasks: [],
+  });
+  assert.match(out, /kind: 'audit_verdict'/);
+  assert.match(out, /observation_note_id:/);
+  assert.match(out, /action_recommended:/);
+  assert.match(out, /recommended_action_hint:/);
+  assert.match(out, /short_rationale:/);
+  assert.match(out, /exactly TWO/);
+});
+
 test('audit-prompt: explicitly tells researcher NOT to call register_deliverable', () => {
   // PR 2 dropped register_deliverable because deliverables are
   // task-scoped today. The prompt must steer the researcher away

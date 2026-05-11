@@ -4701,6 +4701,103 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '093',
+    name: 'audit_verdict_kind_and_auto_spawn_setting',
+    up: (db) => {
+      // Phase 1 of specs/audit-action-recommended.md. Extends the
+      // agent_notes.kind CHECK to permit a new 'audit_verdict' kind —
+      // structured signal emitted by the narrow auditor alongside the
+      // free-form observation. Also adds workspaces.audit_auto_spawn_pm
+      // (opt-in toggle that lets the take_note handler auto-dispatch a
+      // notes_intake PM session when the verdict recommends action).
+      //
+      // Same table-swap recipe used by migration 087.
+
+      // 1) extend agent_notes.kind CHECK
+      const noteCols = db.prepare(`PRAGMA table_info(agent_notes)`).all() as Array<{ name: string }>;
+      // pm_proposal_ids was added in 084; consumed_by_stages was on the
+      // original table. Build the new schema with both.
+      const hasPmProposalIds = noteCols.some((c) => c.name === 'pm_proposal_ids');
+      const hasSourceKind = noteCols.some((c) => c.name === 'source_kind');
+      // Guard against a partial-application path (e.g. someone manually
+      // ran an ALTER TABLE ADD … kind) — bail if the check already
+      // accepts audit_verdict to keep this migration idempotent.
+      const tableSql = db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_notes'`)
+        .get() as { sql?: string } | undefined;
+      const alreadyExtended =
+        typeof tableSql?.sql === 'string' && tableSql.sql.includes("'audit_verdict'");
+      if (!alreadyExtended) {
+        db.exec('PRAGMA foreign_keys = OFF');
+        db.exec(`
+          CREATE TABLE agent_notes_new (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+            agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+            task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+            initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
+            scope_key TEXT NOT NULL,
+            role TEXT NOT NULL,
+            run_group_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+              'discovery','blocker','uncertainty','decision',
+              'observation','question','breadcrumb',
+              'audit_manifest','audit_proposal','audit_synthesis',
+              'audit_verdict'
+            )),
+            audience TEXT,
+            body TEXT NOT NULL,
+            attached_files TEXT,
+            importance INTEGER NOT NULL DEFAULT 0 CHECK (importance IN (0,1,2)),
+            consumed_by_stages TEXT,
+            archived_at TEXT,
+            archived_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            pm_proposal_ids TEXT,
+            source_kind TEXT,
+            source_ref TEXT
+          );
+        `);
+        const pmIdsCol = hasPmProposalIds ? 'pm_proposal_ids' : "NULL AS pm_proposal_ids";
+        const sourceKindCol = hasSourceKind ? 'source_kind' : "NULL AS source_kind";
+        const sourceRefCol = hasSourceKind ? 'source_ref' : "NULL AS source_ref";
+        db.exec(`
+          INSERT INTO agent_notes_new
+            (id, workspace_id, agent_id, task_id, initiative_id, scope_key, role,
+             run_group_id, kind, audience, body, attached_files, importance,
+             consumed_by_stages, archived_at, archived_reason, created_at,
+             pm_proposal_ids, source_kind, source_ref)
+          SELECT id, workspace_id, agent_id, task_id, initiative_id, scope_key, role,
+             run_group_id, kind, audience, body, attached_files, importance,
+             consumed_by_stages, archived_at, archived_reason, created_at,
+             ${pmIdsCol}, ${sourceKindCol}, ${sourceRefCol}
+          FROM agent_notes;
+        `);
+        db.exec(`DROP TABLE agent_notes`);
+        db.exec(`ALTER TABLE agent_notes_new RENAME TO agent_notes`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_task ON agent_notes(task_id, created_at DESC) WHERE task_id IS NOT NULL`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_initiative ON agent_notes(initiative_id, created_at DESC) WHERE initiative_id IS NOT NULL`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_workspace ON agent_notes(workspace_id, created_at DESC)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_run_group ON agent_notes(run_group_id)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_notes_importance ON agent_notes(workspace_id, importance, created_at DESC) WHERE archived_at IS NULL`);
+        db.exec(`CREATE INDEX IF NOT EXISTS agent_notes_source_idx ON agent_notes(source_kind, source_ref) WHERE source_kind IS NOT NULL`);
+        db.exec('PRAGMA foreign_keys = ON');
+        console.log('[Migration 093] agent_notes.kind extended with audit_verdict.');
+      } else {
+        console.log('[Migration 093] agent_notes.kind already includes audit_verdict; skipping table rebuild.');
+      }
+
+      // 2) add workspaces.audit_auto_spawn_pm
+      const wsCols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
+      if (!wsCols.some((c) => c.name === 'audit_auto_spawn_pm')) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN audit_auto_spawn_pm INTEGER NOT NULL DEFAULT 0`);
+        console.log('[Migration 093] workspaces.audit_auto_spawn_pm added (default 0).');
+      } else {
+        console.log('[Migration 093] workspaces.audit_auto_spawn_pm already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

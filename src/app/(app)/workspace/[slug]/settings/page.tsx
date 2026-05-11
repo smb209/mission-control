@@ -63,6 +63,9 @@ interface WorkspaceWithDefault {
   /** Initiative-audit knobs. Migration 079 / specs/initiative-investigate.md. */
   audit_per_node_timeout_ms?: number | null;
   audit_subtree_concurrency?: number | null;
+  /** Opt-in bridge from narrow audits to PM proposals. Migration 093 /
+   *  specs/audit-action-recommended.md. Stored as 0/1 INTEGER. */
+  audit_auto_spawn_pm?: number | boolean | null;
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
   /** When true, the PATCH route runs `git init` in workspace_path on save.
@@ -718,6 +721,26 @@ export default function WorkspaceSettingsPage({
               Max parallel researcher dispatches per layer. Default 4.
               Range 1–8. Dial up if your runner can hose the LLM; dial
               down to keep cost predictable.
+            </p>
+          </Field>
+          <Field label="Auto-send audit findings to PM">
+            <label className="flex items-center gap-2 text-xs text-mc-text-secondary">
+              <input
+                type="checkbox"
+                checked={!!workspace.audit_auto_spawn_pm}
+                onChange={(e) => patch({ audit_auto_spawn_pm: e.target.checked })}
+              />
+              <span>
+                When an audit verdict recommends action, automatically
+                dispatch PM via <code>notes_intake</code> with the
+                observation + verdict.
+              </span>
+            </label>
+            <p className="text-[11px] text-mc-text-secondary mt-1">
+              Off by default. With this on, the operator wakes up to draft
+              PM proposals to accept/reject instead of plain audit notes.
+              Leave off for prod until the false-positive rate is
+              understood — see <code>specs/audit-action-recommended.md</code>.
             </p>
           </Field>
         </Section>

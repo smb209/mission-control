@@ -252,18 +252,68 @@ export const auditSynthesisBodySchema = z.object({
 
 export type AuditSynthesisBody = z.infer<typeof auditSynthesisBodySchema>;
 
+// ─── audit_verdict body schema (narrow audit) ──────────────────────
+// Structured signal emitted by the narrow `initiative_audit` auditor
+// alongside its free-form observation note. The take_note handler
+// reads this row to decide whether to auto-dispatch a notes_intake PM
+// session (gated by the workspace `audit_auto_spawn_pm` setting).
+// See specs/audit-action-recommended.md.
+
+export const VERDICT_VALUES = [
+  'on_track',
+  'partially_done',
+  'stale_rescope',
+  'never_built',
+  'done_in_entirety',
+  'cancelled_in_effect',
+  'audit_failed',
+] as const;
+export type AuditVerdictValue = (typeof VERDICT_VALUES)[number];
+
+export const RECOMMENDED_ACTION_HINTS = [
+  'cancel',
+  'mark_done',
+  'decompose',
+  'modify_scope',
+  'modify_dates',
+  'investigate_further',
+] as const;
+
+export const auditVerdictBodySchema = z.object({
+  version: z.literal(1),
+  /**
+   * The free-form observation note this verdict was emitted alongside.
+   * The auto-spawn hook reads it to bundle observation body + verdict
+   * rationale into the PM trigger_text.
+   */
+  observation_note_id: z.string().min(1),
+  verdict: z.enum(VERDICT_VALUES),
+  /**
+   * True only when the verdict implies the operator should act now.
+   * `on_track` → false; `audit_failed` may also be true if the auditor
+   * thinks a follow-up dispatch is warranted.
+   */
+  action_recommended: z.boolean(),
+  recommended_action_hint: z.enum(RECOMMENDED_ACTION_HINTS).nullish(),
+  short_rationale: z.string().min(20).max(800),
+});
+
+export type AuditVerdictBody = z.infer<typeof auditVerdictBodySchema>;
+
 // ─── Validation helper ──────────────────────────────────────────────
 
 export type AuditNoteKind =
   | 'audit_manifest'
   | 'audit_proposal'
-  | 'audit_synthesis';
+  | 'audit_synthesis'
+  | 'audit_verdict';
 
 export function isAuditNoteKind(kind: NoteKind): kind is AuditNoteKind {
   return (
     kind === 'audit_manifest' ||
     kind === 'audit_proposal' ||
-    kind === 'audit_synthesis'
+    kind === 'audit_synthesis' ||
+    kind === 'audit_verdict'
   );
 }
 
@@ -305,7 +355,9 @@ export function validateAuditNoteBody(
       ? auditManifestBodySchema
       : kind === 'audit_proposal'
         ? auditProposalBodySchema
-        : auditSynthesisBodySchema;
+        : kind === 'audit_synthesis'
+          ? auditSynthesisBodySchema
+          : auditVerdictBodySchema;
 
   const result = schema.safeParse(parsed);
   if (result.success) {
