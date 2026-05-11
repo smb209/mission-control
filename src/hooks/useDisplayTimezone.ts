@@ -13,7 +13,7 @@
  * mounting in a single render don't each fire a fetch. The cache is
  * populated on first read; subsequent renders return synchronously.
  *
- * See specs/timestamp-handling.md §PR-B.
+ * See docs/reference/timestamp-handling.md §PR-B.
  */
 
 import { useEffect, useState } from 'react';

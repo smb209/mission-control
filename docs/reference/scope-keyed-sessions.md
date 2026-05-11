@@ -706,7 +706,7 @@ Every phase's PR must pass:
 Built in Phase B, run automatically in CI for Phase C+:
 
 ```
-specs/evals/scope-keyed-sessions/
+evals/scope-keyed-sessions/
 ├── tasks/
 │   ├── 01-builder-add-feature.json
 │   ├── 02-tester-find-regression.json
@@ -805,7 +805,7 @@ New files:
 - `src/components/notes/NoteCard.tsx`
 - `src/components/notes/useAgentNotes.ts`
 - `src/app/(app)/workspace/[slug]/feed/page.tsx`
-- `specs/evals/scope-keyed-sessions/`
+- `evals/scope-keyed-sessions/`
 - Tests for each.
 
 Modified files:

@@ -8,7 +8,7 @@
  * audience='pm' importance=2, and writes its own observations.
  * Auto-removed on task terminal status.
  *
- * Phase E2 of specs/scope-keyed-sessions.md §5.
+ * Phase E2 of docs/reference/scope-keyed-sessions.md §5.
  */
 
 import { queryAll, queryOne } from '@/lib/db';

@@ -35,7 +35,7 @@ Companion to [`mcp-surface-review.md`](./mcp-surface-review.md). The spec carrie
 | 3.5 | `feat/openclaw-sync-named-agents` | PR 3 | `scripts/sync-named-agent-workspaces.ts` + script entry | scripts + briefing-builder import | `yarn openclaw:sync-named-agents --dry-run` shows expected diffs; live run brings PM/runner workspace files in line with `_shared` |
 | 4 | `feat/update-subtask` | PR 3.5 | New `update_subtask`; remove `accept/reject/cancel_subtask`; update coordinator templates + messaging-protocol | `src/lib/mcp/groups/work.ts`, `agent-templates/coordinator/{SOUL,AGENTS}.md`, `agent-templates/_shared/messaging-protocol.md`, `src/app/api/tasks/[id]/dispatch/route.ts`, mcp.test.ts | New tool exposed at `/api/mcp` + `/api/mcp/pm` if applicable; coordinator dispatches use new tool |
 | 5 | `feat/update-note` | PR 4 | New `update_note`; remove `mark_note_consumed` + `archive_note`; add `consume` guidance to `_shared/notetaker.md` + `messaging-protocol.md` | `src/lib/mcp/groups/core.ts`, `agent-templates/_shared/{messaging-protocol,notetaker}.md`, `agent-templates/runner-host/AGENTS.md`, mcp.test.ts | Notes can be consumed/archived via the unified tool |
-| 6 | `docs/mcp-discriminated-union` | PR 5 | Doc-only: PM SOUL + spec stating "extend `propose_changes`, don't add new tools" | `agent-templates/pm/SOUL.md`, `specs/mcp-surface-review.md` | n/a |
+| 6 | `docs/mcp-discriminated-union` | PR 5 | Doc-only: PM SOUL + spec stating "extend `propose_changes`, don't add new tools" | `agent-templates/pm/SOUL.md`, `docs/archive/mcp-surface-review.md` | n/a |
 
 ## Test strategy per slice
 

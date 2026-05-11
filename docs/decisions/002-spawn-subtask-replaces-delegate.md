@@ -4,7 +4,7 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/task-delegation-and-convoys.md — canonical convoy + spawn_subtask reference
+  - docs/reference/task-delegation-and-convoys.md — canonical convoy + spawn_subtask reference
 related-adrs: []
 code-anchors:
   - src/lib/mcp/groups/work.ts:1146
@@ -27,7 +27,7 @@ each parent to at most one convoy lifetime. That constraint blocked
 re-decomposition flows (a coordinator re-attempting after an
 escalation) and parallel convoys for genuinely independent slices.
 
-See `specs/task-delegation-and-convoys.md` §"Convoy lifecycle" and
+See `docs/reference/task-delegation-and-convoys.md` §"Convoy lifecycle" and
 §"Appendix A" for the full rationale.
 
 ## Decision

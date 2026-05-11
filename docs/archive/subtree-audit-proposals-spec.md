@@ -24,7 +24,7 @@ related-specs:
   - convoy-mode-spec.md — sibling agent-initiated fan-out substrate (not used here)
 ---
 
-> **Superseded by [specs/audit-pipeline.md](../../specs/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
+> **Superseded by [docs/reference/audit-pipeline.md](../../docs/reference/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
 
 # Subtree Audit — Structured Proposals
 
@@ -32,7 +32,7 @@ related-specs:
 **Date:** 2026-05-08
 **Status:** Proposed
 **Builds on:** [`docs/archive/initiative-investigate.md`](./initiative-investigate.md) (subtree-audit orchestration, already shipped as PR 4)
-**Related (do not conflate):** [`specs/convoy-mode-spec.md`](./convoy-mode-spec.md), [`specs/coordinator-delegation-via-convoy-spec.md`](./coordinator-delegation-via-convoy-spec.md) — *agent-initiated* fan-out via the convoy/`spawn_subtask` substrate. This spec uses the *MC-orchestrated* `agent_runs` substrate at [`src/lib/agents/subtree-audit.ts`](../src/lib/agents/subtree-audit.ts) and does **not** create `tasks` rows.
+**Related (do not conflate):** [`docs/archive/convoy-mode-spec.md`](./convoy-mode-spec.md), [`docs/archive/coordinator-delegation-via-convoy-spec.md`](./coordinator-delegation-via-convoy-spec.md) — *agent-initiated* fan-out via the convoy/`spawn_subtask` substrate. This spec uses the *MC-orchestrated* `agent_runs` substrate at [`src/lib/agents/subtree-audit.ts`](../src/lib/agents/subtree-audit.ts) and does **not** create `tasks` rows.
 
 ---
 

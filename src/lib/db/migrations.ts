@@ -2074,7 +2074,7 @@ const migrations: Migration[] = [
     id: '037',
     name: 'coordinator_delegation_convoy',
     up: (db) => {
-      // Substrate for agent-initiated delegation (see specs/coordinator-
+      // Substrate for agent-initiated delegation (see docs/archive/coordinator-
       // delegation-via-convoy-spec.md). Three changes:
       //   (a) SLO columns on convoy_subtasks — populated by spawn_subtask,
       //       NULL on legacy operator-created convoys.
@@ -2369,7 +2369,7 @@ const migrations: Migration[] = [
     id: '043',
     name: 'roadmap_planning_layer',
     up: (db) => {
-      // Phase 1 of the roadmap & PM-agent feature (specs/roadmap-and-pm-spec.md).
+      // Phase 1 of the roadmap & PM-agent feature (docs/reference/roadmap-and-pm-spec.md).
       // Schema-only migration — no logic on top of the new tables yet:
       //   (a) initiatives + dependencies + parent/task audit logs
       //   (b) owner_availability + pm_proposals (Phase 5 will use these)
@@ -3477,7 +3477,7 @@ const migrations: Migration[] = [
       // server parses pass/fail. Replaces self-attested "≥1 deliverable
       // + ≥1 activity" as the verification bar for stage transitions
       // on tasks that carry a prescribed gate set. See
-      // specs/autonomous-flow-tightening-spec.md.
+      // docs/reference/autonomous-flow-tightening-spec.md.
       db.exec(`
         CREATE TABLE IF NOT EXISTS task_evidence (
           id TEXT PRIMARY KEY,
@@ -3587,7 +3587,7 @@ const migrations: Migration[] = [
     id: '062',
     name: 'pm_proposals_revert_foundation',
     up: (db) => {
-      // Slice 1 of revertable PM proposals (specs/pm-revertable-proposals.md):
+      // Slice 1 of revertable PM proposals (docs/reference/pm-revertable-proposals.md):
       //   1. Add `reverts_proposal_id` (nullable FK) so a revert proposal can
       //      point back at the proposal it inverts.
       //   2. Extend the trigger_kind CHECK to permit 'revert'.
@@ -3724,7 +3724,7 @@ const migrations: Migration[] = [
       // Per-workspace customizations of role-template SOUL/AGENTS/IDENTITY.
       // Empty by default; the briefing builder falls back to
       // `agent-templates/<role>/` when no row exists.
-      // See specs/scope-keyed-sessions.md §2.2.
+      // See docs/reference/scope-keyed-sessions.md §2.2.
       db.exec(`
         CREATE TABLE IF NOT EXISTS agent_role_overrides (
           workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -3752,7 +3752,7 @@ const migrations: Migration[] = [
       // a queryable, SSE-broadcast row: discovery, blocker, uncertainty,
       // decision, observation, question, breadcrumb. Cheap and
       // spammable — no evidence-gate side-effects.
-      // See specs/scope-keyed-sessions.md §3.1.
+      // See docs/reference/scope-keyed-sessions.md §3.1.
       db.exec(`
         CREATE TABLE IF NOT EXISTS agent_notes (
           id TEXT PRIMARY KEY,
@@ -3792,7 +3792,7 @@ const migrations: Migration[] = [
       // Bookkeeping for active scope-keyed openclaw sessions. Openclaw
       // owns the trajectory file; MC owns the metadata so we can list
       // "active sessions for task X" or reap stale scopes.
-      // See specs/scope-keyed-sessions.md §1.3.
+      // See docs/reference/scope-keyed-sessions.md §1.3.
       db.exec(`
         CREATE TABLE IF NOT EXISTS mc_sessions (
           scope_key TEXT PRIMARY KEY,
@@ -3827,7 +3827,7 @@ const migrations: Migration[] = [
     up: (db) => {
       // Native scheduled work: researcher every 2 days, optional
       // heartbeat coordinator, etc. Each row → one scope-keyed session
-      // dispatched on cadence. See specs/scope-keyed-sessions.md §4.
+      // dispatched on cadence. See docs/reference/scope-keyed-sessions.md §4.
       db.exec(`
         CREATE TABLE IF NOT EXISTS recurring_jobs (
           id TEXT PRIMARY KEY,
@@ -3867,7 +3867,7 @@ const migrations: Migration[] = [
       // today's behavior ('reactive' = coordinator runs only on stage
       // transitions). 'heartbeat' opts in to recurring check-ins via
       // a recurring_jobs row auto-created at task assignment.
-      // See specs/scope-keyed-sessions.md §5.
+      // See docs/reference/scope-keyed-sessions.md §5.
       const wsCols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
       if (!wsCols.some(c => c.name === 'coordinator_mode')) {
         db.exec(`
@@ -4318,7 +4318,7 @@ const migrations: Migration[] = [
     up: (db) => {
       // Jobs-in-Progress (PR 1): relax agent_runs.kind enum, extend
       // source_kind to include 'fanout', and add scope/role/agent
-      // attribution + parent_run_id linkage. See specs/jobs-in-progress.md.
+      // attribution + parent_run_id linkage. See docs/reference/jobs-in-progress.md.
       //
       // SQLite has no ALTER CONSTRAINT, so we rebuild the table. The
       // table itself must already exist (migration 075 created it); if a
@@ -4445,7 +4445,7 @@ const migrations: Migration[] = [
       // the workspace_path on save (idempotent — no-op if `.git/` is
       // already there). Lets operators wire up a folder-only workspace
       // for local commit history without leaving the settings page.
-      // See specs/workspace-conventions-structured.md §5.
+      // See docs/reference/workspace-conventions-structured.md §5.
       const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === 'local_repo_init')) {
         db.exec(`ALTER TABLE workspaces ADD COLUMN local_repo_init INTEGER NOT NULL DEFAULT 0`);
@@ -4463,7 +4463,7 @@ const migrations: Migration[] = [
       // backing the {{repo_url}} and {{base_branch}} template variables.
       // Drives PR-targeting guidance ("always pass --repo X --base Y")
       // and a "fork → upstream" chip in the settings UI.
-      // See specs/workspace-conventions-structured.md §2.
+      // See docs/reference/workspace-conventions-structured.md §2.
       const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === 'repo_url')) {
         db.exec(`ALTER TABLE workspaces ADD COLUMN repo_url TEXT`);
@@ -4523,7 +4523,7 @@ const migrations: Migration[] = [
       // browser via Intl.DateTimeFormat().resolvedOptions().timeZone".
       // The operator can override on the workspace settings page when
       // auto-detect is wrong (e.g. running on a UTC server but
-      // located in PT). See specs/timestamp-handling.md §PR-B.
+      // located in PT). See docs/reference/timestamp-handling.md §PR-B.
       const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === 'display_timezone')) {
         db.exec(`ALTER TABLE workspaces ADD COLUMN display_timezone TEXT`);

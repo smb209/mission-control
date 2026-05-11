@@ -21,7 +21,7 @@ related-specs:
   - subtree-audit-proposals-spec.md — produces the audit notes this manages
 ---
 
-> **Superseded by [specs/audit-pipeline.md](../../specs/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
+> **Superseded by [docs/reference/audit-pipeline.md](../../docs/reference/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
 
 # Audit Actions & Per-Initiative Run Tracking
 
@@ -35,7 +35,7 @@ Two pain points, one spec because they share surfaces (NoteCard, InvestigateModa
 ## What we're not changing
 
 - `agent_runs` schema (the jobs spine — already has `initiative_id`, `scope_key`,
-  `kind`, `status`, lifecycle helpers; see `specs/jobs-in-progress.md`).
+  `kind`, `status`, lifecycle helpers; see `docs/reference/jobs-in-progress.md`).
 - `agent_notes` schema (`archived_at`/`archived_reason` already present from
   migration 065). We only add a hard-delete DAO and routes.
 - `/jobs` page (we link to it; we don't refactor it).

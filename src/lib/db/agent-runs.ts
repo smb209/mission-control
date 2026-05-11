@@ -272,7 +272,7 @@ export function markCancelled(id: string, reasonMd?: string): AgentRun {
 //
 // startAgentRun / completeAgentRun / failAgentRun are the high-level
 // API used by `dispatchScope` so every dispatch path lands in the
-// agent_runs table with the same shape. See specs/jobs-in-progress.md
+// agent_runs table with the same shape. See docs/reference/jobs-in-progress.md
 // §"Single write site".
 
 export interface StartAgentRunInput {
@@ -449,7 +449,7 @@ export function markRunRollup(
 // listJobs() backs the GET /api/jobs route. Three buckets in one call:
 // live (queued+running, with pm_chat collapsed by scope_key),
 // scheduled (active recurring_jobs ≤24h horizon), recent (terminal in
-// last 24h, ungrouped). See specs/jobs-in-progress.md §API.
+// last 24h, ungrouped). See docs/reference/jobs-in-progress.md §API.
 
 export interface JobsLiveItem {
   /** When `group_count > 1`, this id refers to the most-recent run in the group. */

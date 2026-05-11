@@ -4,7 +4,7 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/long-unattended-feature-dev.md — references migration discipline
+  - docs/reference/long-unattended-feature-dev.md — references migration discipline
 related-adrs: []
 code-anchors:
   - src/lib/db/migrations.ts

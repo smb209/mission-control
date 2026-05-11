@@ -11,10 +11,16 @@ interface SpecPageProps {
 
 export function SpecPage({ title, specFile, intro }: SpecPageProps) {
   let body: string;
+  let resolvedPath = `docs/proposals/${specFile}`;
   try {
-    body = readFileSync(join(process.cwd(), 'specs', specFile), 'utf8');
-  } catch (err) {
-    body = `_Spec file \`specs/${specFile}\` not found._\n\n${(err as Error).message}`;
+    body = readFileSync(join(process.cwd(), 'docs/proposals', specFile), 'utf8');
+  } catch {
+    try {
+      body = readFileSync(join(process.cwd(), 'docs/reference', specFile), 'utf8');
+      resolvedPath = `docs/reference/${specFile}`;
+    } catch (err) {
+      body = `_Spec file \`${specFile}\` not found in docs/proposals/ or docs/reference/._\n\n${(err as Error).message}`;
+    }
   }
 
   return (
@@ -23,7 +29,7 @@ export function SpecPage({ title, specFile, intro }: SpecPageProps) {
         <h1 className="text-xl font-semibold text-mc-text">{title}</h1>
         {intro && <p className="text-sm text-mc-text-secondary mt-1">{intro}</p>}
         <p className="text-[11px] text-mc-text-secondary/60 mt-2">
-          Spec preview · edit <code>specs/{specFile}</code> to update this page.
+          Spec preview · edit <code>{resolvedPath}</code> to update this page.
         </p>
       </div>
       <article className="prose prose-invert prose-sm max-w-none">

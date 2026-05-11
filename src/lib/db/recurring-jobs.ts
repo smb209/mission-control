@@ -4,7 +4,7 @@
  * Schema added in migration 067. Wired into the scheduler in
  * src/lib/agents/recurring-scheduler.ts. Heartbeat coordinator
  * (Phase E2) auto-creates rows here when a task's coordinator_mode
- * resolves to 'heartbeat'. See specs/scope-keyed-sessions.md §4.
+ * resolves to 'heartbeat'. See docs/reference/scope-keyed-sessions.md §4.
  */
 
 import { v4 as uuidv4 } from 'uuid';

@@ -1,6 +1,6 @@
 # Initiative Research Loop — Validation
 
-Per [specs/long-unattended-feature-dev.md](../long-unattended-feature-dev.md). Run order:
+Per [docs/reference/long-unattended-feature-dev.md](../long-unattended-feature-dev.md). Run order:
 
 1. [00-baseline-observations.md](00-baseline-observations.md) — captured before any slice merges.
 2. [01-pre-check-initialization.md](01-pre-check-initialization.md) — destructive runbook to reach known-good baseline before each test-plan execution.

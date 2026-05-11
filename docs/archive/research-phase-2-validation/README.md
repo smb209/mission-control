@@ -2,7 +2,7 @@
 
 Validation directory for the recurring-briefs slice of `/research`.
 Reflects the four-doc convention from
-[specs/long-unattended-feature-dev.md](../long-unattended-feature-dev.md).
+[docs/reference/long-unattended-feature-dev.md](../long-unattended-feature-dev.md).
 
 ## How to read
 

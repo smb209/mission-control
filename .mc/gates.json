@@ -1,5 +1,5 @@
 {
-  "_comment": "Per-repo prescribed-command templates for the autonomous flow. See specs/autonomous-flow-tightening-spec.md and src/lib/gates/config.ts. ${CHANGED_FILES} is interpolated by MC at dispatch time.",
+  "_comment": "Per-repo prescribed-command templates for the autonomous flow. See docs/reference/autonomous-flow-tightening-spec.md and src/lib/gates/config.ts. ${CHANGED_FILES} is interpolated by MC at dispatch time.",
   "gates": {
     "build_fast": {
       "commands": [

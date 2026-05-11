@@ -12,7 +12,7 @@
  * the brief-side fields (result_md / citations_json / error_md);
  * status itself lives on agent_runs.
  *
- * See specs/research-area.md "Brief" + docs/archive/research-area-build-plan.md §2.
+ * See docs/reference/research-area.md "Brief" + docs/archive/research-area-build-plan.md §2.
  */
 
 import { v4 as uuidv4 } from 'uuid';

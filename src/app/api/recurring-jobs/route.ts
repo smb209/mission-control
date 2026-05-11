@@ -6,7 +6,7 @@
  *
  * Pause / resume / done go through /api/recurring-jobs/[id] PATCH.
  *
- * See specs/scope-keyed-sessions.md §4.
+ * See docs/reference/scope-keyed-sessions.md §4.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

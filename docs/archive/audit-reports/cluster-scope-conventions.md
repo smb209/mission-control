@@ -71,7 +71,7 @@
 
 ### timestamp-handling.md  *(Class 1)*
 - Spec claims: PR-A DB-read normalization to ISO-Z; PR-B `workspaces.display_timezone` + `src/lib/timestamps.ts` + `<Time>` + sweep.
-- Code reality: timestamps.ts header (lines 1-20) explicitly cites "specs/timestamp-handling.md §PR-B" and PR #281 for PR-A. Migration 086 added `display_timezone` (migrations.ts:4520). `<Time>` component present.
+- Code reality: timestamps.ts header (lines 1-20) explicitly cites "docs/reference/timestamp-handling.md §PR-B" and PR #281 for PR-A. Migration 086 added `display_timezone` (migrations.ts:4520). `<Time>` component present.
 - Recommendation: keep as historical reference; consider moving to a `shipped/` folder later.
 
 ### decisions-assumptions.md  *(Class 2)*

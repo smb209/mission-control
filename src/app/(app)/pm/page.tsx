@@ -111,7 +111,7 @@ export default function PmChatPage() {
   // awaiting_agent: true, we keep the input disabled until the agent's
   // reply lands (a new assistant message appears in the thread) OR a
   // bounded fallback fires so the silent-PM scenario doesn't lock the
-  // operator out forever. See specs/pm-chat-prompt.md PR A §4.
+  // operator out forever. See docs/reference/pm-chat-prompt.md PR A §4.
   const [awaitingAgent, setAwaitingAgent] = useState<{ since: number; userMessageCount: number } | null>(null);
   const [refining, setRefining] = useState<string | null>(null);
   // Separate in-flight flag from the "which input is open" state so we

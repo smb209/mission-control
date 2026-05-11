@@ -8,7 +8,7 @@
  *  - resume detection (existing scope_key → is_resume=true)
  *
  * Phase B retrofits PM dispatch through this. Phase C+ uses it for
- * worker dispatches. See specs/scope-keyed-sessions.md §1, §2.3.
+ * worker dispatches. See docs/reference/scope-keyed-sessions.md §1, §2.3.
  */
 
 import { v4 as uuidv4 } from 'uuid';

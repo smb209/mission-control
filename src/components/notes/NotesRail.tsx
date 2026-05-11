@@ -8,7 +8,7 @@
  * initiative detail panel (filtered by initiative_id with
  * include_child_tasks rollup).
  *
- * Phase D of specs/scope-keyed-sessions.md §3.6.
+ * Phase D of docs/reference/scope-keyed-sessions.md §3.6.
  *
  * Audit-actions PR 4: archive / restore / delete actions on every card,
  * "Show archived" toggle that re-fetches with include_archived=true so

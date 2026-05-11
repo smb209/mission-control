@@ -320,7 +320,7 @@ async function runDisruptionDispatchInBackground(
   // cost matters less and the caller benefits from having every initiative
   // in front of it. Interactive PM chat (the disruption path below) drops
   // the inline summary and tells the agent to fetch on demand. See
-  // specs/pm-chat-prompt.md §"Trigger_body changes".
+  // docs/reference/pm-chat-prompt.md §"Trigger_body changes".
   // Per-turn trigger body. Stays terse on purpose — the canonical Mode A/B
   // contract lives in SOUL.md and is sent in the briefing on first dispatch
   // (post-PR230, briefing skips static blocks on resume so we save tokens

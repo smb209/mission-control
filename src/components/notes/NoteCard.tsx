@@ -2,7 +2,7 @@
 
 /**
  * Single agent_notes record rendered as a card. Used by NotesRail and
- * the workspace /feed page. See specs/scope-keyed-sessions.md §3.6.
+ * the workspace /feed page. See docs/reference/scope-keyed-sessions.md §3.6.
  *
  * Audit-actions PR 4 adds operator action buttons: archive (active →
  * archived), restore (archived → active), delete (archived → gone).

@@ -22,7 +22,7 @@
 |---|---|---|
 | Repo clean | `git status --porcelain` | empty |
 | On feature branch | `git rev-parse --abbrev-ref HEAD` | not `main` |
-| Spec exists | `test -f specs/scope-keyed-sessions.md && echo ok` | `ok` |
+| Spec exists | `test -f docs/reference/scope-keyed-sessions.md && echo ok` | `ok` |
 | Dev server stopped | `lsof -ti :4010 \|\| echo none` | `none` (or kill it: `kill $(lsof -ti :4010)`) |
 | Openclaw gateway running | `lsof -ti :18789 \|\| echo none` | non-empty |
 | `spark-lb/agent` model reachable | `curl -sS http://localhost:18789/health \|\| true` | non-error |

@@ -69,7 +69,7 @@ interface WorkspaceWithDefault {
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
   /** When true, the PATCH route runs `git init` in workspace_path on save.
-   *  Idempotent. See specs/workspace-conventions-structured.md §5. */
+   *  Idempotent. See docs/reference/workspace-conventions-structured.md §5. */
   local_repo_init?: number | null;
   /** Optional remote (e.g. https://github.com/owner/repo). Drives PR
    *  targeting guidance in the conventions prompt and a UI chip. */
@@ -77,7 +77,7 @@ interface WorkspaceWithDefault {
   /** Default base branch for PRs (e.g. main). */
   default_base_branch?: string | null;
   /** Operator-overridden display timezone (IANA name). NULL means
-   *  "auto-detect from browser". See specs/timestamp-handling.md §PR-B. */
+   *  "auto-detect from browser". See docs/reference/timestamp-handling.md §PR-B. */
   display_timezone?: string | null;
   /** Whether the floating bottom-right ChatWidget renders. Stored as
    *  0/1 INTEGER in SQLite; default 0 (off). Migration 088. */
@@ -410,7 +410,7 @@ export default function WorkspaceSettingsPage({
         {/* Source control — repo metadata + local-repo-init. Drives the
             {{repo_url}} / {{base_branch}} variables and the "always
             target this remote" rule in the dispatched prompt. See
-            specs/workspace-conventions-structured.md §2 / §5. */}
+            docs/reference/workspace-conventions-structured.md §2 / §5. */}
         <Section
           id="source-control"
           title="Source control"
@@ -599,7 +599,7 @@ export default function WorkspaceSettingsPage({
             is timezone-aware via the browser's Intl auto-detect; this
             override is for the cases where that's wrong (e.g. running
             on a UTC server in a non-UTC location). See
-            specs/timestamp-handling.md §PR-B. */}
+            docs/reference/timestamp-handling.md §PR-B. */}
         <Section
           id="display"
           title="Display"
@@ -1370,7 +1370,7 @@ function ImportPanel({
  * v1 keeps the flow synchronous: submit → spinner → result. Failure is
  * surfaced inline; the modal stays open so the operator can edit + retry.
  *
- * Spec: specs/workspace-conventions-structured.md §6.
+ * Spec: docs/reference/workspace-conventions-structured.md §6.
  */
 interface RefineModalProps {
   workspaceId: string;

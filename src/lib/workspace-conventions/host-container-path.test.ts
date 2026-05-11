@@ -6,7 +6,7 @@
  * to the deliverables module won't silently break the dockerized
  * git-init flow.
  *
- * See specs/workspace-conventions-structured.md §5 + the route
+ * See docs/reference/workspace-conventions-structured.md §5 + the route
  * implementation in src/app/api/workspaces/[id]/route.ts.
  */
 

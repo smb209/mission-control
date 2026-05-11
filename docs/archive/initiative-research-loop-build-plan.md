@@ -10,7 +10,7 @@ spec: docs/archive/initiative-research-loop.md
 Status: draft · Owner: smb209 · Date: 2026-05-09
 Spec: [docs/archive/initiative-research-loop.md](initiative-research-loop.md)
 
-This is the build-plan companion to the spec. It commits to slices, files-touched, and the load-bearing design calls. Operator OKs this doc *before* any code lands; per-slice unit tests + preview verification are the per-PR contract; full validation runs against the stacked branch tip per [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
+This is the build-plan companion to the spec. It commits to slices, files-touched, and the load-bearing design calls. Operator OKs this doc *before* any code lands; per-slice unit tests + preview verification are the per-PR contract; full validation runs against the stacked branch tip per [docs/reference/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
 
 ## Audit (current state, verified 2026-05-09)
 
@@ -80,7 +80,7 @@ Single migration adds: `briefs.initiative_id` (FK + index), `briefs.summary`, `a
 
 ## Slice plan
 
-Each slice is one stacked PR. Branch base for slice N = slice N-1's branch (per [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md)). Retarget children to `main` before merging the parent.
+Each slice is one stacked PR. Branch base for slice N = slice N-1's branch (per [docs/reference/long-unattended-feature-dev.md](long-unattended-feature-dev.md)). Retarget children to `main` before merging the parent.
 
 ### Slice 1 — DB migration + DAO surface
 

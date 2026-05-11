@@ -87,7 +87,7 @@ Tabs:
 
 ## Open questions
 
-- Should we render decisions as markdown in `specs/` (file-backed) or DB? Lean DB so they're queryable and linkable, with a markdown export for the engineering-style ADR archive.
+- Should we render decisions as markdown in `docs/decisions/` (file-backed, alongside engineering ADRs) or DB? Lean DB so they're queryable and linkable, with a markdown export for the engineering-style ADR archive.
 - Confidence/criticality bands: 3-step (low/medium/high) is enough to start; resist sliding into 1–10 numerics.
 - Auto-prompt: when a PM proposes a plan, can it surface "this depends on assumption X" inline? Worth wiring once the assumption store is populated.
 - "Decision drift": when the chosen-option's consequences haven't been observed in N days, prompt a review.

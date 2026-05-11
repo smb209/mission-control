@@ -4,7 +4,7 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/audit-pipeline.md — §5 narrow vs subtree
+  - docs/reference/audit-pipeline.md — §5 narrow vs subtree
 related-adrs: []
 code-anchors:
   - src/app/api/initiatives/[id]/investigate/route.ts:190

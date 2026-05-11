@@ -228,5 +228,5 @@ Per CLAUDE.md "Spec-First" workflow:
 
 ## References
 
-- Recurring incident exemplars: task `92b7b092-a7b6-4542-ba41-b1bdb95860db` (this spec's trigger), prior PR #111 post-mortem in [autonomous-flow-tightening-spec.md](specs/autonomous-flow-tightening-spec.md).
-- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](../docs/archive/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health.md](specs/agent-health.md) (heartbeat + stall infrastructure this builds on).
+- Recurring incident exemplars: task `92b7b092-a7b6-4542-ba41-b1bdb95860db` (this spec's trigger), prior PR #111 post-mortem in [autonomous-flow-tightening-spec.md](docs/reference/autonomous-flow-tightening-spec.md).
+- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](../docs/archive/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health.md](docs/reference/agent-health.md) (heartbeat + stall infrastructure this builds on).

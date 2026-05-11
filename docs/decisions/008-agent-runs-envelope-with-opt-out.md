@@ -4,8 +4,8 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/research-area.md — research dispatch path that pioneered the opt-out
-  - specs/jobs-in-progress.md — consumer of the generalised envelope
+  - docs/reference/research-area.md — research dispatch path that pioneered the opt-out
+  - docs/reference/jobs-in-progress.md — consumer of the generalised envelope
 related-adrs: []
 code-anchors:
   - src/lib/db/migrations.ts:4316

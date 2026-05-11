@@ -1053,7 +1053,7 @@ If you need help or clarification, ask the orchestrator.`;
       // <id>`) telling it to call openclaw `sessions_spawn` + register
       // the resulting runId via `register_subagent_dispatch`. The PM
       // owns the spawn; MC owns the bookkeeping. See
-      // specs/scope-keyed-sessions-phase-j.md.
+      // docs/reference/scope-keyed-sessions-phase-j.md.
       const workspacePm =
         useSubagentSpawn && task.workspace_id
           ? getPmAgent(task.workspace_id)

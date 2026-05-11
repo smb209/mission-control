@@ -15,7 +15,7 @@
  *     formatting must respect that override. Bare
  *     `toLocaleString()` doesn't.
  *
- * See specs/timestamp-handling.md §PR-B.
+ * See docs/reference/timestamp-handling.md §PR-B.
  */
 
 import { formatDistanceToNow, formatDistanceToNowStrict, parseISO } from 'date-fns';

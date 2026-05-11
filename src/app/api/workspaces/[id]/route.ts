@@ -35,7 +35,7 @@ const execFileAsync = promisify(execFile);
  * warnings; failure does NOT abort the workspace save (the operator's
  * primary intent — setting fields — has already succeeded by this point).
  *
- * See specs/workspace-conventions-structured.md §5.
+ * See docs/reference/workspace-conventions-structured.md §5.
  */
 async function ensureLocalRepo(
   workspacePath: string,
@@ -222,7 +222,7 @@ export async function PATCH(
     if (display_timezone !== undefined) {
       // Empty string / null clears the override (UI auto-detects via
       // browser Intl). Any other value must be a valid IANA zone or
-      // we reject — see specs/timestamp-handling.md §PR-B.
+      // we reject — see docs/reference/timestamp-handling.md §PR-B.
       const raw = typeof display_timezone === 'string' ? display_timezone.trim() : null;
       if (raw && !isValidTimezone(raw)) {
         return NextResponse.json(

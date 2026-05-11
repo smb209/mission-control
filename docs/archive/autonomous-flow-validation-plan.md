@@ -9,7 +9,7 @@ Covers: PRs #113–#120 (all merged into main on 2026-04-30)
 
 | PR | What it does | Key surface to validate |
 |----|--------------|------------------------|
-| [#113](https://github.com/smb209/mission-control/pull/113) | Spec under `specs/autonomous-flow-tightening-spec.md` | (reference doc — no runtime validation) |
+| [#113](https://github.com/smb209/mission-control/pull/113) | Spec under `docs/reference/autonomous-flow-tightening-spec.md` | (reference doc — no runtime validation) |
 | [#114](https://github.com/smb209/mission-control/pull/114) | `submit_evidence` MCP tool + parsed-stdout gate | `task_evidence` table; gate parsers; `checkStageEvidence` strict path |
 | [#115](https://github.com/smb209/mission-control/pull/115) | `register_deliverable` count readback | Tool response shape |
 | [#116](https://github.com/smb209/mission-control/pull/116) | `tasks.is_failed` flag + `whyCannotBeDone` | Migration 059; `taskCanBeDone` behavior |

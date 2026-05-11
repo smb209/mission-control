@@ -6,7 +6,7 @@
  *   - scheduled: active recurring_jobs with next_run_at within 24h
  *   - recent:    terminal agent_runs from the last 24h (ungrouped)
  *
- * See specs/jobs-in-progress.md §API. Polled every 2s by the page;
+ * See docs/reference/jobs-in-progress.md §API. Polled every 2s by the page;
  * SSE upgrade is a follow-up if cost matters.
  */
 

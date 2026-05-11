@@ -32,7 +32,7 @@ related-specs:
   - docs/archive/initiative-research-loop.md — initiative-scoped briefs (shipped)
   - docs/archive/initiative-investigate.md — audit/investigate pipeline (consumer)
   - docs/archive/dedupe-investigations.md — PR #1 shipped, #2/#3 open
-  - specs/foia-pipeline.md — aspirational downstream consumer
+  - docs/proposals/foia-pipeline.md — aspirational downstream consumer
   - docs/archive/subtree-audit-proposals-spec.md — audit pipeline writing structured notes
 ---
 
@@ -513,7 +513,7 @@ Entry point: `scripts/run-research-eval.ts` (referenced from `runner.ts:9`) → 
 
 ## 14. Open questions / not yet built
 
-The original `specs/research-area.md` listed phase 3+ aspirations that have not shipped. Status of each:
+The original `docs/reference/research-area.md` listed phase 3+ aspirations that have not shipped. Status of each:
 
 1. **Template expansion** — only `general_brief` is implemented. `competitive_watch`, `market_scan`, `regulatory_scan`, `decision_support`, `recurring_status` from the original spec are NOT in the code. Adding one requires (a) widening `BriefTemplate` in `briefs.ts:26`, (b) the migration 075 CHECK constraint, (c) a `TEMPLATE_INSTRUCTIONS` entry in `run-brief.ts:123-129`, (d) the schedule API allow-list at `topics/[id]/schedules/route.ts:23-28`, and (e) the suggest PM's reply-shape hint.
 
@@ -521,7 +521,7 @@ The original `specs/research-area.md` listed phase 3+ aspirations that have not 
 
 3. **Diff view across recurring briefs** — not started. `recurring_status` template doesn't exist; no schema for `last_run_brief_id` linkage; no UI.
 
-4. **Memory layer integration** — briefs do not write to a Memory layer (that layer itself is a separate spec, `specs/memory-layer.md`).
+4. **Memory layer integration** — briefs do not write to a Memory layer (that layer itself is a separate spec, `docs/proposals/memory-layer.md`).
 
 5. **Cost ceilings** — `agent_runs.cost_ceiling_cents` column exists but is never populated or enforced.
 
@@ -531,7 +531,7 @@ The original `specs/research-area.md` listed phase 3+ aspirations that have not 
 
 8. **PR #3 UI cooldown** for repeated audit clicks — not built. (`lastCompleteAudit` data is returned by the dry-run endpoint, ready to drive UI.)
 
-9. **FOIA pipeline** — `specs/foia-pipeline.md` is aspirational. It would be a downstream consumer of the research capability (agency profile briefs feeding a discovery/draft/submit/track loop) but no code exists yet.
+9. **FOIA pipeline** — `docs/proposals/foia-pipeline.md` is aspirational. It would be a downstream consumer of the research capability (agency profile briefs feeding a discovery/draft/submit/track loop) but no code exists yet.
 
 10. **Event triggers for schedules** (`event:initiative.status_changed`) — original spec called for cron OR event. Phase 2 shipped cadence-only; event triggers are out of scope.
 

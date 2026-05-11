@@ -102,7 +102,7 @@ export function getDb(): Database.Database {
 
     // Wrap `prepare` so every Statement.all/get returned anywhere in
     // the codebase normalizes bare SQLite datetime strings to ISO-Z
-    // before they reach JS. See specs/timestamp-handling.md §PR-A.
+    // before they reach JS. See docs/reference/timestamp-handling.md §PR-A.
     // This catches the queryAll/queryOne helpers AND the many sites
     // that call `db.prepare(sql).all/get(...)` directly.
     installDatetimeNormalization(instance);
@@ -145,7 +145,7 @@ export function closeDb(): void {
 // `db.prepare` once at init so every Statement returned anywhere in
 // the codebase normalizes string fields shaped like bare SQLite
 // datetimes to ISO-Z ("YYYY-MM-DDTHH:MM:SSZ") before they reach JS.
-// See specs/timestamp-handling.md §PR-A.
+// See docs/reference/timestamp-handling.md §PR-A.
 //
 // We rewrite only string fields that match the bare-SQLite-datetime
 // shape. Subseconds are preserved; already-Z values are untouched

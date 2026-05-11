@@ -7,7 +7,7 @@
  * by kind / role / importance. The "follow this" pattern (drill into
  * a single task / job) is deferred — for Phase D this is the firehose.
  *
- * See specs/scope-keyed-sessions.md §3.6 #4.
+ * See docs/reference/scope-keyed-sessions.md §3.6 #4.
  */
 
 import { useEffect, useMemo, useState } from 'react';

@@ -4,7 +4,7 @@
  * NoteCountBadge — small live-updating badge showing the count of
  * notes for a task or initiative. Drops onto cards in list views.
  *
- * Phase D #3 in specs/scope-keyed-sessions.md §3.6. Wired into the
+ * Phase D #3 in docs/reference/scope-keyed-sessions.md §3.6. Wired into the
  * task list card rendering in this PR; can be reused on
  * initiative cards / convoy cards in follow-ups.
  */

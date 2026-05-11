@@ -2,7 +2,7 @@
  * GET /api/workspace-templates
  *
  * Returns the operator-pickable starter templates for the workspace
- * conventions textarea. See specs/workspace-conventions-structured.md §4.
+ * conventions textarea. See docs/reference/workspace-conventions-structured.md §4.
  */
 
 import { NextResponse } from 'next/server';

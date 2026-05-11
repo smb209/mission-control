@@ -139,7 +139,7 @@ export interface Task {
   is_archived?: number;
   archived_at?: string;
   // Roadmap planning layer (v0.2): pointer to the owning initiative and an
-  // optional freeform status check string. See specs/roadmap-and-pm-spec.md.
+  // optional freeform status check string. See docs/reference/roadmap-and-pm-spec.md.
   initiative_id?: string | null;
   status_check_md?: string | null;
   /**
