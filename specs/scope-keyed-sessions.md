@@ -42,7 +42,7 @@ effects make this design indefensible:
 1. **Workspace ambiguity (the bug we just fixed).** A shared
    `gateway_agent_id` legitimately maps to N workspace rows after
    cloning, so `whoami({ agent_id: gateway_id })` returns
-   `ambiguous_gateway_id` ([tools.ts:172](../src/lib/mcp/tools.ts:172)),
+   `ambiguous_gateway_id` (`whoami` handler in [`src/lib/mcp/groups/core.ts`](../src/lib/mcp/groups/core.ts)),
    the agent stalls hunting for its UUID, the PM dispatch reconciler
    times out, and every PM Chat reply falls back to the synth-only
    placeholder ([pm-dispatch.ts:329](../src/lib/agents/pm-dispatch.ts:329)).
@@ -781,7 +781,7 @@ The [pm-dispatch.ts:140](../src/lib/agents/pm-dispatch.ts:140)
 `buildIdentityPreamble` becomes part of the universal briefing builder
 (§2.3 step 1). Every dispatch — PM, worker, coordinator, recurring —
 opens with the agent's UUID. The `whoami` ambiguity case
-([tools.ts:166](../src/lib/mcp/tools.ts:166)) becomes unreachable in
+([`src/lib/mcp/groups/core.ts`](../src/lib/mcp/groups/core.ts)) becomes unreachable in
 practice because no two `agents` rows share a `gateway_agent_id` after
 Phase F (only `mc-runner-dev` carries one). The error path stays as
 defense-in-depth.
@@ -804,7 +804,7 @@ New files:
 - `src/components/notes/NotesRail.tsx`
 - `src/components/notes/NoteCard.tsx`
 - `src/components/notes/useAgentNotes.ts`
-- `src/app/feed/page.tsx`
+- `src/app/(app)/workspace/[slug]/feed/page.tsx`
 - `specs/evals/scope-keyed-sessions/`
 - Tests for each.
 
@@ -814,8 +814,8 @@ Modified files:
 - [agent-catalog-sync.ts](../src/lib/agent-catalog-sync.ts) — only ensures runner exists
 - [bootstrap-agents.ts](../src/lib/bootstrap-agents.ts) — `cloneAgentsFromWorkspace` becomes no-op
 - [pm-resolver.ts](../src/lib/agents/pm-resolver.ts) — drops legacy fallback (Phase F)
-- [tools.ts](../src/lib/mcp/tools.ts) — adds notes family
-- [instrumentation.ts](../instrumentation.ts) — adds recurring scheduler
+- [`src/lib/mcp/groups/core.ts`](../src/lib/mcp/groups/core.ts) — adds notes family (`take_note` etc.)
+- [`src/instrumentation.ts`](../src/instrumentation.ts) — adds recurring scheduler
 
 Removed (Phase F):
 - The `gateway_agent_id` column on most `agents` rows (data, not schema).

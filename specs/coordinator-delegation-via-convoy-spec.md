@@ -35,7 +35,8 @@ related-specs:
 ## 1. Problem
 
 Coordinator agents fan out work to peers via the `delegate` MCP tool today
-([`src/lib/mcp/tools.ts:577`](../src/lib/mcp/tools.ts)). That tool is
+(historically `src/lib/mcp/tools.ts`; after the MCP-surface-v2 split the
+equivalent registrations live in [`src/lib/mcp/groups/work.ts`](../src/lib/mcp/groups/work.ts)). That tool is
 fire-and-forget: it calls `chat.send` into a per-task session key and writes a
 single `[DELEGATION]` audit string to `task_activities`. Nothing records:
 
@@ -132,7 +133,9 @@ promotes the parent task when all children are `done`.
 
 ### 2.4 What's retired (same PR as `spawn_subtask` ships)
 
-- The `delegate` MCP tool ([`tools.ts:577`](../src/lib/mcp/tools.ts)) —
+- The `delegate` MCP tool (was registered in the pre-split
+  `src/lib/mcp/tools.ts`; in the current layout the registration would
+  live in [`src/lib/mcp/groups/work.ts`](../src/lib/mcp/groups/work.ts)) —
   handler and `server.registerTool` entry deleted outright. No
   deprecation window: `spawn_subtask` is strictly more capable and there
   is no production traffic worth preserving.
@@ -140,9 +143,9 @@ promotes the parent task when all children are `done`.
   the dispatch template (the coordinator example block in
   [`dispatch/route.ts:447`](../src/app/api/tasks/[id]/dispatch/route.ts)
   that shows a `delegate({…})` call).
-- `src/lib/coordinator-audit.ts` (the scanner that greps
-  `task_activities` for `[DELEGATION]` markers) — convoy subtask rows
-  make it obsolete. Remove the file and any caller / cron entry.
+- `src/lib/coordinator-audit.ts` (the scanner that grepped
+  `task_activities` for `[DELEGATION]` markers) — already removed; convoy
+  subtask rows replace what it used to scan for.
 - The "solo stall" branch of the stall scanner for convoy-parent tasks
   remains; only the per-subtask path gets richer SLO rules (§5.4).
 
@@ -238,7 +241,7 @@ decides its slice is wrong.
 **No coexistence with `delegate`.** In the same PR that registers
 `spawn_subtask`, the `delegate` tool is deleted (handler + registration +
 schema), the `[DELEGATION]` audit-string convention is removed, and the
-`coordinator-audit.ts` scanner that greps for those strings is deleted. The
+`coordinator-audit.ts` scanner that greps for those strings is already gone. The
 tool is not marked deprecated; there is no fallback. Rationale: we're still
 in the build phase with low usage, so a clean swap avoids the ambiguity of
 having two tools that look like they do the same thing but have different
@@ -312,7 +315,7 @@ and the convoy-aware stall logic already routes through the coordinator.
 These changes are small but make the existing surface convoy-aware so
 peers and coordinators don't need new tools for routine work.
 
-- **`get_task`** ([`tools.ts:214`](../src/lib/mcp/tools.ts))
+- **`get_task`** ([`groups/work.ts`](../src/lib/mcp/groups/work.ts))
   When the task has `convoy_id IS NOT NULL` and a matching
   `convoy_subtasks` row, include the Delegation Contract
   (slice, expected_deliverables, acceptance_criteria, dispatched_at,
@@ -321,19 +324,19 @@ peers and coordinators don't need new tools for routine work.
   point-lookups. Eliminates any need to parse the dispatch brief for
   structured data.
 
-- **`register_deliverable`** ([`tools.ts:265`](../src/lib/mcp/tools.ts))
+- **`register_deliverable`** ([`groups/work.ts`](../src/lib/mcp/groups/work.ts))
   Auto-resolve `parent_subtask_id` from the child task's `convoy_id`
   (no new input required). On insert, also update
   `convoy_subtasks.deliverables_registered_count` so
   `list_my_subtasks` stays cheap.
 
-- **`update_task_status`** ([`tools.ts:340`](../src/lib/mcp/tools.ts))
+- **`update_task_status`** ([`groups/work.ts`](../src/lib/mcp/groups/work.ts))
   When a subtask transitions to `review`, mail the coordinator (same
   plumbing as stall detector's sendMail) with a "ready for review"
   note so the coordinator knows to call `accept_subtask` /
   `reject_subtask` — even if it's not actively polling `list_my_subtasks`.
 
-- **`fail_task`** ([`tools.ts:399`](../src/lib/mcp/tools.ts))
+- **`fail_task`** ([`groups/work.ts`](../src/lib/mcp/groups/work.ts))
   When called on a subtask, record the failure on
   `convoy_subtasks.state_reason = 'blocked: …'` and mail the
   coordinator. The peer's task stays in its current status (not
@@ -553,6 +556,7 @@ coexistence window.
      `[DELEGATION]` audit-string convention.
    - Delete `src/lib/coordinator-audit.ts` (and any caller / cron entry)
      since the convoy subtask row replaces what it used to scan for.
+     (Already removed in the shipped change — file no longer exists.)
    - Update the coordinator dispatch briefing
      ([`/api/tasks/[id]/dispatch/route.ts:447`](../src/app/api/tasks/[id]/dispatch/route.ts))
      to describe `spawn_subtask`; add the peer Delegation Contract block.
