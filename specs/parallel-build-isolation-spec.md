@@ -1,3 +1,20 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/workspace-isolation.ts
+  - src/lib/db/workspaces.ts
+  - src/lib/db/migrations.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts
+  - src/lib/convoy.ts
+db-tables: [tasks, workspace_ports, workspace_merges, products]
+related-specs:
+  - convoy-mode-spec.md — session-layer companion to filesystem isolation
+  - autonomous-flow-tightening-spec.md — workspace enforcement (FM2)
+  - product-autopilot-spec.md — repo_url / build_mode source for isolation strategy
+---
+
 # Parallel Build Isolation — Same-App Concurrent Task Execution
 
 **Version:** 1.0  

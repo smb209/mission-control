@@ -1,3 +1,26 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/db/agent-notes.ts
+  - src/app/api/agent-notes/[id]/route.ts
+  - src/components/notes/NoteCard.tsx
+  - src/components/notes/NotesRail.tsx
+  - src/components/initiative/InitiativeRunsStrip.tsx
+  - src/components/InvestigateModal.tsx
+  - src/app/api/initiatives/[id]/investigate/route.ts
+  - src/app/api/initiatives/[id]/ask-pm-from-notes/route.ts
+  - src/app/api/jobs/route.ts
+  - src/lib/db/agent-runs.ts
+mcp-tools: [propose_from_notes]
+db-tables: [agent_notes, agent_runs]
+related-specs:
+  - jobs-in-progress.md — agent_runs surface this filters by initiative_id
+  - audit-action-recommended.md — auto Ask-PM bridge built atop this manual path
+  - subtree-audit-proposals-spec.md — produces the audit notes this manages
+---
+
 # Audit Actions & Per-Initiative Run Tracking
 
 Two pain points, one spec because they share surfaces (NoteCard, InvestigateModal, agent_runs):

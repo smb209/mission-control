@@ -1,3 +1,27 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/convoy.ts
+  - src/lib/mcp/groups/work.ts
+  - src/lib/stall-detection.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts
+  - src/app/api/tasks/[id]/admin/release-stall/route.ts
+  - src/app/api/tasks/[id]/route.ts
+  - src/components/ConvoyTab.tsx
+  - src/lib/db/migrations.ts
+mcp-tools: [spawn_subtask, list_my_subtasks, accept_subtask, reject_subtask, cancel_subtask, get_task, register_deliverable, update_task_status, fail_task, send_mail]
+db-tables: [convoys, convoy_subtasks, tasks, task_activities]
+migrations:
+  - "convoy_subtasks SLO columns + drop UNIQUE(parent_task_id) — migrations.ts:2110-2118"
+  - "decomposition_strategy CHECK adds 'agent' value"
+related-specs:
+  - convoy-mode-spec.md — supersedes §7 of the parent convoy spec
+  - autonomous-flow-tightening-spec.md — evidence model that subtasks feed into
+  - agent-health.md — sibling stall coverage for non-convoy tasks
+---
+
 # Coordinator Delegation via Convoy — Spec
 
 **Version:** 0.1 (draft)

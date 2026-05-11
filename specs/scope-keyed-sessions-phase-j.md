@@ -1,3 +1,27 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/dispatch-subagent.ts
+  - src/lib/agents/dispatch-subagent.test.ts
+  - src/lib/agents/briefing.ts:246
+  - src/lib/agents/briefing.test.ts
+  - src/lib/db/mc-sessions.ts
+  - src/lib/db/mc-sessions.test.ts
+  - src/lib/mcp/groups/core.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts
+  - src/lib/db/migrations.ts
+mcp-tools: [register_subagent_dispatch, take_note]
+db-tables: [mc_sessions, agent_role_overrides]
+migrations:
+  - "072 mc_sessions.run_id"
+  - "073 agent_role_overrides.subagent_context_mode"
+related-specs:
+  - scope-keyed-sessions.md — parent spec; phases A–I
+  - cascade-rules.md — FK rules for mc_sessions
+---
+
 # Phase J — Worker dispatch via openclaw `sessions_spawn`
 
 > Addendum to [`scope-keyed-sessions.md`](scope-keyed-sessions.md). Phase

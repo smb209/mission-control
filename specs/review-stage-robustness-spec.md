@@ -1,3 +1,27 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/authz/agent-task.ts
+  - src/lib/mcp/groups/work.ts
+  - src/lib/services/task-status.ts
+  - src/lib/task-governance.ts
+  - src/lib/stall-detection.ts
+  - src/lib/agent-health.ts
+  - src/lib/convoy.ts
+  - src/lib/workflow-engine.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts
+  - src/app/api/mcp/pm/route.ts
+mcp-tools: [escalate_to_parent, spawn_subtask, update_task_status, register_deliverable, submit_evidence]
+db-tables: [tasks, task_roles, task_evidence, convoy_subtasks, agent_runs]
+related-specs:
+  - autonomous-flow-tightening-spec.md — same anti-pattern (replace agent judgment with rails) being applied
+  - coordinator-delegation-via-convoy-spec.md — defines spawn_subtask path being tightened
+  - agent-health.md — heartbeat/stall infrastructure extended here
+  - convoy-mode-spec.md — convoy-subtask gate behavior modified
+---
+
 # Review-Stage Robustness
 
 Status: draft

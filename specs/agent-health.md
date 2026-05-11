@@ -1,6 +1,26 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agent-health.ts
+  - src/lib/stall-detection.ts
+  - src/lib/autopilot/stall-detection.ts
+  - src/app/api/events/stream/route.ts:40-48
+  - src/app/api/agents/health/route.ts
+  - src/app/api/agents/[id]/health/route.ts
+  - src/app/api/agents/[id]/health/nudge/route.ts
+  - src/lib/health.ts:184
+db-tables: [agent_health, task_activities, openclaw_sessions, agents, tasks]
+migrations:
+  - "015 agent_health table + indexes — migrations.ts:705-718, 815-816"
+related-specs:
+  - convoy-mode-spec.md — original health-state proposal, partly shipped
+  - autonomous-flow-tightening-spec.md — stall thresholds + auto-bounce
+---
+
 # Agent Health
 
-**Status:** Current — describes shipped behavior.
 **Scope:** `src/lib/agent-health.ts` plus the two stall scanners it piggybacks on (`src/lib/stall-detection.ts`, `src/lib/autopilot/stall-detection.ts`).
 
 ## Overview

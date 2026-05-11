@@ -1,3 +1,21 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/autopilot/research.ts
+  - src/lib/autopilot/ideation.ts
+  - src/lib/autopilot/stall-detection.ts
+  - src/lib/db/migrations.ts
+  - src/app/api/events/stream/route.ts
+db-tables: [research_cycles, ideation_cycles, ideas, autopilot_activity_log, products]
+migrations:
+  - "017 autopilot_resilience_and_activity — phase tracking + activity log"
+related-specs:
+  - product-autopilot-spec.md — parent autopilot pipeline
+  - agent-health.md — stall scanner sibling
+---
+
 # Spec: Autopilot Restart Resilience + Live Activity Feed
 
 **Author:** Charlie  

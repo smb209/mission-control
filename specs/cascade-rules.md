@@ -1,3 +1,18 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/db/schema-cascade.test.ts
+  - src/lib/db/schema.ts
+  - src/lib/db/migrations.ts
+  - src/lib/db/initiatives.ts
+db-tables: [workspaces, tasks, agents, initiatives, products, ideas, agent_mailbox, convoys, conversations, research_cycles, rollcall_sessions, workflow_templates, product_skills, pm_proposals]
+related-specs:
+  - scope-keyed-sessions.md — adds agent_notes/mc_sessions FK rules
+  - timestamp-handling.md — adjacent DB-layer discipline
+---
+
 # Schema FK Cascade Rules
 
 **Last touched:** migration 048 (`fk_cascade_safety`)

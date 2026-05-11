@@ -1,3 +1,26 @@
+---
+status: superseded
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/mcp/server.ts
+  - src/lib/mcp/groups/core.ts
+  - src/lib/mcp/groups/read.ts
+  - src/lib/mcp/groups/work.ts
+  - src/lib/mcp/groups/pm.ts
+  - src/lib/mcp/groups/crud.ts
+  - src/lib/mcp/shared.ts
+  - src/app/api/mcp/route.ts
+  - src/app/api/mcp/pm/route.ts
+  - src/app/api/mcp/crud/route.ts
+mcp-tools: [propose_changes, propose_from_notes, refine_proposal, update_subtask, update_note]
+related-specs:
+  - pm-diff-conventions.md — discriminated-union principle codified
+  - coordinator-delegation-via-convoy-spec.md — spawn_subtask / update_subtask surface
+  - review-stage-robustness-spec.md — adds escalate_to_parent to work group
+  - audit-action-recommended.md — extends take_note (core group) with audit_verdict
+---
+
 # MCP surface review — `sc-mission-control`
 
 **Status:** Draft v1 — role-scoping ruled out (runner-architecture constraint). Focus narrowed to action-discriminator consolidation. Implementation queue at the bottom.
