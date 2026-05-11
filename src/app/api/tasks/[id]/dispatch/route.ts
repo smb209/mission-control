@@ -558,35 +558,83 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    // For coordinator dispatches, enumerate the persistent gateway-synced
-    // agents so the coordinator can delegate via `sessions_send` rather than
-    // spawning ephemeral subagents (which inherit a stripped context — no
-    // SOUL.md / IDENTITY.md — and are therefore "confused" about their
-    // role). We only list agents with a gateway_agent_id so local/test
-    // agents don't leak into the coordinator's dispatch surface.
+    // For coordinator dispatches, enumerate the workspace's peers so
+    // the coordinator can delegate via `spawn_subtask`. In the current
+    // 2-gateway model the only gateway-bound agents are the workspace
+    // PM and the org-global runner; every other role (builder, tester,
+    // reviewer, …) is a role-template row with `gateway_agent_id`
+    // NULL and is delegated to by role. The roster lists both kinds
+    // and labels the addressing axis for each.
     let delegationRosterSection = '';
     if (isCoordinator) {
-      const siblings = queryAll<{ id: string; name: string; role: string; gateway_agent_id: string }>(
-        `SELECT id, name, role, gateway_agent_id
+      const taskWs = task.workspace_id ?? 'default';
+      const siblings = queryAll<{
+        id: string;
+        name: string;
+        role: string;
+        gateway_agent_id: string | null;
+        is_pm: number | null;
+      }>(
+        `SELECT id, name, role, gateway_agent_id, is_pm
            FROM agents
-          WHERE gateway_agent_id IS NOT NULL
+          WHERE (
+                  COALESCE(workspace_id, 'default') = ?
+               OR gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
+                )
             AND id != ?
             AND COALESCE(status, 'standby') != 'offline'
             AND COALESCE(is_active, 1) = 1
           ORDER BY role ASC, name ASC`,
-        [agent.id]
+        [taskWs, agent.id]
       );
       if (siblings.length > 0) {
-        const rosterLines = siblings
-          .map(s => `- **${s.name}** (role: \`${s.role}\`, gateway id: \`${s.gateway_agent_id}\`)`)
+        const delegable: typeof siblings = [];
+        const mailable: typeof siblings = [];
+        for (const s of siblings) {
+          const isOrgRunner =
+            s.gateway_agent_id === 'mc-runner' || s.gateway_agent_id === 'mc-runner-dev';
+          const isPm = (s.is_pm ?? 0) === 1;
+          if (!s.gateway_agent_id && !isOrgRunner && !isPm) {
+            delegable.push(s);
+          } else {
+            mailable.push(s);
+          }
+        }
+        const delegableLines = delegable
+          .map(
+            (s) =>
+              `- **${s.name}** — \`spawn_subtask({ role: '${s.role}', … })\``,
+          )
           .join('\n');
+        const mailableLines = mailable
+          .map((s) => {
+            const tag = (s.is_pm ?? 0) === 1
+              ? 'workspace PM'
+              : s.gateway_agent_id === 'mc-runner' || s.gateway_agent_id === 'mc-runner-dev'
+              ? 'org runner'
+              : `role: ${s.role}`;
+            return `- **${s.name}** (${tag}) — \`send_mail({ to_agent_id: '${s.id}', … })\``;
+          })
+          .join('\n');
+        const parts: string[] = [];
+        if (delegableLines) {
+          parts.push(
+            `**Delegable peers (use \`spawn_subtask\`):**\n${delegableLines}`,
+          );
+        }
+        if (mailableLines) {
+          parts.push(`**Mailable peers (use \`send_mail\`):**\n${mailableLines}`);
+        }
         delegationRosterSection = `\n---
-**👥 AVAILABLE PERSISTENT AGENTS — delegate here, do NOT spawn new ones:**
-${rosterLines}
+**👥 WORKSPACE PEERS**
 
-Each of these is a long-lived agent with its own pinned identity
-(\`SOUL.md\`, \`AGENTS.md\`, \`USER.md\`). Route work to them so they keep
-their persona, memory, and channel bindings.
+${parts.join('\n\n')}
+
+The workspace PM is the spawn parent for ephemeral subagents — coordinate
+with them via mail, don't try to delegate work to them. The org runner
+hosts every role's ephemeral session and isn't a delegation target either.
+Role templates have no gateway id; address them by \`role\` (preferred) or
+\`peer_agent_id\` in \`spawn_subtask\`.
 `;
       }
     }

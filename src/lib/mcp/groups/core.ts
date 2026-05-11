@@ -265,7 +265,7 @@ export function registerCoreTools(server: McpServer): void {
     {
       title: 'List peer agents in your workspace',
       description:
-        'Returns the workspace peer roster (gateway_id → MC agent_id, name, role). Use this before send_mail or delegate when you need a recipient id.',
+        "Returns the workspace peer roster plus the org-global runner. Each entry carries a `dispatchable` flag (true = delegable via spawn_subtask) and an `addressing` object naming the axes the peer accepts (`role`, `peer_agent_id`, and/or `peer_gateway_id`). Use this before send_mail or spawn_subtask when you need a recipient id.",
       inputSchema: { agent_id: agentIdArg },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -281,17 +281,57 @@ export function registerCoreTools(server: McpServer): void {
           structuredContent: { error: 'agent_not_found', agent_id },
         };
       }
-      const peers = queryAll<{
+      // Workspace peers + the org-global runner (which lives in
+      // workspace_id='default' but is reachable from every workspace).
+      // Stale role-bound rows from the old N-gateway model that have
+      // since been marked offline are filtered out.
+      const rows = queryAll<{
         id: string;
         gateway_agent_id: string | null;
         name: string;
         role: string;
+        workspace_id: string | null;
+        is_pm: number | null;
       }>(
-        `SELECT id, gateway_agent_id, name, role FROM agents
-          WHERE workspace_id = ? AND id != ?
+        `SELECT id, gateway_agent_id, name, role, workspace_id, is_pm FROM agents
+          WHERE (
+                  workspace_id = ?
+               OR gateway_agent_id IN ('mc-runner', 'mc-runner-dev')
+                )
+            AND id != ?
+            AND COALESCE(status, 'standby') != 'offline'
+            AND COALESCE(is_active, 1) = 1
           ORDER BY role, name`,
         [me.workspace_id, agent_id],
       );
+
+      const peers = rows.map((r) => {
+        const isOrgRunner =
+          r.gateway_agent_id === 'mc-runner' || r.gateway_agent_id === 'mc-runner-dev';
+        const isWorkspacePm = (r.is_pm ?? 0) === 1;
+        // Role templates (no gateway binding) are delegable via
+        // spawn_subtask; PM + runner are mailable but not delegable
+        // (the PM is the spawn parent, not a target; the runner hosts
+        // every role's ephemeral session, you don't delegate to it).
+        const dispatchable = !r.gateway_agent_id && !isWorkspacePm && !isOrgRunner;
+        const addressing: {
+          role?: string;
+          peer_agent_id: string;
+          peer_gateway_id?: string;
+        } = { peer_agent_id: r.id };
+        if (dispatchable) addressing.role = r.role;
+        if (r.gateway_agent_id) addressing.peer_gateway_id = r.gateway_agent_id;
+        return {
+          id: r.id,
+          gateway_agent_id: r.gateway_agent_id,
+          name: r.name,
+          role: r.role,
+          dispatchable,
+          is_workspace_pm: isWorkspacePm,
+          is_org_runner: isOrgRunner,
+          addressing,
+        };
+      });
       return textResult(JSON.stringify({ peers }, null, 2), { peers });
     }),
   );
