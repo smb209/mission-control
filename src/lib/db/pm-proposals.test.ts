@@ -164,7 +164,7 @@ test('acceptProposal: set_initiative_status flips status', () => {
 test('acceptProposal: set_initiative_status accepts done and cancelled end-to-end', () => {
   // Policy as of feat(pm) allow done/cancelled: the PM may propose any of
   // the 6 InitiativeStatus values; the operator's accept click is the
-  // gate, not the validator. See specs/initiative-investigate.md.
+  // gate, not the validator. See docs/archive/initiative-investigate.md.
   const ws = freshWorkspace();
   const initDone = createInitiative({ workspace_id: ws, kind: 'story', title: 'D' });
   const initCancelled = createInitiative({ workspace_id: ws, kind: 'story', title: 'C' });

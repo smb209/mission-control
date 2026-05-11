@@ -108,17 +108,17 @@ In the Repo section of the settings page (PR 1 lands the checkbox even though `r
 Operator clicks **"Refine with agent"** under the conventions textarea. Flow:
 
 1. Modal opens: shows the current conventions body and a one-line operator note ("optional — what would you like the agent to focus on?").
-2. On submit: `POST /api/workspaces/:id/refine-conventions` with `{ current_conventions, operator_note }`.
-3. Route dispatches a writer/coder agent in a fresh session via `dispatchScope` with `scope_type='conventions_refine'`. New agent role; uses any available code/writer agent in the roster.
-4. Agent receives:
-   - The current conventions text
-   - Workspace facts (name, paths, repo_url, base_branch)
-   - Available `{{...}}` variables list
-   - System prompt: "Review the conventions for clarity, completeness, and consistency. Either propose a fully-rewritten replacement (markdown) OR ask up to 5 clarifying questions. Return JSON `{ kind: 'replacement' | 'questions', body: string, questions?: string[] }`."
-5. Agent's reply is parsed and returned to the operator as a proposal — modal swaps to a review pane:
-   - **Replacement**: shows side-by-side diff (or "swap" button if diff lib is heavy); operator clicks Accept (writes body to `context_md`) or Discard.
-   - **Questions**: shows the questions; operator types answers inline; clicking "Send answers" re-dispatches with the answers appended to operator_note.
-6. Persistence: a transient `pm_proposals`-shaped row? **No** — too much overlap with PM. Use a new lightweight table `workspace_conventions_proposals` with columns `id`, `workspace_id`, `kind`, `body`, `questions_json`, `status`, `created_at`. Default status `'open'`; `'accepted'` on apply; `'discarded'` on close.
+2. On submit: `POST /api/workspaces/:id/refine-conventions` with `{ current_conventions, operator_note }` (see `src/app/api/workspaces/[id]/refine-conventions/route.ts:27`).
+3. The route calls `refineConventions(...)` (`src/lib/workspace-conventions/refine.ts:192`), which dispatches the **runner agent** (`getRunnerAgent()` — `mc-runner` / `mc-runner-dev`) via `sendChatAndAwaitReply` in a one-shot fresh session with suffix `conventions-refine-<workspace>-<ts>` and a 90s timeout. The runner agent role is reused — no new role, no new `scope_type`, no `dispatchScope` call.
+4. Agent receives the system prompt + workspace facts + current conventions (see `buildRefineTrigger` at `src/lib/workspace-conventions/refine.ts:67`). It must reply with a single JSON object matching one of:
+   - `{ "kind": "replacement", "body": "<markdown>", "rationale": "<one paragraph>" }`
+   - `{ "kind": "questions", "questions": ["q1", ...], "rationale": "<one paragraph>" }` (≤ 5 questions)
+   Available `{{...}}` tokens are interpolated into the system prompt from `KNOWN_VARIABLES` in `src/lib/workspace-conventions/resolve-variables.ts`.
+5. `parseRefineReply` (`src/lib/workspace-conventions/refine.ts:131`) tolerates leading prose and ```json fences but rejects anything that doesn't yield a JSON object with a recognized `kind`. Parse / timeout / no-runner / no-session failures throw `RefineDispatchError`; the route maps these to 502 / 504 / 503 as appropriate.
+6. The parsed `RefineProposal` is returned **inline** in the HTTP response as `{ proposal: { kind, body?, questions?, rationale? } }`. The modal swaps to a review pane:
+   - **Replacement**: shows side-by-side diff (or "swap" button if diff lib is heavy); operator clicks Accept (writes `body` to `workspaces.context_md` via the existing `PATCH /api/workspaces/:id/settings` route) or Discard (close modal).
+   - **Questions**: shows the questions; operator types answers inline; clicking "Send answers" re-POSTs `refine-conventions` with the answers appended to `operator_note`. Each round is a fresh dispatch — no server-side conversation state.
+7. **Persistence: none.** Refine is a transient one-shot. The proposal lives only in the HTTP response and in the modal's React state until the operator accepts (which routes through the existing settings PATCH) or closes the modal. There is no `workspace_conventions_proposals` table, no `pm_proposals` row, no `mc_sessions` / `agent_runs` row — the v1 contract is "spinner → result, nothing tracked." If a tracked variant is added later (so refines show in `/jobs`), it will route through `dispatchScope` with a new `scope_type` and a matching CHECK-constraint migration; that is explicitly out of scope for PR 3.
 
 ### 7. Settings UI cleanup (in PR 1)
 
@@ -174,10 +174,11 @@ Per the project's spec-first rule, each PR has a preview-verify gate before open
 
 **PR 3**
 1. Refine button opens the modal.
-2. Submit dispatches an agent (verify with a real run; capture proposal output).
-3. Replacement-kind reply: accept replaces `context_md`; discard leaves it.
-4. Question-kind reply: operator can answer + re-dispatch; second reply settles.
-5. `workspace_conventions_proposals` rows lifecycle (open → accepted/discarded).
+2. Submit dispatches the runner agent (verify with a real run; capture the `{ proposal }` JSON returned by `POST /api/workspaces/:id/refine-conventions`).
+3. Replacement-kind reply: Accept routes through the existing settings PATCH and overwrites `workspaces.context_md`; Discard closes the modal without writing.
+4. Question-kind reply: operator types answers; clicking "Send answers" re-POSTs with `operator_note` extended; second reply settles to a replacement.
+5. No new tables, no new rows: refine is transient — confirm `schema_migrations` is unchanged for PR 3 and no `pm_proposals` / `mc_sessions` row is created by a refine round-trip.
+6. Failure paths: with the gateway disconnected the route returns 503 (`no_session`); a > 90s agent reply returns 504 (`timeout`); a non-JSON reply returns 502 (`parse_failed`).
 
 ## Out of scope (followups)
 

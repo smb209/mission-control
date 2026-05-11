@@ -834,7 +834,7 @@ provisioned via `yarn workspace:provision <slug>`. For 10 workspaces that's
 - [ ] Phase J: optionally migrate worker dispatch from scope-keyed sibling
       sessions on the workspace PM to openclaw `subagent_spawn` for cleaner
       coordinator semantics
-- [ ] Run full validation pack (specs/scope-keyed-sessions-validation/)
+- [ ] Run full validation pack (docs/archive/scope-keyed-sessions-validation/)
       end-to-end against spark-lb/agent
 - [ ] Run scripts/decommission-durable-workers.ts in production
 - [ ] Run scripts/archive-old-worker-workspaces.ts in production

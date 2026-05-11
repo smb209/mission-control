@@ -12,7 +12,7 @@
  * the brief-side fields (result_md / citations_json / error_md);
  * status itself lives on agent_runs.
  *
- * See specs/research-area.md "Brief" + specs/research-area-build-plan.md §2.
+ * See specs/research-area.md "Brief" + docs/archive/research-area-build-plan.md §2.
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -279,7 +279,7 @@ export function setBriefError(id: string, errorMd: string): Brief | null {
 
 /**
  * Persist the one-line `summary` for a brief. Computed at completion
- * time (slice 3 — see specs/initiative-research-loop-build-plan.md D1)
+ * time (slice 3 — see docs/archive/initiative-research-loop-build-plan.md D1)
  * from the first sentence of `result_md`, capped at 160 chars.
  */
 export function setBriefSummary(id: string, summary: string): Brief | null {

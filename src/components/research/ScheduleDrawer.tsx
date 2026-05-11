@@ -4,7 +4,7 @@
  * ScheduleDrawer — create a recurring research schedule for a topic.
  *
  * Phase-2 spec: cadence is a fixed dropdown (no cron parser, no event
- * triggers). See specs/research-phase-2-schedules-build-plan.md §3.2.
+ * triggers). See docs/archive/research-phase-2-schedules-build-plan.md §3.2.
  *
  * The actual scheduling is workspace-scoped via the topic's workspace,
  * so this drawer just needs the topic's id; it doesn't need a

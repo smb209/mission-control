@@ -3,7 +3,7 @@
 **Version:** 0.1 (draft)
 **Date:** 2026-05-08
 **Status:** Proposed
-**Builds on:** [`specs/initiative-investigate.md`](./initiative-investigate.md) (subtree-audit orchestration, already shipped as PR 4)
+**Builds on:** [`docs/archive/initiative-investigate.md`](./initiative-investigate.md) (subtree-audit orchestration, already shipped as PR 4)
 **Related (do not conflate):** [`specs/convoy-mode-spec.md`](./convoy-mode-spec.md), [`specs/coordinator-delegation-via-convoy-spec.md`](./coordinator-delegation-via-convoy-spec.md) — *agent-initiated* fan-out via the convoy/`spawn_subtask` substrate. This spec uses the *MC-orchestrated* `agent_runs` substrate at [`src/lib/agents/subtree-audit.ts`](../src/lib/agents/subtree-audit.ts) and does **not** create `tasks` rows.
 
 ---

@@ -48,7 +48,7 @@ export interface SuggestOptions {
    * recent PM-audience notes + index of prior briefs on this initiative)
    * instead of the workspace-wide snapshot. Generated `brief` suggestions
    * carry `payload.initiative_id` so accept-flow propagates it onto the
-   * dispatched brief. See specs/initiative-research-loop.md.
+   * dispatched brief. See docs/archive/initiative-research-loop.md.
    */
   initiative_id?: string;
   timeoutMs?: number;

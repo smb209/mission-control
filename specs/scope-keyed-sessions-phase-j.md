@@ -228,7 +228,7 @@ flag-removal cleanup.
 
 ## Validation pack additions
 
-The validation pack at `specs/scope-keyed-sessions-validation/` already
+The validation pack at `docs/archive/scope-keyed-sessions-validation/` already
 covers worker dispatch in §5. Phase J extends:
 
 - §5 worker scenarios get a `MC_USE_SUBAGENT_SPAWN=1` variant.

@@ -2,13 +2,13 @@
 name: Initiative Research Loop — Build Plan
 description: Slice plan + design decisions for shipping the initiative-scoped research loop on top of briefs
 status: draft
-spec: specs/initiative-research-loop.md
+spec: docs/archive/initiative-research-loop.md
 ---
 
 # Initiative Research Loop — Build Plan
 
 Status: draft · Owner: smb209 · Date: 2026-05-09
-Spec: [specs/initiative-research-loop.md](initiative-research-loop.md)
+Spec: [docs/archive/initiative-research-loop.md](initiative-research-loop.md)
 
 This is the build-plan companion to the spec. It commits to slices, files-touched, and the load-bearing design calls. Operator OKs this doc *before* any code lands; per-slice unit tests + preview verification are the per-PR contract; full validation runs against the stacked branch tip per [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
 

@@ -2,7 +2,7 @@
  * Subtree-audit orchestration for the initiative Investigate flow.
  *
  * MC-driven, bottom-up, layered fan-out. PR 4 of
- * specs/initiative-investigate.md.
+ * docs/archive/initiative-investigate.md.
  *
  * Public surface:
  *   - enumerateLayersBottomUp — pure helper that returns leaf-first

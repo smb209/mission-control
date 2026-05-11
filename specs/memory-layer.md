@@ -1,4 +1,24 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Memory layer — grounding agents in workspace + initiative context
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. No backing code, schema, or agent exists yet. The existing `knowledge_entries` table is the current (flatter) reality; the typed workspace/initiative memory described below has not been implemented.
+
+## Where this fits
+
+The Memory layer is the **durable, agent-readable substrate** behind the rest of Mission Control:
+
+- **Research** writes brief findings into memory; future briefs ground on them.
+- **Decisions** writes ratified decisions into memory as durable facts.
+- **Stakeholders & Comms** reads from memory when drafting updates so it doesn't re-derive context every time.
+- **PM** uses memory to maintain working knowledge of the project across conversations.
+- **Risks**, **Calendar**, **Initiatives** all become memory writers/readers.
+
+In short: every other surface in this set is a *view* over Memory or a *producer* of Memory entries.
 
 ## Why
 

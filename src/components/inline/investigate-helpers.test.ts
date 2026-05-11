@@ -1,6 +1,6 @@
 /**
  * Unit tests for the Investigate-flow helpers (PR 3 of
- * specs/initiative-investigate.md).
+ * docs/archive/initiative-investigate.md).
  *
  * The project doesn't ship React component tests today (no .test.tsx
  * suites), so we cover the modal's gating + body shape via these pure

@@ -60,7 +60,7 @@ interface WorkspaceWithDefault {
    *  v0 of org-scope memory grounding — see docs/specs and the
    *  Ground-agents theme on the roadmap. */
   context_md?: string | null;
-  /** Initiative-audit knobs. Migration 079 / specs/initiative-investigate.md. */
+  /** Initiative-audit knobs. Migration 079 / docs/archive/initiative-investigate.md. */
   audit_per_node_timeout_ms?: number | null;
   audit_subtree_concurrency?: number | null;
   /** Opt-in bridge from narrow audits to PM proposals. Migration 093 /
@@ -670,7 +670,7 @@ export default function WorkspaceSettingsPage({
 
         {/* Audit defaults — workspace-scoped knobs for the initiative
             Investigate flow's subtree mode. See
-            specs/initiative-investigate.md §"Decisions" item 1. */}
+            docs/archive/initiative-investigate.md §"Decisions" item 1. */}
         <Section
           id="audit-defaults"
           title="Audit defaults"

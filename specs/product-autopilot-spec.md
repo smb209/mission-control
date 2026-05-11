@@ -110,6 +110,8 @@ A single Mission Control workspace can run multiple products simultaneously.
 
 ## 3. Phase 1 — Product Autopilot Core
 
+**Supersedes:** `autopilot-build-pipeline-spec.md` (merged 2026-05-11). The build-pipeline spec described Phase 1 task→PR automation with drifted column names (`build_automation('supervised','semi_auto','full_auto')`). The shipped schema uses `products.build_mode TEXT CHECK (build_mode IN ('auto_build','plan_first'))` (`src/lib/db/migrations.ts:1244`). Its accurate material (repo context flow, PR integration, build-mode behavior, cost-cap gating) is inlined below in §3.5 and §3.7. The supervised/semi-auto/full-auto trichotomy was never implemented and is dropped.
+
 This is the foundation. Everything else builds on it.
 
 ### 3.1 Product Setup
@@ -370,18 +372,22 @@ Collapsible sections: research backing, technical approach, and risks are collap
 
 ### 3.5 Idea Queue & Build Flow
 
+Conversion happens in `createTaskFromIdea()` (`src/lib/autopilot/swipe.ts:284`), which reads the product's `build_mode` and `repo_url` / `default_branch` and writes them onto the new task row (columns `repo_url`, `repo_branch` on `tasks` — added in migration 019, `src/lib/db/migrations.ts:1262-1268`).
+
 **Approved ideas** (right swipe) enter the build queue:
 
-1. Idea is converted to a Mission Control task
-2. Task enters the normal MC pipeline: `planning` → `inbox` → `assigned` → `in_progress` → `testing` → `review` → `done`
-3. If the idea's complexity is L or XL, it's flagged as a convoy candidate — MC can auto-decompose it into sub-tasks (using the convoy pipeline phase)
-4. Build agents create feature branches and PRs against the product's repo
-5. Completed tasks produce deliverables (PRs, deployed features, documentation)
+1. Idea is converted to a Mission Control task, copying `repo_url` + `repo_branch` from the parent product.
+2. Initial status depends on `products.build_mode`:
+   - `plan_first` (default): task lands in `planning` and waits for human review / dispatch.
+   - `auto_build`: task lands directly in `assigned` and is auto-dispatched via `internalDispatch` (`src/lib/autopilot/swipe.ts:294-348`).
+3. Task then flows through the normal MC pipeline: `planning` → `inbox` → `assigned` → `in_progress` → `testing` → `review` → `done`.
+4. If the idea's complexity is L or XL, it's flagged as a convoy candidate — MC can auto-decompose it into sub-tasks (using the convoy pipeline phase).
+5. Build agents create feature branches and PRs against the product's repo; PR URL and status are reported back into `tasks.pr_url` / `tasks.pr_status` (see §3.7).
 
 **🔥 ideas** (up swipe) skip the queue:
-1. Immediately created as a task with `urgent` priority
-2. Auto-dispatched to the next available build agent
-3. Enters the pipeline at `in_progress` (skips inbox wait)
+1. Immediately created as a task with `urgent` priority via the same `createTaskFromIdea` path.
+2. Same `build_mode` gating applies — `auto_build` triggers immediate dispatch; `plan_first` still requires a human to advance the task.
+3. Cost-cap check runs before auto-dispatch (see §3.7); if the cap is exceeded, the task is routed to `inbox` instead.
 
 **Maybe ideas** (down swipe) go to the Maybe Pool:
 1. Stored with the original research context
@@ -403,6 +409,56 @@ Users can manually add ideas to the swipe deck or directly to the build queue:
 - Form: title, description, category, priority, notes
 - Option to add it to swipe deck (for evaluation) or directly to build queue (skip swipe)
 - Manually submitted ideas are tagged `source: manual` vs. agent-generated `source: research`
+
+### 3.7 Build Pipeline & PR Integration
+
+This section absorbs the (accurate, shipped) portions of the former `autopilot-build-pipeline-spec.md`.
+
+**Goal.** Close the gap between a Yes/🔥 swipe and a merge-ready PR. The repo context must flow product → task → dispatch message, and agents must report PR URLs back.
+
+**Shipped schema additions** (migration 019, `src/lib/db/migrations.ts:1238-1279`):
+
+```sql
+-- products
+ALTER TABLE products ADD COLUMN build_mode TEXT DEFAULT 'plan_first'
+  CHECK (build_mode IN ('auto_build', 'plan_first'));
+ALTER TABLE products ADD COLUMN default_branch  TEXT DEFAULT 'main';
+ALTER TABLE products ADD COLUMN cost_cap_per_task REAL;   -- null = no cap
+ALTER TABLE products ADD COLUMN cost_cap_monthly  REAL;   -- null = no cap
+
+-- tasks
+ALTER TABLE tasks ADD COLUMN repo_url    TEXT;
+ALTER TABLE tasks ADD COLUMN repo_branch TEXT;
+ALTER TABLE tasks ADD COLUMN pr_url      TEXT;
+ALTER TABLE tasks ADD COLUMN pr_status   TEXT
+  CHECK (pr_status IN ('pending', 'open', 'merged', 'closed'));
+```
+
+Note: `cost_cap_per_task` / `cost_cap_monthly` are duplicated on `products` for the swipe-time fast path. The richer `cost_caps` table (`src/lib/db/migrations.ts:985`) — keyed by `cap_type` ∈ {`per_cycle`, `per_task`, `daily`, `monthly`, `per_product_monthly`} — remains the canonical store for workspace-level and richer cap policies. Treat the per-product columns as cached pre-dispatch hints.
+
+**Build modes.** Only two are implemented:
+
+| `build_mode`   | Swipe → task status                                  | Dispatch behavior                                                                 |
+|----------------|------------------------------------------------------|-----------------------------------------------------------------------------------|
+| `plan_first`   | Yes → `planning`; 🔥 → `planning` (urgent priority) | Human reviews and dispatches manually through the normal MC flow.                 |
+| `auto_build`   | Yes / 🔥 → `assigned`                                | `createTaskFromIdea` fires `internalDispatch(task.id)` async after row insert.    |
+
+Default is `plan_first` (no surprises for new products). The `supervised` / `semi_auto` / `full_auto` trichotomy from the original build-pipeline spec was never implemented and is intentionally not part of this design.
+
+**Dispatch enhancement.** When `task.repo_url` is set, the dispatch route (`/api/tasks/[id]/dispatch`) appends a repo + PR section to the agent message: feature branch name derived from the task title, git workflow steps, PR title/body requirements, and instructions to PATCH `tasks/[id]` with `{ pr_url, pr_status: 'open' }` once the PR is created. `tasks.id` is included so agents reference it in commit/PR bodies.
+
+**PR status tracking.** `PATCH /api/tasks/[id]` accepts `pr_url` and `pr_status` ∈ {`pending`,`open`,`merged`,`closed`}. Auto-update on CI / merge is **Status: not implemented** — a GitHub webhook into `/api/webhooks/github` is the intended path; until it lands, users update PR status manually or via agent callbacks.
+
+**Cost guardrails.**
+- Per-task cap: included in the dispatch message; agent self-limits. MC tracks `actual_cost_usd` against `cost_events`. If exceeded, alert the user — do not kill mid-build.
+- Monthly cap: checked **before** auto-dispatch (`auto_build` path). If product spend exceeds `cost_cap_monthly` for the period, the task is routed to `inbox` instead of `assigned`, with a "Monthly budget reached — dispatch manually to override" notice. The check sums `cost_events.cost_usd` for the product within the current month.
+
+**UI surface.** Three places must reflect repo state:
+1. Product create/edit form: show an amber warning when `repo_url` is empty ("Without a repository, Autopilot can research and generate ideas but agents won't be able to build features or create pull requests"), plus a `build_mode` selector.
+2. Swipe deck: Yes / 🔥 buttons show a "task only — no repo" subtitle when the product has no repo connected.
+3. Task card: render a PR badge when `task.pr_url` is present, color-coded by `pr_status` (open vs. merged vs. closed). The existing `BuildQueue` component is the natural home for a PR column + re-dispatch button on failed builds.
+
+**Out of scope (future).** GitHub webhook for auto-merge on CI pass, automatic CI status polling, multi-repo support per product, custom PR templates, branch protection rule awareness, deploy-on-merge pipeline. These were listed as Phase 2/3 in the original build-pipeline spec and remain unimplemented.
 
 ---
 
@@ -936,9 +992,20 @@ CREATE TABLE IF NOT EXISTS products (
   icon TEXT DEFAULT '🚀',
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'paused', 'archived')),
   settings TEXT,                     -- JSON: per-product configuration
+  -- Added in migration 019 (build pipeline integration; see §3.7):
+  build_mode TEXT DEFAULT 'plan_first' CHECK (build_mode IN ('auto_build', 'plan_first')),
+  default_branch TEXT DEFAULT 'main',
+  cost_cap_per_task REAL,            -- per-task cap hint; canonical store is cost_caps
+  cost_cap_monthly REAL,             -- per-product monthly cap hint
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Tasks table (existing) also gains migration-019 columns; see §3.7:
+--   repo_url    TEXT
+--   repo_branch TEXT
+--   pr_url      TEXT
+--   pr_status   TEXT CHECK (pr_status IN ('pending', 'open', 'merged', 'closed'))
 
 -- Research cycles: each run of the research agent
 CREATE TABLE IF NOT EXISTS research_cycles (

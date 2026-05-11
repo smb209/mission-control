@@ -6,7 +6,7 @@
  *
  * Schedules live on the shared `recurring_jobs` table; topic-scoped
  * helpers in `recurring-jobs.ts` filter to research rows. See
- * specs/research-phase-2-schedules-build-plan.md §3.1.
+ * docs/archive/research-phase-2-schedules-build-plan.md §3.1.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

@@ -41,7 +41,7 @@ shared addenda, then the task context, then the identity preamble.
    (migration update if needed).
 4. Update the dispatch resolver so scope keys can route to the new role.
 5. Add a synthetic task in the validation pack
-   (`specs/scope-keyed-sessions-validation/02-test-plan.md`) covering
+   (`docs/archive/scope-keyed-sessions-validation/02-test-plan.md`) covering
    the new role.
 
 ## Refreshing from openclaw workspaces

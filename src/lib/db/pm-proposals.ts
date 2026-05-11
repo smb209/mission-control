@@ -18,7 +18,7 @@
  *   - `set_initiative_status` — UPDATE initiatives SET status
  *       (any of planned | in_progress | at_risk | blocked | done | cancelled;
  *       operator approves at the proposal level — see
- *       specs/initiative-investigate.md §"Schema gap" for why the prior
+ *       docs/archive/initiative-investigate.md §"Schema gap" for why the prior
  *       PM-side `done`/`cancelled` block was lifted)
  *   - `add_dependency` — INSERT INTO initiative_dependencies
  *   - `remove_dependency` — DELETE by id
@@ -357,7 +357,7 @@ export function validateProposedChanges(
         // Policy: PM may propose any of the 6 InitiativeStatus values,
         // including done/cancelled. Operator approval (accept/refine on
         // the diff) is the gate — not the validator. See
-        // specs/initiative-investigate.md (schema-gap section) for the
+        // docs/archive/initiative-investigate.md (schema-gap section) for the
         // rationale: the PM's job is to surface the right next move and
         // package it as a reviewable diff; restricting which statuses
         // it can propose forced ergonomic workarounds (status_check

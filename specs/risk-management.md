@@ -1,4 +1,12 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Risk Management — Spec (Draft)
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. The `/risks` route renders this doc as a placeholder. No schema, MCP tools, or backing code exist yet.
 
 A risk register with **agent-assisted sweeps**, scoring history, and a dashboard that makes "what's the worst that could happen, and what are we doing about it" answerable in one glance.
 

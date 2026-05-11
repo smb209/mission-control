@@ -186,7 +186,7 @@ Per CLAUDE.md "Spec-First" workflow:
 
 1. **Unit tests** at slice boundaries (above).
 2. **MCP integration** (`yarn mcp:integration`) covering: agent_not_coordinator → soft-lock → escalate_to_parent.
-3. **Real-agent dogfood**: re-run an alert-replacement-style task on the dev stack (`:4010`) — assigned PM, no builder available — and verify the system either auto-spawns under the orchestrator or bounces back instead of stalling. Capture the evidence in `specs/review-stage-robustness-validation/`.
+3. **Real-agent dogfood**: re-run an alert-replacement-style task on the dev stack (`:4010`) — assigned PM, no builder available — and verify the system either auto-spawns under the orchestrator or bounces back instead of stalling. Capture the evidence in `docs/archive/review-stage-robustness-validation/`.
 4. **Backfill check** before merging slice 4: count current tasks in `review` with no reviewer assigned and no `task_evidence`. They'll auto-bounce on first scan after deploy. List them in the PR description so the operator isn't surprised.
 
 ## Rollout
@@ -205,4 +205,4 @@ Per CLAUDE.md "Spec-First" workflow:
 ## References
 
 - Recurring incident exemplars: task `92b7b092-a7b6-4542-ba41-b1bdb95860db` (this spec's trigger), prior PR #111 post-mortem in [autonomous-flow-tightening-spec.md](specs/autonomous-flow-tightening-spec.md).
-- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](specs/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health-overhaul-spec.md](specs/agent-health-overhaul-spec.md) (heartbeat + stall infrastructure this builds on).
+- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](specs/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health.md](specs/agent-health.md) (heartbeat + stall infrastructure this builds on).

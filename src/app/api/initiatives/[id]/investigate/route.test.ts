@@ -1,5 +1,5 @@
 /**
- * Investigate route tests — PR 4 of specs/initiative-investigate.md.
+ * Investigate route tests — PR 4 of docs/archive/initiative-investigate.md.
  *
  * Focuses on the slices that are exercisable without a live gateway:
  *
@@ -10,7 +10,7 @@
  *
  * The full happy-path (real LLM dispatch + per-node take_note rows)
  * is covered by the dogfood loop documented in
- * specs/initiative-investigate.md §"Verification pipeline".
+ * docs/archive/initiative-investigate.md §"Verification pipeline".
  */
 
 import test from 'node:test';

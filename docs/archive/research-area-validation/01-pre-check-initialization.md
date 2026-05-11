@@ -12,7 +12,7 @@
 |---|---|---|
 | Repo on validation branch | `git rev-parse --abbrev-ref HEAD` | `feat/research-phase-1/...` (not `main`) |
 | Repo clean | `git status --porcelain` | empty |
-| Build plan present | `test -f specs/research-area-build-plan.md && echo ok` | `ok` |
+| Build plan present | `test -f docs/archive/research-area-build-plan.md && echo ok` | `ok` |
 | Operator off dev server | _(ask)_ | confirmed |
 | Dev server stopped | `lsof -ti :4010 \|\| echo none` | `none` (kill if needed: `kill $(lsof -ti :4010)`) |
 | Openclaw gateway up | `lsof -ti :18789 \|\| echo none` | non-empty PID |

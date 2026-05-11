@@ -301,9 +301,9 @@ export function InitiativeDetailView({
   // as planGuidance but persists for the lifetime of the modal.
   const [decomposeHint, setDecomposeHint] = useState<string | null>(null);
   // Investigate ▾ — narrow-mode audit modal (PR 3 of
-  // specs/initiative-investigate.md). Subtree mode lives in PR 4.
+  // docs/archive/initiative-investigate.md). Subtree mode lives in PR 4.
   const [showInvestigateModal, setShowInvestigateModal] = useState(false);
-  // PR 4 of specs/initiative-investigate.md — subtree mode added.
+  // PR 4 of docs/archive/initiative-investigate.md — subtree mode added.
   const [investigateMode, setInvestigateMode] = useState<'narrow' | 'subtree-proposal'>('narrow');
   // Selected task for the inline TaskModal — clicking a task in the
   // children list opens it here instead of navigating away.
@@ -1315,7 +1315,7 @@ or "carve out the onboarding flow as its own story first"`}
 }
 
 // Investigate ▾ menu items. Subtree mode lands in PR 4 of
-// specs/initiative-investigate.md.
+// docs/archive/initiative-investigate.md.
 const INVESTIGATE_OPTIONS: InvestigateOption[] = [
   {
     id: 'narrow',

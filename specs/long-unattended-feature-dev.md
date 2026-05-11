@@ -2,7 +2,7 @@
 
 A reusable pattern for shipping a multi-slice feature with **agent-driven validation** between slices, where the operator reviews the final result instead of every intermediate diff.
 
-This codifies what worked for `scope-keyed-sessions` (`specs/scope-keyed-sessions-validation/`) and `autonomous-flow-tightening` (`specs/autonomous-flow-validation-plan.md`). Use it as the contract for any feature where the operator says "go build this, I'll review at the end."
+This codifies what worked for `scope-keyed-sessions` (`docs/archive/scope-keyed-sessions-validation/`) and `autonomous-flow-tightening` (`docs/archive/autonomous-flow-validation-plan.md`). Use it as the contract for any feature where the operator says "go build this, I'll review at the end."
 
 ## When to use this
 

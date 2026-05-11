@@ -87,7 +87,7 @@ export interface AgentNote {
   pm_proposal_ids: string | null;
   /** Upstream entity that produced this note. E.g. {kind:'brief', ref:<id>}
    *  for auto-notes written when an initiative-scoped brief completes.
-   *  See specs/initiative-research-loop-build-plan.md §D2. */
+   *  See docs/archive/initiative-research-loop-build-plan.md §D2. */
   source_kind: string | null;
   source_ref: string | null;
 }

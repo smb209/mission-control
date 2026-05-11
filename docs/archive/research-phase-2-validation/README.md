@@ -16,16 +16,16 @@ Reflects the four-doc convention from
 
 ```
 # 1. Start from a clean dev DB
-bash specs/research-phase-2-validation/01-pre-check-initialization.md  # follow steps; halt on failure
+bash docs/archive/research-phase-2-validation/01-pre-check-initialization.md  # follow steps; halt on failure
 
 # 2. Walk the test plan. Capture into /tmp/mc-validation/research-phase-2/<scenario_id>/
-bash specs/research-phase-2-validation/02-test-plan.md  # reference, not executable
+bash docs/archive/research-phase-2-validation/02-test-plan.md  # reference, not executable
 
 # 3. Score against the criteria
-$EDITOR specs/research-phase-2-validation/03-validation-criteria.md
+$EDITOR docs/archive/research-phase-2-validation/03-validation-criteria.md
 
 # 4. Write the verdict
-$EDITOR specs/research-phase-2-validation/04-e2e-run-results.md
+$EDITOR docs/archive/research-phase-2-validation/04-e2e-run-results.md
 ```
 
 All real-agent dispatches use `spark-lb/agent` per `project_openclaw_model.md`.

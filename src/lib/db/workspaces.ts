@@ -34,7 +34,7 @@ import { getDb } from './index';
 
 /**
  * Defaults for the initiative-audit subtree flow. Match the values the
- * spec describes (specs/initiative-investigate.md §"Decisions" item 1)
+ * spec describes (docs/archive/initiative-investigate.md §"Decisions" item 1)
  * and the column defaults applied by migration 079.
  */
 export const AUDIT_PER_NODE_TIMEOUT_MS_DEFAULT = 15 * 60_000;

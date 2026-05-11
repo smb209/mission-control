@@ -77,5 +77,5 @@ Both are TS-checker-only — the test file runs under `tsx --test` without compl
 ```
 build plan branch:    feat/research-phase-2/* (slices 1-5, all merged via PRs #180-#184)
 verdict captured at:  97690a6 (main HEAD post slice-5 merge)
-build-plan doc:       specs/research-phase-2-schedules-build-plan.md
+build-plan doc:       docs/archive/research-phase-2-schedules-build-plan.md
 ```
