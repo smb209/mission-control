@@ -300,7 +300,7 @@ export interface StartAgentRunInput {
    *  briefing. Persisted here so tools (e.g. take_note) can map a
    *  caller's run_group_id back to its agent_runs row and refuse
    *  writes from a worker whose run was already cancelled.
-   *  See specs/dedupe-investigations.md. */
+   *  See docs/archive/dedupe-investigations.md. */
   run_group_id?: string | null;
 }
 
@@ -351,7 +351,7 @@ export function startAgentRun(input: StartAgentRunInput): string {
  * the matching row, or null if none. Used by MCP tools (currently
  * `take_note`) to gate writes on run status — a worker whose run was
  * cancelled while it was mid-flight should not be able to persist
- * orphan rows. See specs/dedupe-investigations.md.
+ * orphan rows. See docs/archive/dedupe-investigations.md.
  */
 export function getRunByGroupId(run_group_id: string): AgentRun | null {
   if (!run_group_id) return null;

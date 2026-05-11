@@ -599,7 +599,7 @@ test('propose_changes rejects an unknown diff kind', async () => {
 // Regression: a worker whose agent_runs row was already cancelled used
 // to be able to keep calling take_note (the openclaw worker isn't
 // actually killed when status flips to 'cancelled'). That left orphan
-// observation notes — see specs/dedupe-investigations.md and the
+// observation notes — see docs/archive/dedupe-investigations.md and the
 // May 7 duplicate-audit incident.
 
 test('take_note refuses to write when the owning run is cancelled', async () => {

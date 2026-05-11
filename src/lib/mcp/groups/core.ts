@@ -456,7 +456,7 @@ export function registerCoreTools(server: McpServer): void {
         // by the operator. Without this guard, the openclaw worker
         // (which isn't actually killed when agent_runs.status flips to
         // 'cancelled') keeps executing tools and can leave orphan
-        // notes — see specs/dedupe-investigations.md and the May 7
+        // notes — see docs/archive/dedupe-investigations.md and the May 7
         // duplicate-audit incident.
         const owningRun = getRunByGroupId(args.run_group_id);
         if (owningRun && owningRun.status === 'cancelled') {

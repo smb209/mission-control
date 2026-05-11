@@ -31,7 +31,7 @@ related-specs:
   - docs/archive/research-phase-2-schedules-build-plan.md — phase 2 (shipped)
   - docs/archive/initiative-research-loop.md — initiative-scoped briefs (shipped)
   - docs/archive/initiative-investigate.md — audit/investigate pipeline (consumer)
-  - specs/dedupe-investigations.md — PR #1 shipped, #2/#3 open
+  - docs/archive/dedupe-investigations.md — PR #1 shipped, #2/#3 open
   - specs/foia-pipeline.md — aspirational downstream consumer
   - specs/subtree-audit-proposals-spec.md — audit pipeline writing structured notes
 ---
@@ -398,7 +398,7 @@ Conversely, **the researcher's `read_brief` MCP tool** (§11) lets the PM or a f
 
 ## 9. Dedupe & cancellation
 
-See `specs/dedupe-investigations.md`. Three components, only the first shipped:
+See `docs/archive/dedupe-investigations.md`. Three components, only the first shipped:
 
 ### 9.1 Shipped (PR #1, mig 085 + take_note guard)
 
@@ -418,7 +418,7 @@ See `specs/dedupe-investigations.md`. Three components, only the first shipped:
 
 ### 9.4 Generalized cancelled-run guard
 
-`specs/dedupe-investigations.md` §Future also calls for extending the `run_cancelled` guard to `register_deliverable`, `log_activity`, `propose_changes`. Not built.
+`docs/archive/dedupe-investigations.md` §Future also calls for extending the `run_cancelled` guard to `register_deliverable`, `log_activity`, `propose_changes`. Not built.
 
 ## 10. UI surfaces
 
@@ -527,7 +527,7 @@ The original `specs/research-area.md` listed phase 3+ aspirations that have not 
 
 6. **Phase tracking / heartbeat on briefs** — flagged as a deferred lift from autopilot in `docs/archive/initiative-research-loop.md` §"Lift from autopilot". Not started.
 
-7. **PR #2 dispatch-time guard for cancelled-run cleanup beyond `take_note`** — `register_deliverable`, `log_activity`, `propose_changes` are still ungated. See `specs/dedupe-investigations.md` §Future.
+7. **PR #2 dispatch-time guard for cancelled-run cleanup beyond `take_note`** — `register_deliverable`, `log_activity`, `propose_changes` are still ungated. See `docs/archive/dedupe-investigations.md` §Future.
 
 8. **PR #3 UI cooldown** for repeated audit clicks — not built. (`lastCompleteAudit` data is returned by the dry-run endpoint, ready to drive UI.)
 

@@ -278,7 +278,7 @@ export default function InvestigateModal({
   // this initiative is < RECENT_AUDIT_MS old, surface a non-blocking
   // "audited X ago" hint so back-to-back reruns are intentional rather
   // than accidental. Populated from the dryrun GET response.
-  // See specs/dedupe-investigations.md §3.
+  // See docs/archive/dedupe-investigations.md §3.
   const [recentAuditAt, setRecentAuditAt] = useState<string | null>(null);
 
   // Pre-flight: fetch the dryrun endpoint to populate plan info
@@ -359,7 +359,7 @@ export default function InvestigateModal({
       const body = await res.json().catch(() => ({}));
       // 409 audit_in_flight: prompt the operator to cancel the live
       // run and redispatch. Resolved via the inline button → recurse
-      // with supersede=true. See specs/dedupe-investigations.md §2.
+      // with supersede=true. See docs/archive/dedupe-investigations.md §2.
       if (res.status === 409 && (body as { error?: string }).error === 'audit_in_flight') {
         setInFlightConflict({
           message: (body as { message?: string }).message ?? 'Audit already in flight.',
