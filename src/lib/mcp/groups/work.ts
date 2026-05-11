@@ -1151,11 +1151,26 @@ export function registerWorkTools(server: McpServer): void {
       inputSchema: {
         agent_id: agentIdArg.describe('The calling coordinator agent.'),
         task_id: taskIdArg.describe('The coordinator\'s parent task id.'),
+        role: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Peer role to delegate to, e.g. 'builder' / 'tester' / 'reviewer'. Preferred addressing for role-template peers. Use list_peers to see available roles.",
+          ),
+        peer_agent_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Direct MC agent UUID of the peer. Use when you need to disambiguate or address a non-role-template peer. Mutually exclusive with `role` and `peer_gateway_id`.",
+          ),
         peer_gateway_id: z
           .string()
           .min(1)
+          .optional()
           .describe(
-            "Gateway id of the peer to delegate to, e.g. 'mc-researcher'. Use list_peers to discover.",
+            "Back-compat: gateway id of the peer (e.g. 'mc-pm-default-dev', 'mc-runner-dev'). In the current model only the workspace PM and the org runner have gateway ids; role templates are addressed by `role`. Mutually exclusive with `role` and `peer_agent_id`.",
           ),
         slice: z
           .string()
@@ -1256,64 +1271,198 @@ export function registerWorkTools(server: McpServer): void {
         };
       }
 
-      // Scope peer lookup to the parent task's workspace. Without this,
-      // the multi-workspace gateway clones from #133 mean we can grab
-      // any workspace's row for `peer_gateway_id` — the child task is
-      // created with parent.workspace_id but assigned_agent_id ends up
-      // pointing at the foreign-workspace clone, and every subsequent
-      // MCP call from the peer trips authz:workspace_mismatch.
-      const parentWs = queryOne<{ workspace_id: string | null }>(
-        'SELECT workspace_id FROM tasks WHERE id = ?',
-        [args.task_id],
-      )?.workspace_id ?? 'default';
-      const peer = queryOne<{ id: string; name: string; role: string | null }>(
-        `SELECT id, name, role FROM agents
-          WHERE gateway_agent_id = ?
-            AND COALESCE(workspace_id, 'default') = ?
-          LIMIT 1`,
-        [args.peer_gateway_id, parentWs],
+      // Exactly one addressing axis must be supplied.
+      const axes = [args.role, args.peer_agent_id, args.peer_gateway_id].filter(
+        (v): v is string => typeof v === 'string' && v.length > 0,
       );
-      if (!peer) {
-        // Distinguish "exists, wrong workspace" from "doesn't exist
-        // anywhere" so the coordinator gets an actionable error.
-        const elsewhere = queryAll<{ workspace_id: string | null }>(
-          `SELECT workspace_id FROM agents WHERE gateway_agent_id = ?`,
-          [args.peer_gateway_id],
-        );
-        if (elsewhere.length > 0) {
-          const otherWorkspaces = elsewhere.map((r) => r.workspace_id ?? 'default');
-          return {
-            isError: true,
-            content: [{
-              type: 'text',
-              text: `Peer "${args.peer_gateway_id}" exists but not in this task's workspace (${parentWs}). Found in: ${otherWorkspaces.join(', ')}. Call list_peers to see the in-workspace roster, or have the operator clone the agent into ${parentWs}.`,
-            }],
-            structuredContent: {
-              error: 'peer_not_in_workspace',
-              peer_gateway_id: args.peer_gateway_id,
-              task_workspace_id: parentWs,
-              found_in_workspaces: otherWorkspaces,
-            },
-          };
-        }
+      if (axes.length === 0) {
         return {
           isError: true,
           content: [{
             type: 'text',
-            text: `No agent with gateway_agent_id "${args.peer_gateway_id}" in the catalog. Call list_peers to see the roster.`,
+            text: 'Specify exactly one of `role` (preferred for role templates), `peer_agent_id` (direct MC UUID), or `peer_gateway_id` (back-compat — PM or org runner only).',
           }],
-          structuredContent: { error: 'peer_not_found', peer_gateway_id: args.peer_gateway_id },
+          structuredContent: { error: 'peer_addressing_missing' },
+        };
+      }
+      if (axes.length > 1) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text',
+            text: '`role`, `peer_agent_id`, and `peer_gateway_id` are mutually exclusive. Pass only one.',
+          }],
+          structuredContent: { error: 'peer_addressing_conflict' },
         };
       }
 
+      // Resolve to the parent task's workspace first — every axis below
+      // either scopes to it or special-cases the org-global runner.
+      const parentWs = queryOne<{ workspace_id: string | null }>(
+        'SELECT workspace_id FROM tasks WHERE id = ?',
+        [args.task_id],
+      )?.workspace_id ?? 'default';
+
+      type PeerRow = {
+        id: string;
+        name: string;
+        role: string | null;
+        gateway_agent_id: string | null;
+      };
+      let peer: PeerRow | undefined;
+      let resolvedVia: 'role' | 'peer_agent_id' | 'peer_gateway_id';
+
+      if (args.role) {
+        resolvedVia = 'role';
+        // Role-template addressing: pick the workspace's primary live
+        // agent row for that role. Role templates have gateway_agent_id
+        // NULL — that's expected; dispatch routes them through the runner.
+        peer = queryOne<PeerRow>(
+          `SELECT id, name, role, gateway_agent_id FROM agents
+            WHERE role = ?
+              AND COALESCE(workspace_id, 'default') = ?
+              AND COALESCE(status, 'standby') != 'offline'
+              AND COALESCE(is_active, 1) = 1
+            ORDER BY updated_at DESC
+            LIMIT 1`,
+          [args.role, parentWs],
+        );
+        if (!peer) {
+          // Surface whether the role exists anywhere or is unknown so
+          // the coordinator can either retarget or escalate.
+          const elsewhere = queryAll<{ workspace_id: string | null }>(
+            `SELECT workspace_id FROM agents WHERE role = ? AND COALESCE(is_active, 1) = 1 AND COALESCE(status, 'standby') != 'offline'`,
+            [args.role],
+          );
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text:
+                elsewhere.length > 0
+                  ? `No active agent with role "${args.role}" in this workspace (${parentWs}). The role exists in: ${elsewhere.map((r) => r.workspace_id ?? 'default').join(', ')}. Ask the workspace PM to provision a "${args.role}" agent, or call list_peers to see what's available here.`
+                  : `No active agent with role "${args.role}" in the catalog. Call list_peers to see available roles.`,
+            }],
+            structuredContent: {
+              error: 'peer_not_found',
+              addressing: { role: args.role },
+              task_workspace_id: parentWs,
+            },
+          };
+        }
+      } else if (args.peer_agent_id) {
+        resolvedVia = 'peer_agent_id';
+        peer = queryOne<PeerRow>(
+          `SELECT id, name, role, gateway_agent_id FROM agents WHERE id = ? LIMIT 1`,
+          [args.peer_agent_id],
+        );
+        if (!peer) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `No agent with id "${args.peer_agent_id}". Call list_peers to see the roster.`,
+            }],
+            structuredContent: {
+              error: 'peer_not_found',
+              addressing: { peer_agent_id: args.peer_agent_id },
+            },
+          };
+        }
+        // Verify the peer is in the parent task's workspace, with one
+        // carve-out: the org-global runner lives in workspace_id='default'
+        // but is reachable from every workspace.
+        const peerWs = queryOne<{ workspace_id: string | null }>(
+          'SELECT workspace_id FROM agents WHERE id = ?',
+          [args.peer_agent_id],
+        )?.workspace_id ?? 'default';
+        const isOrgRunner =
+          peer.gateway_agent_id === 'mc-runner' ||
+          peer.gateway_agent_id === 'mc-runner-dev';
+        if (peerWs !== parentWs && !isOrgRunner) {
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `Peer agent "${peer.name}" is in workspace ${peerWs}, not this task's workspace (${parentWs}). Pick a peer from list_peers in this workspace.`,
+            }],
+            structuredContent: {
+              error: 'peer_not_in_workspace',
+              addressing: { peer_agent_id: args.peer_agent_id },
+              peer_workspace_id: peerWs,
+              task_workspace_id: parentWs,
+            },
+          };
+        }
+      } else {
+        resolvedVia = 'peer_gateway_id';
+        const gwId = args.peer_gateway_id as string;
+        // Org runner is workspace_id='default' but addressable from any
+        // workspace — drop the workspace filter for it. Stale
+        // multi-workspace role-bound rows from the old N-gateway model
+        // (mc-builder-<ws>, etc.) keep the workspace filter so they
+        // don't bleed across workspaces.
+        const isOrgRunner = gwId === 'mc-runner' || gwId === 'mc-runner-dev';
+        peer = isOrgRunner
+          ? queryOne<PeerRow>(
+              `SELECT id, name, role, gateway_agent_id FROM agents
+                WHERE gateway_agent_id = ?
+                LIMIT 1`,
+              [gwId],
+            )
+          : queryOne<PeerRow>(
+              `SELECT id, name, role, gateway_agent_id FROM agents
+                WHERE gateway_agent_id = ?
+                  AND COALESCE(workspace_id, 'default') = ?
+                LIMIT 1`,
+              [gwId, parentWs],
+            );
+        if (!peer) {
+          const elsewhere = queryAll<{ workspace_id: string | null }>(
+            `SELECT workspace_id FROM agents WHERE gateway_agent_id = ?`,
+            [gwId],
+          );
+          if (elsewhere.length > 0) {
+            const otherWorkspaces = elsewhere.map((r) => r.workspace_id ?? 'default');
+            return {
+              isError: true,
+              content: [{
+                type: 'text',
+                text: `Peer "${gwId}" exists but not in this task's workspace (${parentWs}). Found in: ${otherWorkspaces.join(', ')}. In the current 2-gateway model only the workspace PM and the org runner have gateway ids; for builder/tester/reviewer/etc. use \`role: '...'\` instead. Call list_peers to see what's addressable here.`,
+              }],
+              structuredContent: {
+                error: 'peer_not_in_workspace',
+                addressing: { peer_gateway_id: gwId },
+                task_workspace_id: parentWs,
+                found_in_workspaces: otherWorkspaces,
+              },
+            };
+          }
+          return {
+            isError: true,
+            content: [{
+              type: 'text',
+              text: `No agent with gateway_agent_id "${gwId}" in the catalog. In the current 2-gateway model only the workspace PM and the org runner have gateway ids; for builder/tester/reviewer/etc. use \`role: '...'\`. Call list_peers to see the roster.`,
+            }],
+            structuredContent: { error: 'peer_not_found', addressing: { peer_gateway_id: gwId } },
+          };
+        }
+      }
+
       const checkinInterval = args.checkin_interval_minutes ?? 15;
+
+      // For the delegation row + activity log we want a stable peer
+      // descriptor regardless of which axis was used to address it.
+      // gateway_agent_id may be null for role templates.
+      const peerGatewayForLog = peer.gateway_agent_id ?? '';
+      const peerRoleForLog = peer.role ?? args.role ?? 'builder';
 
       const spawn = spawnDelegationSubtask({
         parentTaskId: args.task_id,
         parentAgentId: args.agent_id,
         peerAgentId: peer.id,
-        peerGatewayId: args.peer_gateway_id,
-        suggestedRole: peer.role || 'builder',
+        peerGatewayId: peerGatewayForLog,
+        suggestedRole: peerRoleForLog,
         slice: args.slice,
         message: args.message,
         expectedDeliverables: args.expected_deliverables,
@@ -1330,7 +1479,7 @@ export function registerWorkTools(server: McpServer): void {
         taskId: args.task_id,
         actingAgentId: args.agent_id,
         activityType: 'updated',
-        message: `[delegation_spawned] peer=${peer.name} gateway_id=${args.peer_gateway_id} child_task=${spawn.childTaskId} due_at=${spawn.dueAt} slice="${args.slice.replace(/"/g, "'")}"`,
+        message: `[delegation_spawned] peer=${peer.name} role=${peerRoleForLog}${peerGatewayForLog ? ` gateway_id=${peerGatewayForLog}` : ''} addressed_via=${resolvedVia} child_task=${spawn.childTaskId} due_at=${spawn.dueAt} slice="${args.slice.replace(/"/g, "'")}"`,
       });
 
       // Move child to 'assigned' before dispatch so the dispatch route
@@ -1369,13 +1518,22 @@ export function registerWorkTools(server: McpServer): void {
         subtask_id: spawn.subtaskId,
         child_task_id: spawn.childTaskId,
         convoy_id: spawn.convoyId,
-        peer: { id: peer.id, name: peer.name, gateway_agent_id: args.peer_gateway_id },
+        peer: {
+          id: peer.id,
+          name: peer.name,
+          role: peerRoleForLog,
+          gateway_agent_id: peer.gateway_agent_id,
+          addressed_via: resolvedVia,
+        },
         dispatched_at: spawn.dispatchedAt,
         due_at: spawn.dueAt,
         checkin_interval_minutes: checkinInterval,
       };
+      const peerLabel = peer.gateway_agent_id
+        ? `${peer.name} (${peer.gateway_agent_id})`
+        : `${peer.name} (role: ${peerRoleForLog})`;
       return textResult(
-        `Spawned subtask ${spawn.subtaskId} to ${peer.name} (${args.peer_gateway_id}). Due at ${spawn.dueAt}; check-in cadence ${checkinInterval}m.`,
+        `Spawned subtask ${spawn.subtaskId} to ${peerLabel}. Due at ${spawn.dueAt}; check-in cadence ${checkinInterval}m.`,
         payload,
       );
     }),
