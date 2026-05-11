@@ -15,7 +15,7 @@
  *   }
  *
  * Phase 4 hard cutover: legacy `mode: 'subtree'` was removed (see
- * specs/subtree-audit-proposals-spec.md §6.3). Posting it now returns
+ * docs/archive/subtree-audit-proposals-spec.md §6.3). Posting it now returns
  * 400 with a clear "use subtree-proposal" error.
  *
  * Response (200):
@@ -194,7 +194,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json(
         {
           error:
-            'mode subtree was removed; use subtree-proposal (see specs/subtree-audit-proposals-spec.md §6.3)',
+            'mode subtree was removed; use subtree-proposal (see docs/archive/subtree-audit-proposals-spec.md §6.3)',
         },
         { status: 400 },
       );

@@ -33,7 +33,7 @@ related-specs:
   - docs/archive/initiative-investigate.md — audit/investigate pipeline (consumer)
   - docs/archive/dedupe-investigations.md — PR #1 shipped, #2/#3 open
   - specs/foia-pipeline.md — aspirational downstream consumer
-  - specs/subtree-audit-proposals-spec.md — audit pipeline writing structured notes
+  - docs/archive/subtree-audit-proposals-spec.md — audit pipeline writing structured notes
 ---
 
 # Research Area
@@ -386,7 +386,7 @@ Soft-delete (not in-place update) preserves the audit trail. Notes rail filters 
 
 ## 8. Audit pipeline hand-off
 
-The audit/investigate flow (see `docs/archive/initiative-investigate.md`, `specs/subtree-audit-proposals-spec.md`) does NOT directly read `briefs.result_md`. Instead it picks up the research findings via the existing notes channel:
+The audit/investigate flow (see `docs/archive/initiative-investigate.md`, `docs/archive/subtree-audit-proposals-spec.md`) does NOT directly read `briefs.result_md`. Instead it picks up the research findings via the existing notes channel:
 
 1. `POST /api/initiatives/[id]/investigate` (narrow mode) (`src/app/api/initiatives/[id]/investigate/route.ts:324-359`) builds `priorFindings` via `listNotes({ initiative_id, audience: 'pm', min_importance: 2, limit: 5, order: 'desc' })` when `reaudit === 'build_on'`.
 2. Brief auto-notes match that filter exactly (`audience='pm'`, `importance=2`), so they show up to the auditor as prior context.

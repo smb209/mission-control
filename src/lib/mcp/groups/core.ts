@@ -476,7 +476,7 @@ export function registerCoreTools(server: McpServer): void {
         // pre-cap budget. Validation runs here so auditor agents get
         // structured feedback in the same dispatch and can retry by
         // tightening rationale / fixing the schema. See
-        // specs/subtree-audit-proposals-spec.md §4 + §5.2.
+        // docs/archive/subtree-audit-proposals-spec.md §4 + §5.2.
         const noteKind = args.kind as NoteKind;
         if (isAuditNoteKind(noteKind)) {
           if (args.body.length > MAX_AUDIT_NOTE_BODY_CHARS) {
@@ -568,7 +568,7 @@ export function registerCoreTools(server: McpServer): void {
         // verdict recommends action, fire a notes_intake PM dispatch
         // bundling the verdict + paired observation. Fire-and-forget;
         // failures are logged inside the helper and never surface to
-        // the auditor agent. See specs/audit-action-recommended.md.
+        // the auditor agent. See docs/archive/audit-action-recommended.md.
         if (note.kind === 'audit_verdict') {
           maybeAutoSpawnPmFromVerdict(note).catch((err) => {
             console.warn(

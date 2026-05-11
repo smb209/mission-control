@@ -4,7 +4,7 @@
  * Un-archive a note. No-op if the note is already active. Returns 404
  * if the note doesn't exist.
  *
- * See specs/audit-actions-and-tracking.md PR 1.
+ * See docs/archive/audit-actions-and-tracking.md PR 1.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

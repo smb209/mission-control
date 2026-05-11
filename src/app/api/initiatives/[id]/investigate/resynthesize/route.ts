@@ -3,7 +3,7 @@
  *
  * Re-runs ONLY the L3 synthesizer against the existing audit_manifest +
  * the most recent audit_proposal notes per descendant. Spec
- * `specs/subtree-audit-proposals-spec.md` §6.1.
+ * `docs/archive/subtree-audit-proposals-spec.md` §6.1.
  *
  * Cheap; useful when L3 fails or the operator wants to re-roll the
  * cross-cutting reasoning without re-grepping the repo.

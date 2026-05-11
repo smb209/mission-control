@@ -5,7 +5,7 @@
  * archive, then empty-the-trash). Returns 409 if the note is still active.
  *
  * UI must gate this behind `ConfirmDialog destructive` per project
- * convention. See specs/audit-actions-and-tracking.md PR 1.
+ * convention. See docs/archive/audit-actions-and-tracking.md PR 1.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

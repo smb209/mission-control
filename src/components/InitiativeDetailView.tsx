@@ -1097,7 +1097,7 @@ or "carve out the onboarding flow as its own story first"`}
 
         {/* Audit Proposals — operator-facing review queue produced by
             the subtree-audit pipeline. Auto-hides when there's nothing
-            to show. See specs/subtree-audit-proposals-spec.md §8. */}
+            to show. See docs/archive/subtree-audit-proposals-spec.md §8. */}
         <div id="audit-proposals" className="scroll-mt-20">
           <AuditProposalsSection initiativeId={initiative.id} />
         </div>
@@ -1105,7 +1105,7 @@ or "carve out the onboarding flow as its own story first"`}
         {/* Activity — live + recent agent_runs touching this initiative.
             Closes the "what did I just queue?" gap after page refresh and
             gives investigations a durable surface beyond the dispatch
-            toast. See specs/audit-actions-and-tracking.md PR 2. */}
+            toast. See docs/archive/audit-actions-and-tracking.md PR 2. */}
         <Section id="activity" title="Activity" icon={<Activity className="w-4 h-4" />}>
           <InitiativeRunsStrip
             workspaceId={initiative.workspace_id}

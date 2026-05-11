@@ -4537,7 +4537,7 @@ const migrations: Migration[] = [
     id: '087',
     name: 'agent_notes_audit_kinds',
     up: (db) => {
-      // Phase 1 of specs/subtree-audit-proposals-spec.md adds three new
+      // Phase 1 of docs/archive/subtree-audit-proposals-spec.md adds three new
       // NoteKind values (audit_manifest, audit_proposal,
       // audit_synthesis). The migration-065 CHECK constraint enumerates
       // the allowed kinds, so we have to rebuild the table to extend
@@ -4705,7 +4705,7 @@ const migrations: Migration[] = [
     id: '093',
     name: 'audit_verdict_kind_and_auto_spawn_setting',
     up: (db) => {
-      // Phase 1 of specs/audit-action-recommended.md. Extends the
+      // Phase 1 of docs/archive/audit-action-recommended.md. Extends the
       // agent_notes.kind CHECK to permit a new 'audit_verdict' kind —
       // structured signal emitted by the narrow auditor alongside the
       // free-form observation. Also adds workspaces.audit_auto_spawn_pm

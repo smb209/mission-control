@@ -6,7 +6,7 @@
  * the L2 layer. On failure / no-manifest the orchestrator falls back to
  * a full-fanout manifest derived synthetically from the planned layers.
  *
- * Spec: specs/subtree-audit-proposals-spec.md §3.1, §5.1, §5.5.
+ * Spec: docs/archive/subtree-audit-proposals-spec.md §3.1, §5.1, §5.5.
  */
 
 import { listInitiatives } from '@/lib/db/initiatives';
@@ -114,7 +114,7 @@ export function buildFallbackManifest(
  * Compact summary of the most recent prior `audit_synthesis` note on
  * the root, surfaced into the surveyor briefing for delta runs.
  *
- * Spec: specs/subtree-audit-proposals-spec.md §7, §10 Phase 5.
+ * Spec: docs/archive/subtree-audit-proposals-spec.md §7, §10 Phase 5.
  */
 export interface PriorSynthesisRef {
   /** Note row's `created_at` — the timestamp of the prior audit. */

@@ -55,5 +55,5 @@ are a smell — long rationale usually means the proposal was over-scoped.
 Your only job is to land the structured note in `agent_notes`. The
 proposal-queue UI (downstream) reads those rows and renders them as a
 review surface. The schema is the contract — fields, types, enums all
-come from `specs/subtree-audit-proposals-spec.md` §4 and the Zod schema
+come from `docs/archive/subtree-audit-proposals-spec.md` §4 and the Zod schema
 in `src/lib/agents/audit-proposals/schemas.ts`.

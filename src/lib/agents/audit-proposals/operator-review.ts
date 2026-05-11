@@ -1,6 +1,6 @@
 /**
  * Operator-review helpers for the audit-proposal queue (Phase 6 of
- * specs/subtree-audit-proposals-spec.md §8).
+ * docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * Centralizes the stage-slug convention and the "is this proposal
  * already handled?" check so the aggregation endpoint, the accept /

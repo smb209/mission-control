@@ -454,7 +454,7 @@ export async function sendChatAndAwaitReply(
   // send-ack path used to skip the only `armIdle()` call. That meant
   // dispatches stalled to the hard `timeoutMs` ceiling instead of the
   // soft `idleTimeoutMs`. Priming here makes idle-recovery
-  // unconditional. See specs/subtree-audit-proposals-spec.md and the
+  // unconditional. See docs/archive/subtree-audit-proposals-spec.md and the
   // missed-final investigation against run group c3c0e995.
   armIdle();
 

@@ -1,6 +1,6 @@
 /**
  * Unit tests for the L1 surveyor (Phase 2 of
- * specs/subtree-audit-proposals-spec.md).
+ * docs/archive/subtree-audit-proposals-spec.md).
  *
  * Covers:
  *   - runSurveyor happy path: dispatch + valid manifest landed →

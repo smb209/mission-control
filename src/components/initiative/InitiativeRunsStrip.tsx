@@ -14,7 +14,7 @@
  *
  * Each row links into `/jobs?run=<id>` for the existing drill-down panel.
  *
- * See specs/audit-actions-and-tracking.md PR 2.
+ * See docs/archive/audit-actions-and-tracking.md PR 2.
  */
 
 import { useEffect, useState } from 'react';

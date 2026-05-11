@@ -5,7 +5,7 @@
  * pm-dispatch.test.ts. Here we verify that the route enforces note
  * ownership, archived gating, and validation shape.
  *
- * See specs/audit-actions-and-tracking.md PR 5.
+ * See docs/archive/audit-actions-and-tracking.md PR 5.
  */
 
 import test from 'node:test';

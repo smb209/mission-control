@@ -9,6 +9,8 @@ Audit of every spec file against current code on `main` (after `feat/audit-actio
 - **2026-05-11 (research deep-dive)** `research-area.md` rewritten as a 598-line comprehensive reference for the entire research capability; reclassified 2 → 1.
 - **2026-05-11 (extractions wave)** New canonical specs: `pm-diff-conventions.md` (616 lines) + `audit-dedupe-followups.md` (81 lines). `dedupe-investigations.md` archived. `roadmap-and-pm-spec.md` got "post-merge addenda" callout. `pm-chat-prompt.md` rewritten to reflect both PR A *and* PR B shipped (audit had it as half-aspirational — code says otherwise). Two more class-2 specs reclassified to class 1.
 - **2026-05-11 (frontmatter contract)** All 34 active specs now carry YAML frontmatter (`status`, `last-verified`, `audience`, `code-anchors`, `mcp-tools`, `db-tables`, `migrations`, `related-specs`). `scripts/docs-check.ts` validates `code-anchors` paths exist; wired as `yarn docs:check`. CLAUDE.md got a 25-line "Spec Frontmatter Contract" section instructing subagents to update specs in the same PR as code edits to anchor files. Check passes clean: 34/34 frontmatter, 0 violations.
+- **2026-05-11 (body-text cleanup)** Wave-4 surfaced specs whose body prose cited stale paths (`src/lib/mcp/tools.ts` from before the groups split, `src/app/feed/page.tsx` from before scope-keyed-sessions). Fixed in 3 specs; 4th verified clean.
+- **2026-05-11 (audit-pipeline consolidation)** Three audit specs (`subtree-audit-proposals-spec.md`, `audit-actions-and-tracking.md`, `audit-action-recommended.md`) consolidated into a single 943-line `specs/audit-pipeline.md` deep-dive. The three sources archived to `docs/archive/` with supersession banners. 39 inbound references rewritten.
 
 Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under [`specs/audit-reports/`](audit-reports/).
 
@@ -23,11 +25,11 @@ Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under 
 
 | Class | Count |
 |---|---|
-| 1. Current & accurate | 23 |
+| 1. Current & accurate | 21 |
 | 2. Current & aspirational | 11 |
 | 3. Feature drift | 0 |
-| 4. Historical / superseded (in `docs/archive/`) | 18 |
-| **Total** | **52** |
+| 4. Historical / superseded (in `docs/archive/`) | 21 |
+| **Total** | **53** |
 
 Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.md`), `autopilot-build-pipeline-spec.md` (merged into `product-autopilot-spec.md`).
 
@@ -38,8 +40,7 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | Spec | Class | Rationale |
 |---|---|---|
 | [agent-health.md](agent-health.md) | 1 | Rewritten 2026-05-11 to match `src/lib/agent-health.ts`; appendix lists original unshipped proposals |
-| [audit-action-recommended.md](audit-action-recommended.md) | 1 | Shipped in #326 — `audit_verdict` NoteKind, migration 093 (`workspaces.audit_auto_spawn_pm`), `maybeAutoSpawnPmFromVerdict` hook |
-| [audit-actions-and-tracking.md](audit-actions-and-tracking.md) | 1 | All six PRs landed (note-lifecycle DAO, runs strip, Ask-PM, NotesRail archive toggle) |
+| [audit-pipeline.md](audit-pipeline.md) | 1 | **New 2026-05-11** — 943-line canonical deep-dive consolidating subtree-audit-proposals + audit-actions-and-tracking + audit-action-recommended. Covers vocabulary, data model, note-body schemas, dispatch flow, narrow-vs-subtree mode (post-cutover), verdict + auto-spawn bridge, resynthesize endpoint, operator UI, PM hand-off, dedupe, MCP surface, configuration. Three source specs archived. |
 | [autonomous-flow-tightening-spec.md](autonomous-flow-tightening-spec.md) | 1 | Slices match shipped code (`task_evidence` mig 058, `is_failed` 059, `runtime_kind` 060, role souls) |
 | [autopilot-resilience-and-activity-feed.md](autopilot-resilience-and-activity-feed.md) | 1 | `research_cycles` phase columns + `ideation_cycles` shipped (`migrations.ts:1177-1212`) |
 | [calendar.md](calendar.md) | 2 | Aspirational banner added; `/calendar` is a SpecPage stub |
@@ -66,7 +67,6 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [scope-keyed-sessions-phase-j.md](scope-keyed-sessions-phase-j.md) | 1 | `dispatchSubagent` primitive + active-subagent manifest shipped |
 | [stakeholders-comms.md](stakeholders-comms.md) | 2 | Aspirational banner added; `/stakeholders` is a SpecPage stub |
 | [subagent-orchestration.md](subagent-orchestration.md) | 2 | No `spawn_subagent` tool, no `subagent_runs` table; only the J1 primitive in `dispatch-subagent.ts` |
-| [subtree-audit-proposals-spec.md](subtree-audit-proposals-spec.md) | 1 | Phases 1–6 all shipped (#284–#290 + #307); two §9.2 items honestly open |
 | [timestamp-handling.md](timestamp-handling.md) | 1 | PR-A + PR-B both shipped; `src/lib/timestamps.ts` header cites the spec |
 | [workflows.md](workflows.md) | 2 | Aspirational banner added; `/workflows` is a SpecPage stub; no DAG engine |
 | [workspace-conventions-structured.md](workspace-conventions-structured.md) | 1 | §6 rewritten 2026-05-11 to drop phantom `workspace_conventions_proposals` table; now reflects `refine.ts` inline-return persistence |
@@ -88,6 +88,9 @@ All class 4. Listed for reference:
 - [roadmap-navigation-polish.md](../docs/archive/roadmap-navigation-polish.md)
 - [scope-keyed-sessions-validation/](../docs/archive/scope-keyed-sessions-validation/)
 - [dedupe-investigations.md](../docs/archive/dedupe-investigations.md) — archived 2026-05-11; live followups extracted to `audit-dedupe-followups.md`
+- [subtree-audit-proposals-spec.md](../docs/archive/subtree-audit-proposals-spec.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
+- [audit-actions-and-tracking.md](../docs/archive/audit-actions-and-tracking.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
+- [audit-action-recommended.md](../docs/archive/audit-action-recommended.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
 
 ## Consolidation progress
 

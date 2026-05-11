@@ -263,7 +263,7 @@ export async function PATCH(
     if (audit_auto_spawn_pm !== undefined) {
       // Opt-in bridge from narrow audits to PM proposals. When on,
       // `take_note(kind='audit_verdict', ...)` may auto-dispatch a
-      // notes_intake PM session. See specs/audit-action-recommended.md.
+      // notes_intake PM session. See docs/archive/audit-action-recommended.md.
       updates.push('audit_auto_spawn_pm = ?');
       values.push(audit_auto_spawn_pm ? 1 : 0);
     }

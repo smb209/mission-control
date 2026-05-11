@@ -689,7 +689,7 @@ test('take_note fails open when run_group_id is unknown (legacy / brief dispatch
 
 // ─── take_note: audit-kind body validation ──────────────────────────
 //
-// Phase 1 of specs/subtree-audit-proposals-spec.md adds three new note
+// Phase 1 of docs/archive/subtree-audit-proposals-spec.md adds three new note
 // kinds (audit_manifest, audit_proposal, audit_synthesis) whose bodies
 // must JSON-parse and conform to a Zod schema. Validation runs in the
 // MCP handler so auditor agents get structured feedback in the same

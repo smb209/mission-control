@@ -235,7 +235,7 @@ export interface RunSubtreeAuditInput {
    *   on the root.
    *
    * The legacy 'subtree' mode (free-form per-node `observation` notes)
-   * was removed in Phase 4 — see specs/subtree-audit-proposals-spec.md
+   * was removed in Phase 4 — see docs/archive/subtree-audit-proposals-spec.md
    * §6.3.
    */
   mode?: 'subtree-proposal';

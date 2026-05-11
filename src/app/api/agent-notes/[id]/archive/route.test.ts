@@ -1,7 +1,7 @@
 /**
  * POST /api/agent-notes/:id/archive route tests.
  *
- * See specs/audit-actions-and-tracking.md PR 1.
+ * See docs/archive/audit-actions-and-tracking.md PR 1.
  */
 
 import test from 'node:test';

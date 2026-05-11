@@ -83,7 +83,7 @@ export function getAuditSettings(workspaceId: string): AuditSettings {
  * whenever an `audit_verdict` note lands with `action_recommended=true`
  * (or `verdict='audit_failed'`).
  *
- * See specs/audit-action-recommended.md. Defaults to `false` on
+ * See docs/archive/audit-action-recommended.md. Defaults to `false` on
  * missing columns so pre-093 DBs and freshly-cloned workspaces behave
  * conservatively.
  */

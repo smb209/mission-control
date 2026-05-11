@@ -555,7 +555,7 @@ export interface ListJobsOptions {
    * When set, restrict live + recent buckets to runs whose
    * `initiative_id` matches. Scheduled bucket is excluded under this
    * filter (recurring_jobs aren't initiative-scoped today; revisit if
-   * that changes). See specs/audit-actions-and-tracking.md PR 2.
+   * that changes). See docs/archive/audit-actions-and-tracking.md PR 2.
    */
   initiative_id?: string;
 }

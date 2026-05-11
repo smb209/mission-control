@@ -1,6 +1,6 @@
 /**
  * AuditProposalsSection — operator-facing review queue rendered inline
- * on the initiative detail view (Phase 6, specs/subtree-audit-proposals-spec.md §8).
+ * on the initiative detail view (Phase 6, docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * Auto-hides when there are no proposals AND no synthesis. The parent
  * (`InitiativeDetailView`) can drop this in unconditionally — empty
