@@ -142,3 +142,76 @@ test('propose_changes: trigger_text and impact_md descriptions begin with REQUIR
   assert.match(props.trigger_text!.description!, /^REQUIRED\./);
   assert.match(props.impact_md!.description!, /^REQUIRED\./);
 });
+
+// ─── Diff schema regressions ──────────────────────────────────────
+
+test('create_task_under_initiative: rejects empty assigned_agent_id (regression for FK bug)', () => {
+  // Pre-fix: the validator's `if (c.assigned_agent_id)` skipped empty
+  // strings, then the apply pass passed "" to an INSERT and hit the
+  // tasks.assigned_agent_id FK at runtime. The schema now rejects ""
+  // at the MCP boundary (.min(1).nullish()).
+  const result = DiffSchema.safeParse({
+    kind: 'create_task_under_initiative',
+    initiative_id: 'init-1',
+    title: 'A task',
+    assigned_agent_id: '',
+  });
+  assert.equal(result.success, false);
+});
+
+test('create_task_under_initiative: accepts null/undefined/omitted assigned_agent_id', () => {
+  for (const value of [null, undefined]) {
+    const result = DiffSchema.safeParse({
+      kind: 'create_task_under_initiative',
+      initiative_id: 'init-1',
+      title: 'A task',
+      assigned_agent_id: value,
+    });
+    assert.equal(result.success, true, `expected ${value} to be accepted`);
+  }
+  const omitted = DiffSchema.safeParse({
+    kind: 'create_task_under_initiative',
+    initiative_id: 'init-1',
+    title: 'A task',
+  });
+  assert.equal(omitted.success, true);
+});
+
+test('confirm_task_done: rejects payloads missing evidence_md', () => {
+  const result = DiffSchema.safeParse({
+    kind: 'confirm_task_done',
+    task_id: 't-1',
+    commit_sha: '1234abc',
+  });
+  assert.equal(result.success, false);
+});
+
+test('confirm_task_done: rejects evidence_md shorter than 20 chars', () => {
+  const result = DiffSchema.safeParse({
+    kind: 'confirm_task_done',
+    task_id: 't-1',
+    evidence_md: 'too short',
+    commit_sha: '1234abc',
+  });
+  assert.equal(result.success, false);
+});
+
+test('confirm_task_done: rejects malformed commit_sha', () => {
+  const result = DiffSchema.safeParse({
+    kind: 'confirm_task_done',
+    task_id: 't-1',
+    evidence_md: 'Audit confirms shipped — see commit log.',
+    commit_sha: 'XYZ-not-hex',
+  });
+  assert.equal(result.success, false);
+});
+
+test('confirm_task_done: accepts valid payload with audit_proposal_id', () => {
+  const result = DiffSchema.safeParse({
+    kind: 'confirm_task_done',
+    task_id: 't-1',
+    evidence_md: 'Audit proposal confirmed all checks passed end-to-end.',
+    audit_proposal_id: 'audit-uuid-here',
+  });
+  assert.equal(result.success, true);
+});

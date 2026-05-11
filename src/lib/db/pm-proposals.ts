@@ -29,6 +29,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
 import { createTaskFromInitiative } from './promotion';
+import { transitionTaskStatus } from '@/lib/services/task-status';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -82,7 +83,9 @@ export interface PmDiffCapture {
   created_task_id?: string;
   /** Set by `applyDiff` for `add_availability` — id of the inserted row. */
   created_availability_id?: string;
-  /** Set by `applyDiff` for `set_task_status`. */
+  /** Set by `applyDiff` for `set_task_status` AND by the
+   *  `confirm_task_done` apply pass — task status before the transition,
+   *  captured for revert. */
   prev_task_status?: string;
 }
 
@@ -162,12 +165,39 @@ export type PmDiff =
   | ({
       // Slice 2 of revertable PM proposals. Used as the inverse of
       // `create_task_under_initiative` — the "tombstone" pattern: PM
-      // never hard-deletes, it cancels. Narrowly scoped to status='cancelled'
-      // for now since that's the only revert use case; if a broader
-      // task-status kind is needed in the future, generalize there.
+      // never hard-deletes, it cancels. Forward proposals are restricted
+      // to status='cancelled'; revert proposals (trigger_kind='revert')
+      // may restore an arbitrary prev_status captured by another diff
+      // (e.g. confirm_task_done). The wider type covers both paths.
       kind: 'set_task_status';
       task_id: string;
-      status: 'cancelled';
+      status:
+        | 'pending_dispatch'
+        | 'planning'
+        | 'inbox'
+        | 'draft'
+        | 'assigned'
+        | 'in_progress'
+        | 'convoy_active'
+        | 'testing'
+        | 'review'
+        | 'verification'
+        | 'done'
+        | 'cancelled'
+        | 'needs_user_input';
+    } & PmDiffCapture)
+  | ({
+      // PM-driven task close-out. Allowed only when the task is already
+      // in a late workflow state (convoy_active, testing, review,
+      // verification) and at least one structured pointer to evidence is
+      // attached. The apply pass routes through `transitionTaskStatus` so
+      // existing review/self-interlock gates still run.
+      kind: 'confirm_task_done';
+      task_id: string;
+      evidence_md: string;
+      audit_proposal_id?: string;
+      commit_sha?: string;
+      pr_url?: string;
     } & PmDiffCapture);
 
 export interface PmProposal {
@@ -470,9 +500,14 @@ export function validateProposedChanges(
           errors.push(`changes[${i}]: task_id required`);
           break;
         }
-        if (c.status !== 'cancelled') {
+        // Forward proposals are restricted to status='cancelled' (the
+        // tombstone path for create_task_under_initiative). Revert
+        // proposals may restore any prev_status captured by another
+        // diff (e.g. confirm_task_done's invertDiff), so we relax the
+        // gate when trigger_kind === 'revert'.
+        if (options.trigger_kind !== 'revert' && c.status !== 'cancelled') {
           errors.push(
-            `changes[${i}]: set_task_status only supports status='cancelled' (revert use only)`,
+            `changes[${i}]: set_task_status only supports status='cancelled' on forward proposals (revert use only)`,
           );
         }
         const t = queryOne<{ id: string }>(
@@ -481,6 +516,75 @@ export function validateProposedChanges(
         );
         if (!t) {
           errors.push(`changes[${i}]: task ${c.task_id} not found in workspace ${workspaceId}`);
+        }
+        break;
+      }
+      case 'confirm_task_done': {
+        if (!c.task_id) {
+          errors.push(`changes[${i}]: task_id required`);
+          break;
+        }
+        const t = queryOne<{ id: string; status: string }>(
+          'SELECT id, status FROM tasks WHERE id = ? AND workspace_id = ?',
+          [c.task_id, workspaceId],
+        );
+        if (!t) {
+          errors.push(`changes[${i}]: task ${c.task_id} not found in workspace ${workspaceId}`);
+          break;
+        }
+        const allowedSources = new Set([
+          'convoy_active',
+          'testing',
+          'review',
+          'verification',
+        ]);
+        if (!allowedSources.has(t.status)) {
+          errors.push(
+            `changes[${i}]: confirm_task_done requires task to be in convoy_active|testing|review|verification (got '${t.status}'). File a create_task_under_initiative reminder instead.`,
+          );
+        }
+        if (typeof c.evidence_md !== 'string' || c.evidence_md.trim().length < 20) {
+          errors.push(
+            `changes[${i}]: evidence_md required (>= 20 chars of human-readable justification)`,
+          );
+        }
+        const hasPointer =
+          (typeof c.audit_proposal_id === 'string' && c.audit_proposal_id.length > 0) ||
+          (typeof c.commit_sha === 'string' && c.commit_sha.length > 0) ||
+          (typeof c.pr_url === 'string' && c.pr_url.length > 0);
+        if (!hasPointer) {
+          errors.push(
+            `changes[${i}]: at least one of audit_proposal_id|commit_sha|pr_url required as evidence`,
+          );
+        }
+        if (c.audit_proposal_id) {
+          const audit = queryOne<{ id: string; status: string; workspace_id: string }>(
+            'SELECT id, status, workspace_id FROM pm_proposals WHERE id = ?',
+            [c.audit_proposal_id],
+          );
+          if (!audit) {
+            errors.push(
+              `changes[${i}]: audit_proposal_id ${c.audit_proposal_id} not found`,
+            );
+          } else if (audit.workspace_id !== workspaceId) {
+            errors.push(
+              `changes[${i}]: audit_proposal_id ${c.audit_proposal_id} belongs to a different workspace`,
+            );
+          } else if (audit.status !== 'accepted') {
+            errors.push(
+              `changes[${i}]: audit_proposal_id ${c.audit_proposal_id} is '${audit.status}', not 'accepted' — pending or rejected audits are not evidence`,
+            );
+          }
+        }
+        if (c.commit_sha && !/^[0-9a-f]{7,40}$/i.test(c.commit_sha)) {
+          errors.push(`changes[${i}]: commit_sha must be 7-40 hex chars`);
+        }
+        if (c.pr_url) {
+          try {
+            new URL(c.pr_url);
+          } catch {
+            errors.push(`changes[${i}]: pr_url must be a valid URL`);
+          }
         }
         break;
       }
@@ -959,13 +1063,57 @@ export function acceptProposal(
             title: change.title,
             description: change.description ?? null,
             status_check_md: change.status_check_md ?? null,
-            assigned_agent_id: change.assigned_agent_id ?? null,
+            assigned_agent_id: change.assigned_agent_id || null,
             priority: change.priority ?? 'normal',
             created_by_agent_id: applied_by_agent_id,
             reason: `created via PM notes proposal #${id}`,
           });
           // Capture the new task id so revert can cancel that exact row.
           change.created_task_id = created.id;
+          changesApplied++;
+          continue;
+        }
+        if (change.kind === 'confirm_task_done') {
+          const before = queryOne<{ status: string }>(
+            'SELECT status FROM tasks WHERE id = ?',
+            [change.task_id],
+          );
+          if (!before) {
+            throw new PmProposalValidationError(
+              `confirm_task_done: task ${change.task_id} not found`,
+            );
+          }
+          // Capture for revert before we transition.
+          change.prev_task_status = before.status;
+          const reasonExcerpt = change.evidence_md.slice(0, 200);
+          const result = transitionTaskStatus({
+            taskId: change.task_id,
+            actingAgentId: applied_by_agent_id ?? null,
+            newStatus: 'done',
+            statusReason: `PM confirm_task_done — ${reasonExcerpt}`,
+          });
+          if (!result.ok) {
+            throw new PmProposalValidationError(
+              `confirm_task_done(${change.task_id}): ${result.error}`,
+            );
+          }
+          run(
+            `INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
+             VALUES (?, 'task_status_attested_done', ?, ?, ?, ?, ?)`,
+            [
+              uuidv4(),
+              applied_by_agent_id ?? null,
+              change.task_id,
+              `Task confirmed done via PM proposal ${id}`,
+              JSON.stringify({
+                proposal_id: id,
+                audit_proposal_id: change.audit_proposal_id ?? null,
+                commit_sha: change.commit_sha ?? null,
+                pr_url: change.pr_url ?? null,
+              }),
+              now,
+            ],
+          );
           changesApplied++;
           continue;
         }
@@ -1190,6 +1338,12 @@ function applyDiff(diff: PmDiff, now: string): void {
         [diff.status, now, diff.task_id],
       );
       return;
+    }
+    case 'confirm_task_done': {
+      // Handled out-of-band in acceptProposal so it can route through
+      // transitionTaskStatus (workflow gates). Reaching this branch is
+      // a programming error.
+      throw new Error('confirm_task_done must be applied via acceptProposal pass-2');
     }
     default: {
       const exhaustive: never = diff;
