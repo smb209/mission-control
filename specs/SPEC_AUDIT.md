@@ -6,6 +6,7 @@ Audit of every spec file against current code on `main` (after `feat/audit-actio
 - **2026-05-11** initial audit run.
 - **2026-05-11 (post-merge of #326)** `audit-action-recommended.md` reclassified 2 → 1.
 - **2026-05-11 (drift-fix pass)** 17 historical artifacts moved to `docs/archive/`; `memory.md` + `autopilot-build-pipeline-spec.md` merged & deleted; `agent-health-overhaul-spec.md` rewritten and renamed to `agent-health.md`; `workspace-conventions-structured.md` §6 rewritten to match shipped `refine.ts`; `convoy-mode-spec.md` §7 banner + body replaced; 7 aspirational specs got `status: aspirational` frontmatter banners.
+- **2026-05-11 (research deep-dive)** `research-area.md` rewritten as a 598-line comprehensive reference for the entire research capability; reclassified 2 → 1.
 
 Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under [`specs/audit-reports/`](audit-reports/).
 
@@ -20,8 +21,8 @@ Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under 
 
 | Class | Count |
 |---|---|
-| 1. Current & accurate | 19 |
-| 2. Current & aspirational | 14 |
+| 1. Current & accurate | 20 |
+| 2. Current & aspirational | 13 |
 | 3. Feature drift | 0 |
 | 4. Historical / superseded (in `docs/archive/`) | 17 |
 | **Total** | **50** |
@@ -66,7 +67,7 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [timestamp-handling.md](timestamp-handling.md) | 1 | PR-A + PR-B both shipped; `src/lib/timestamps.ts` header cites the spec |
 | [workflows.md](workflows.md) | 2 | Aspirational banner added; `/workflows` is a SpecPage stub; no DAG engine |
 | [workspace-conventions-structured.md](workspace-conventions-structured.md) | 1 | §6 rewritten 2026-05-11 to drop phantom `workspace_conventions_proposals` table; now reflects `refine.ts` inline-return persistence |
-| [research-area.md](research-area.md) | 2 (split) | Phase 1+2 shipped; phases 3–5 still aspirational. **Action pending**: archive + re-spec, or trim to roadmap |
+| [research-area.md](research-area.md) | 1 | Rewritten 2026-05-11 as a comprehensive deep-dive over the entire research capability (598 lines): topics/briefs/agent_runs envelope, run-brief lifecycle, suggest pipeline, scheduling, initiative integration, audit hand-off, dedupe semantics, UI surfaces, MCP tools. §14 lists not-yet-built items (phase 3 templates, explicit proposals-from-briefs, dedupe PR #2/#3, FOIA). |
 
 ### Archived specs (`docs/archive/`)
 
@@ -100,7 +101,6 @@ All class 4. Listed for reference:
 
 **Annotate**:
 - `roadmap-and-pm-spec.md` — add "post-merge addenda" pointer at top to layered specs (audit-action-recommended, pm-revertable-proposals).
-- `research-area.md` — decide: archive + re-spec phases 3–5, or trim to a roadmap shell.
 
 **New specs to write (gaps)**:
 - `audit-dedupe-followups.md` — capture dedupe-investigations' deferred PR #2 (dispatch-time 409 guard) and PR #3 (UI cooldown) before the parent is archived.
