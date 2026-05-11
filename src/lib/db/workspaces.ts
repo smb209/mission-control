@@ -77,6 +77,47 @@ export function getAuditSettings(workspaceId: string): AuditSettings {
   };
 }
 
+/**
+ * Read the `audit_auto_spawn_pm` workspace toggle. When on, the
+ * `take_note` MCP handler auto-dispatches a `notes_intake` PM session
+ * whenever an `audit_verdict` note lands with `action_recommended=true`
+ * (or `verdict='audit_failed'`).
+ *
+ * See specs/audit-action-recommended.md. Defaults to `false` on
+ * missing columns so pre-093 DBs and freshly-cloned workspaces behave
+ * conservatively.
+ */
+export function getAuditAutoSpawn(workspaceId: string): boolean {
+  const db = getDb();
+  try {
+    const row = db
+      .prepare(
+        `SELECT audit_auto_spawn_pm as v FROM workspaces WHERE id = ?`,
+      )
+      .get(workspaceId) as { v: number | null } | undefined;
+    return Number(row?.v ?? 0) === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Flip the `audit_auto_spawn_pm` workspace toggle. No-ops silently if
+ * the column is missing (pre-093 DB) — the operator will see the
+ * setting absent from the workspace settings UI and is expected to
+ * run pending migrations first.
+ */
+export function setAuditAutoSpawn(workspaceId: string, on: boolean): void {
+  const db = getDb();
+  try {
+    db.prepare(
+      `UPDATE workspaces SET audit_auto_spawn_pm = ? WHERE id = ?`,
+    ).run(on ? 1 : 0, workspaceId);
+  } catch {
+    /* column missing on pre-093 DB; surfaced by getter returning false */
+  }
+}
+
 export interface WorkspaceCascadeCounts {
   tasks: number;
   agents: number;

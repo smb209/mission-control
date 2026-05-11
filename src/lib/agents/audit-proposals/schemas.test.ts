@@ -258,8 +258,71 @@ test('isAuditNoteKind: correct membership', () => {
   assert.equal(isAuditNoteKind('audit_manifest'), true);
   assert.equal(isAuditNoteKind('audit_proposal'), true);
   assert.equal(isAuditNoteKind('audit_synthesis'), true);
+  assert.equal(isAuditNoteKind('audit_verdict'), true);
   assert.equal(isAuditNoteKind('discovery'), false);
   assert.equal(isAuditNoteKind('observation'), false);
+});
+
+// ─── audit_verdict body schema (PR audit-action-recommended) ────────
+
+test('validateAuditNoteBody: audit_verdict happy path', () => {
+  const body = JSON.stringify({
+    version: 1,
+    observation_note_id: 'obs-abc',
+    verdict: 'never_built',
+    action_recommended: true,
+    recommended_action_hint: 'cancel',
+    short_rationale: 'Story has zero tasks and no code in the workspace.',
+  });
+  const result = validateAuditNoteBody('audit_verdict', body);
+  assert.equal(result.ok, true);
+});
+
+test('validateAuditNoteBody: audit_verdict rejects unknown verdict enum', () => {
+  const body = JSON.stringify({
+    version: 1,
+    observation_note_id: 'obs-abc',
+    verdict: 'totally_made_up_verdict',
+    action_recommended: false,
+    short_rationale: 'Twenty characters or more of justification.',
+  });
+  const result = validateAuditNoteBody('audit_verdict', body);
+  assert.equal(result.ok, false);
+});
+
+test('validateAuditNoteBody: audit_verdict rejects short rationale', () => {
+  const body = JSON.stringify({
+    version: 1,
+    observation_note_id: 'obs-abc',
+    verdict: 'on_track',
+    action_recommended: false,
+    short_rationale: 'too short',
+  });
+  const result = validateAuditNoteBody('audit_verdict', body);
+  assert.equal(result.ok, false);
+});
+
+test('validateAuditNoteBody: audit_verdict rejects missing observation_note_id', () => {
+  const body = JSON.stringify({
+    version: 1,
+    verdict: 'partially_done',
+    action_recommended: true,
+    short_rationale: 'Plenty of justification text right here.',
+  });
+  const result = validateAuditNoteBody('audit_verdict', body);
+  assert.equal(result.ok, false);
+});
+
+test('validateAuditNoteBody: audit_verdict allows omitted recommended_action_hint', () => {
+  const body = JSON.stringify({
+    version: 1,
+    observation_note_id: 'obs-abc',
+    verdict: 'on_track',
+    action_recommended: false,
+    short_rationale: 'Initiative is on track per the evidence collected.',
+  });
+  const result = validateAuditNoteBody('audit_verdict', body);
+  assert.equal(result.ok, true);
 });
 
 test('MAX_AUDIT_NOTE_BODY_CHARS leaves headroom under DB cap', () => {
