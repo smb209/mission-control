@@ -17,9 +17,9 @@ mcp-tools: [escalate_to_parent, spawn_subtask, update_task_status, register_deli
 db-tables: [tasks, task_roles, task_evidence, convoy_subtasks, agent_runs]
 related-specs:
   - autonomous-flow-tightening-spec.md — same anti-pattern (replace agent judgment with rails) being applied
-  - coordinator-delegation-via-convoy-spec.md — defines spawn_subtask path being tightened
+  - ../docs/archive/coordinator-delegation-via-convoy-spec.md — defines spawn_subtask path being tightened
   - agent-health.md — heartbeat/stall infrastructure extended here
-  - convoy-mode-spec.md — convoy-subtask gate behavior modified
+  - ../docs/archive/convoy-mode-spec.md — convoy-subtask gate behavior modified
 ---
 
 # Review-Stage Robustness
@@ -229,4 +229,4 @@ Per CLAUDE.md "Spec-First" workflow:
 ## References
 
 - Recurring incident exemplars: task `92b7b092-a7b6-4542-ba41-b1bdb95860db` (this spec's trigger), prior PR #111 post-mortem in [autonomous-flow-tightening-spec.md](specs/autonomous-flow-tightening-spec.md).
-- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](specs/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health.md](specs/agent-health.md) (heartbeat + stall infrastructure this builds on).
+- Adjacent specs: [coordinator-delegation-via-convoy-spec.md](../docs/archive/coordinator-delegation-via-convoy-spec.md) (built `spawn_subtask`/`update_subtask`), [agent-health.md](specs/agent-health.md) (heartbeat + stall infrastructure this builds on).
