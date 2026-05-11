@@ -120,6 +120,18 @@ before the existence check). New reference docs should adopt this
 pattern — `status: aspirational` for design specs not yet implemented,
 `status: current` once the code lands.
 
+### Architecture Decisions
+
+Non-obvious decisions — the kind where the *why* can't be recovered
+from code alone — live as short ADRs under [`docs/decisions/`](docs/decisions/).
+Write one when a spec consolidation or "we picked A over B because Z"
+moment surfaces a decision a future subagent would otherwise have to
+re-deliberate. ADRs are **immutable once `status: accepted`**: to
+change a decision, add a new ADR that supersedes the old one (set the
+old one's status to `superseded` and add `superseded-by: NNN`).
+`yarn docs:check` validates the same frontmatter on `docs/decisions/`
+plus the `adr-number` ↔ filename match.
+
 ## Verification (MCP Preview)
 
 After multi-file changes that touch UI or MCP tool surfaces, verify before opening a PR:

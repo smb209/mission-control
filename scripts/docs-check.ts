@@ -7,10 +7,16 @@ import { join, resolve, relative } from "node:path";
 
 const REPO_ROOT = resolve(__dirname, "..");
 const SPECS_DIR = join(REPO_ROOT, "specs");
+const DECISIONS_DIR = join(REPO_ROOT, "docs", "decisions");
 const SKIP_DIRS = new Set(["audit-reports"]);
-const SKIP_FILES = new Set([join(SPECS_DIR, "SPEC_AUDIT.md")]);
+const SKIP_FILES = new Set([
+  join(SPECS_DIR, "SPEC_AUDIT.md"),
+  join(DECISIONS_DIR, "README.md"),
+]);
 const ALLOWED_STATUS = new Set(["current", "aspirational", "archived", "superseded"]);
+const ALLOWED_ADR_STATUS = new Set(["proposed", "accepted", "superseded"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ADR_FILENAME_RE = /^(\d+)-[a-z0-9-]+\.md$/;
 
 type Violation = { file: string; field: string; reason: string };
 
@@ -94,17 +100,35 @@ function pathExists(p: string): boolean {
 
 function validate(file: string, fm: FM, violations: Violation[]): void {
   const rel = relative(REPO_ROOT, file);
+  const isAdr = file.startsWith(DECISIONS_DIR + "/") || file.startsWith(DECISIONS_DIR + "\\");
+  const allowedStatus = isAdr ? ALLOWED_ADR_STATUS : ALLOWED_STATUS;
   const status = fm.status;
   if (status === undefined) {
     violations.push({ file: rel, field: "status", reason: "missing" });
-  } else if (typeof status !== "string" || !ALLOWED_STATUS.has(status)) {
-    violations.push({ file: rel, field: "status", reason: `invalid value '${status}' (must be one of ${[...ALLOWED_STATUS].join(", ")})` });
+  } else if (typeof status !== "string" || !allowedStatus.has(status)) {
+    violations.push({ file: rel, field: "status", reason: `invalid value '${status}' (must be one of ${[...allowedStatus].join(", ")})` });
   }
-  const lv = fm["last-verified"];
+  // Specs use `last-verified`; ADRs use `date`. Both are YYYY-MM-DD.
+  const dateField = isAdr ? "date" : "last-verified";
+  const lv = fm[dateField];
   if (lv === undefined) {
-    violations.push({ file: rel, field: "last-verified", reason: "missing" });
+    violations.push({ file: rel, field: dateField, reason: "missing" });
   } else if (typeof lv !== "string" || !DATE_RE.test(lv)) {
-    violations.push({ file: rel, field: "last-verified", reason: `invalid date '${lv}' (must be YYYY-MM-DD)` });
+    violations.push({ file: rel, field: dateField, reason: `invalid date '${lv}' (must be YYYY-MM-DD)` });
+  }
+  if (isAdr) {
+    const adrNum = fm["adr-number"];
+    const base = file.slice(file.lastIndexOf("/") + 1);
+    const m = base.match(ADR_FILENAME_RE);
+    if (!m) {
+      violations.push({ file: rel, field: "filename", reason: `ADR filename must match NNN-slug.md (got '${base}')` });
+    } else if (adrNum === undefined) {
+      violations.push({ file: rel, field: "adr-number", reason: "missing" });
+    } else if (typeof adrNum !== "string" || !/^\d+$/.test(adrNum)) {
+      violations.push({ file: rel, field: "adr-number", reason: `must be an integer (got '${adrNum}')` });
+    } else if (parseInt(adrNum, 10) !== parseInt(m[1], 10)) {
+      violations.push({ file: rel, field: "adr-number", reason: `frontmatter '${adrNum}' does not match filename prefix '${m[1]}'` });
+    }
   }
   const anchors = fm["code-anchors"];
   if (anchors !== undefined) {
@@ -124,7 +148,11 @@ function validate(file: string, fm: FM, violations: Violation[]): void {
 }
 
 function main(): void {
-  const files = walk(SPECS_DIR);
+  const files: string[] = walk(SPECS_DIR);
+  try {
+    statSync(DECISIONS_DIR);
+    walk(DECISIONS_DIR, files);
+  } catch { /* decisions dir optional */ }
   const violations: Violation[] = [];
   let withFm = 0;
   for (const f of files) {
@@ -138,7 +166,7 @@ function main(): void {
   for (const v of violations) {
     process.stderr.write(`${v.file}:${v.field}: ${v.reason}\n`);
   }
-  process.stdout.write(`Checked ${files.length} spec files; ${withFm} had frontmatter; ${violations.length} violations.\n`);
+  process.stdout.write(`Checked ${files.length} doc files; ${withFm} had frontmatter; ${violations.length} violations.\n`);
   process.exit(violations.length > 0 ? 1 : 0);
 }
 
