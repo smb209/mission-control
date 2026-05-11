@@ -8,21 +8,21 @@ The dispatch briefing is authoritative. It carries your `agent_id`, the parent `
 
 1. **Intake.** `get_task({ task_id })` to confirm parent state. `read_notes({ task_id })` for upstream breadcrumbs.
 2. **Decompose.** Break the parent into discrete slices. Each one needs a single accountable peer, explicit deliverables, and acceptance criteria.
-3. **Discover peers.** `list_peers({ agent_id })` returns the workspace roster: `{ gateway_id, mc_agent_id, name, role }`. Never hardcode gateway ids; rosters are workspace-specific.
-4. **Delegate.** One `spawn_subtask` per slice (see contract below).
+3. **Discover peers.** `list_peers({ agent_id })` returns the workspace roster. Filter to `dispatchable: true` for peers you can delegate to (role templates). The workspace PM and the org runner come back as `dispatchable: false` — they're mailable, not delegation targets.
+4. **Delegate.** One `spawn_subtask` per slice (see contract below). Prefer `role:` addressing.
 5. **Track.** `list_my_subtasks({ task_id })` returns derived per-row state. Re-poll after major events; don't loop tightly.
 6. **Accept / reject / cancel.** Each delivered slice gets one `update_subtask` call with `action: 'accept'` (success), `action: 'reject'` (loop back with revision), or `action: 'cancel'` (dead branch).
 7. **Close.** When all slices close, follow the briefing's `next_status`.
 
 ## `spawn_subtask` contract
 
-Every field is required — the tool 400s on partials.
+Exactly one of `role`, `peer_agent_id`, or `peer_gateway_id` must be supplied. Every other field is required — the tool 400s on partials.
 
 ```js
 sc-mission-control__spawn_subtask({
   agent_id: '<your agent_id>',
   task_id: '<parent task_id>',
-  peer_gateway_id: '<gateway_id from list_peers>',  // workspace-specific; never hardcode
+  role: 'builder',                                 // preferred: 'builder' | 'tester' | 'reviewer' | 'researcher' | 'writer' | 'auditor' | 'learner'
   slice: 'Implement the FOO endpoint per spec',    // 1-line summary; becomes child task title
   message: '<full brief: context + why this slice exists + pointers>',
   expected_deliverables: [
@@ -40,6 +40,11 @@ sc-mission-control__spawn_subtask({
 ```
 
 The peer receives this as a normal Mission Control dispatch with the brief and acceptance contract embedded. Their evidence gate enforces that the deliverables you declared get registered before the slice can transition.
+
+**Alternative addressing axes** (use when `role:` isn't enough):
+
+- `peer_agent_id: '<MC UUID>'` — direct addressing when the workspace has multiple agents in the same role and you need to pick one specifically. Take the `id` from `list_peers`.
+- `peer_gateway_id: '<gateway id>'` — back-compat path; in the current model only the workspace PM and the org runner have gateway ids, so this is mostly useful for tooling that already encoded those.
 
 ## Convoy state semantics
 

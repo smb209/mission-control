@@ -17,7 +17,7 @@ OpenClaw namespaces MCP tools as `<server-name>__<tool-name>`, so the exact name
 | Action | Tool |
 |---|---|
 | Look up your `agent_id`, peers, and assigned tasks | `sc-mission-control__whoami({ agent_id })` |
-| List peers in your workspace (gateway_id ↔ MC agent_id) | `sc-mission-control__list_peers({ agent_id })` |
+| List workspace peers + the org runner (with addressing axes per row) | `sc-mission-control__list_peers({ agent_id })` |
 | Read the workspace's "rules of the road" markdown | `sc-mission-control__get_workspace_context({ agent_id })` |
 | Fetch a task by id | `sc-mission-control__get_task({ agent_id, task_id })` |
 
@@ -59,7 +59,7 @@ If your *role* is `coordinator` (set in the dispatch briefing — most subagents
 
 | Action | Tool |
 |---|---|
-| Delegate a slice to a peer (creates a child task in the convoy) | `spawn_subtask({ agent_id, task_id, peer_gateway_id, slice, message, expected_deliverables, acceptance_criteria, expected_duration_minutes, … })` |
+| Delegate a slice to a peer (creates a child task in the convoy) | `spawn_subtask({ agent_id, task_id, role, slice, message, expected_deliverables, acceptance_criteria, expected_duration_minutes, … })` — `role` is preferred; `peer_agent_id` or `peer_gateway_id` are accepted alternatives (exactly one required). |
 | Accept / reject / cancel a delivered child slice | `update_subtask({ agent_id, subtask_id, action: 'accept' \| 'reject' \| 'cancel', reason?, new_acceptance_criteria? })` — `accept` needs no extras; `reject` needs `reason` (≥10 chars) and optional `new_acceptance_criteria`; `cancel` needs `reason` (≥5 chars). |
 | List my active subtasks ("who am I waiting on?") | `list_my_subtasks({ agent_id, task_id, states? })` |
 
@@ -125,10 +125,15 @@ The PM sees the mail on their next coord-session turn (or immediately with `push
 
 ## Discovering peers
 
-Don't memorise gateway ids — peers are workspace-specific and the gateway id of a workspace's PM is `mc-pm-<slug>(-dev)`. Always:
+Don't memorise gateway ids — peers are workspace-specific. Always:
 
 ```js
 sc-mission-control__list_peers({ agent_id: "<your agent_id>" })
 ```
 
-Returns the workspace's roster: `{ gateway_id, mc_agent_id, name, role }`. Cache for the duration of your session, not across sessions — the roster changes as operators add/remove agents.
+Each entry comes back as `{ id, gateway_agent_id, name, role, dispatchable, is_workspace_pm, is_org_runner, addressing: { role?, peer_agent_id, peer_gateway_id? } }`. Use the `addressing` object to pick the right `spawn_subtask` / `send_mail` argument shape:
+
+- `dispatchable: true` → role template (no gateway id). Delegate with `spawn_subtask({ role, … })`.
+- `is_workspace_pm: true` or `is_org_runner: true` → mailable only. Use `send_mail({ to_agent_id: id, … })`.
+
+Cache for the duration of your session, not across sessions — the roster changes as operators add/remove agents.

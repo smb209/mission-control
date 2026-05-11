@@ -359,6 +359,37 @@ export async function syncGatewayAgentsToCatalog(options?: { force?: boolean; re
         }
       }
 
+      // Sweep gateway-synced rows whose gateway id no longer appears in
+      // the openclaw catalog at all (not just include/exclude-filtered).
+      // Old N-gateway-era role-bound rows like mc-builder-<ws>-dev
+      // persist forever otherwise — they get returned by list_peers /
+      // pickDynamicAgent and mislead the coordinator into trying to
+      // delegate to non-existent gateways. Canonical patterns
+      // (mc-pm-*, mc-runner, mc-runner-dev) are NEVER swept here even
+      // if openclaw temporarily omits them — they're load-bearing and
+      // get re-asserted on the next sync that does see them. Same
+      // policy as the include/exclude sweep below: status only, never
+      // is_active, never delete.
+      const presentGatewayIds = new Set<string>();
+      for (const ga of gatewayAgents) {
+        const id = ga.id || ga.name;
+        if (id) presentGatewayIds.add(id);
+      }
+      for (const gatewayId of existingGatewayIds) {
+        if (presentGatewayIds.has(gatewayId)) continue;
+        if (excludedGatewayIds.has(gatewayId)) continue;
+        if (gatewayId === 'mc-runner' || gatewayId === 'mc-runner-dev') continue;
+        if (parseWorkspacePmGatewayId(gatewayId) !== null) continue;
+        const result = run(
+          `UPDATE agents
+              SET status = 'offline', updated_at = ?
+            WHERE gateway_agent_id = ?
+              AND status != 'offline'`,
+          [ts, gatewayId],
+        );
+        if (result.changes > 0) markedOffline += result.changes;
+      }
+
       // Mark previously-synced rows whose gateway id is now filtered
       // out as `status='offline'`. Don't touch `is_active` — that's the
       // operator's intentional disable toggle and we don't want to
