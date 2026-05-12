@@ -7,7 +7,7 @@
  * Idempotent: archiving an already-archived note returns the existing row.
  * Body (optional): `{ reason?: string }`.
  *
- * See specs/audit-actions-and-tracking.md PR 1.
+ * See docs/archive/audit-actions-and-tracking.md PR 1.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

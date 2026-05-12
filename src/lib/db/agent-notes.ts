@@ -45,8 +45,8 @@ export const NOTE_KINDS: ReadonlyArray<NoteKind> = [
 
 /**
  * Note kinds emitted by the subtree-audit pipeline (see
- * specs/subtree-audit-proposals-spec.md) plus the narrow-audit verdict
- * row introduced by specs/audit-action-recommended.md. These are
+ * docs/archive/subtree-audit-proposals-spec.md) plus the narrow-audit verdict
+ * row introduced by docs/archive/audit-action-recommended.md. These are
  * excluded by default from cross-audit reads (briefing builder, Notes
  * Rail, default `listNotes` calls) so audit artifacts don't bleed into
  * unrelated agent context. The proposal queue UI and the audit
@@ -203,7 +203,7 @@ export interface ListNotesFilter {
    * filter out audit-pipeline artifacts (`audit_manifest`,
    * `audit_proposal`, `audit_synthesis`) without enumerating the
    * allow-list each time. See `AUDIT_NOTE_KINDS` and
-   * specs/subtree-audit-proposals-spec.md §4.1.
+   * docs/archive/subtree-audit-proposals-spec.md §4.1.
    */
   exclude_kinds?: ReadonlyArray<NoteKind>;
   /** When set, exclude notes whose `consumed_by_stages` already includes this stage. */

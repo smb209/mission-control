@@ -52,7 +52,7 @@ test('audit-prompt: take_note call shape is exact (load-bearing)', () => {
 });
 
 test('audit-prompt: emits audit_verdict instruction with required fields', () => {
-  // specs/audit-action-recommended.md: the narrow auditor must emit a
+  // docs/archive/audit-action-recommended.md: the narrow auditor must emit a
   // second take_note with kind=audit_verdict so the auto-spawn hook
   // can decide whether to route to PM. Lock the field names so a
   // future re-flow doesn't silently strip the structured signal.

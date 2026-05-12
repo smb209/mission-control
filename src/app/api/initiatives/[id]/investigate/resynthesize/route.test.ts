@@ -1,7 +1,7 @@
 /**
  * Tests for POST /api/initiatives/:id/investigate/resynthesize.
  *
- * Phase 4 of specs/subtree-audit-proposals-spec.md (§6.1). Covers:
+ * Phase 4 of docs/archive/subtree-audit-proposals-spec.md (§6.1). Covers:
  *   - happy path: existing manifest + proposals → L3 fires (via test
  *     seam) and the response carries the new synthesis_note_id.
  *   - missing manifest: 400 with the documented error.

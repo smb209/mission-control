@@ -21,6 +21,8 @@ related-specs:
   - subtree-audit-proposals-spec.md — produces the audit notes this manages
 ---
 
+> **Superseded by [specs/audit-pipeline.md](../../specs/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
+
 # Audit Actions & Per-Initiative Run Tracking
 
 Two pain points, one spec because they share surfaces (NoteCard, InvestigateModal, agent_runs):

@@ -84,7 +84,7 @@ export interface BuildAuditPromptInput {
    * - 'synthesis' — L3 synthesizer (Phase 4).
    *
    * The legacy 'subtree' mode was removed in Phase 4 (hard cutover —
-   * see specs/subtree-audit-proposals-spec.md §6.3).
+   * see docs/archive/subtree-audit-proposals-spec.md §6.3).
    */
   mode?: 'narrow' | 'survey' | 'subtree-proposal' | 'synthesis';
   /**
@@ -105,7 +105,7 @@ export interface BuildAuditPromptInput {
   /**
    * Surveyor-only inputs (mode: 'survey'). Carried in the briefing so
    * the L1 surveyor doesn't have to walk the tree itself. See
-   * specs/subtree-audit-proposals-spec.md §3.1.
+   * docs/archive/subtree-audit-proposals-spec.md §3.1.
    */
   surveyInput?: {
     rootId: string;
@@ -127,7 +127,7 @@ export interface BuildAuditPromptInput {
      * pre-resolves the timestamp + run_group_id from the DB row so the
      * surveyor doesn't have to walk notes itself.
      *
-     * Spec: specs/subtree-audit-proposals-spec.md §7, §10 Phase 5.
+     * Spec: docs/archive/subtree-audit-proposals-spec.md §7, §10 Phase 5.
      */
     priorSynthesis?: {
       created_at: string;
@@ -270,7 +270,7 @@ export function buildAuditPrompt(input: BuildAuditPromptInput): string {
 
   // Companion verdict note. Structured row that lets downstream
   // tooling decide whether to auto-route the audit to PM. See
-  // specs/audit-action-recommended.md.
+  // docs/archive/audit-action-recommended.md.
   const verdictCall = `take_note({
   initiative_id: "${initiative.id}",
   kind: 'audit_verdict',
@@ -351,7 +351,7 @@ If the initiative has no associated code yet (planned-only, no tasks, nothing in
  * then emits exactly one `audit_manifest` note whose JSON-string body
  * conforms to `auditManifestBodySchema`.
  *
- * Spec: specs/subtree-audit-proposals-spec.md §3.1, §4.2.
+ * Spec: docs/archive/subtree-audit-proposals-spec.md §3.1, §4.2.
  */
 function buildSurveyPrompt(args: {
   initiative: BuildAuditPromptInput['initiative'];
@@ -487,7 +487,7 @@ after the manifest is accepted; do NOT call additional tools.
 
 /**
  * Build the L2 per-node briefing for `mode: 'subtree-proposal'` (Phase 3
- * of specs/subtree-audit-proposals-spec.md). Mirrors the
+ * of docs/archive/subtree-audit-proposals-spec.md). Mirrors the
  * Delegation-Contract shape from §3.2 of
  * specs/coordinator-delegation-via-convoy-spec.md: slice / deliverables /
  * acceptance criteria. Includes the §4.3 audit_proposal schema reminder
@@ -715,7 +715,7 @@ the proposal is accepted; do NOT call additional tools.
  * the proposals via `summarizeProposalForBriefing`, and lays out the §4.4
  * audit_synthesis schema with a concrete example.
  *
- * Spec: specs/subtree-audit-proposals-spec.md §3.3, §4.4.
+ * Spec: docs/archive/subtree-audit-proposals-spec.md §3.3, §4.4.
  */
 function buildSynthesisPrompt(args: {
   initiative: BuildAuditPromptInput['initiative'];

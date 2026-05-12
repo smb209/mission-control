@@ -7,7 +7,7 @@
  * proposals (modify_epic_dates / modify_epic_scope) + the one-line
  * completion sentinel.
  *
- * Spec: specs/subtree-audit-proposals-spec.md §3.3, §4.4, §5.1.
+ * Spec: docs/archive/subtree-audit-proposals-spec.md §3.3, §4.4, §5.1.
  *
  * On failure / no-synthesis the orchestrator does NOT emit a synthetic
  * fallback (per spec §5.5). The L2 proposal queue still gives the

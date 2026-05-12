@@ -1,6 +1,6 @@
 /**
  * Tests for the audit-proposal queue endpoints (Phase 6,
- * specs/subtree-audit-proposals-spec.md §8).
+ * docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * Covers:
  *   - GET /proposals: synthesis + per-descendant proposals,

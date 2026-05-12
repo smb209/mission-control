@@ -2,7 +2,7 @@
  * GET /api/initiatives/:id/proposals
  *
  * Aggregation endpoint that powers the operator-facing audit-proposal
- * queue (Phase 6, specs/subtree-audit-proposals-spec.md §8).
+ * queue (Phase 6, docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * Returns:
  *   {

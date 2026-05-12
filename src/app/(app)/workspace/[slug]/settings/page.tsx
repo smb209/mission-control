@@ -64,7 +64,7 @@ interface WorkspaceWithDefault {
   audit_per_node_timeout_ms?: number | null;
   audit_subtree_concurrency?: number | null;
   /** Opt-in bridge from narrow audits to PM proposals. Migration 093 /
-   *  specs/audit-action-recommended.md. Stored as 0/1 INTEGER. */
+   *  docs/archive/audit-action-recommended.md. Stored as 0/1 INTEGER. */
   audit_auto_spawn_pm?: number | boolean | null;
   /** Server-resolved default the override falls back to. */
   default_workspace_path: string;
@@ -740,7 +740,7 @@ export default function WorkspaceSettingsPage({
               Off by default. With this on, the operator wakes up to draft
               PM proposals to accept/reject instead of plain audit notes.
               Leave off for prod until the false-positive rate is
-              understood — see <code>specs/audit-action-recommended.md</code>.
+              understood — see <code>docs/archive/audit-action-recommended.md</code>.
             </p>
           </Field>
         </Section>

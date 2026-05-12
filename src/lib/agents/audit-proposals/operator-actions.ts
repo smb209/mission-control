@@ -1,6 +1,6 @@
 /**
  * Internal accept / reject helpers for the operator-facing proposal
- * queue (Phase 6, specs/subtree-audit-proposals-spec.md §8).
+ * queue (Phase 6, docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * Three callers:
  *   1. POST /accept       — single-proposal accept (with optional inline edits).

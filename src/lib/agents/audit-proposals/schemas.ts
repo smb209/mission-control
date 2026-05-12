@@ -1,7 +1,7 @@
 /**
  * Zod schemas for the subtree-audit proposal pipeline.
  *
- * See specs/subtree-audit-proposals-spec.md §4 (note kinds + body
+ * See docs/archive/subtree-audit-proposals-spec.md §4 (note kinds + body
  * schemas). All three schemas describe JSON payloads stored in
  * `agent_notes.body` (a TEXT column with a 3000-char cap). The
  * orchestrator's pre-cap budget is `MAX_AUDIT_NOTE_BODY_CHARS` (2900),
@@ -257,7 +257,7 @@ export type AuditSynthesisBody = z.infer<typeof auditSynthesisBodySchema>;
 // alongside its free-form observation note. The take_note handler
 // reads this row to decide whether to auto-dispatch a notes_intake PM
 // session (gated by the workspace `audit_auto_spawn_pm` setting).
-// See specs/audit-action-recommended.md.
+// See docs/archive/audit-action-recommended.md.
 
 export const VERDICT_VALUES = [
   'on_track',

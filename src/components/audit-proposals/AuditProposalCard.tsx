@@ -1,6 +1,6 @@
 /**
  * AuditProposalCard — single per-node proposal card with view + inline-
- * edit modes (Phase 6, specs/subtree-audit-proposals-spec.md §8).
+ * edit modes (Phase 6, docs/archive/subtree-audit-proposals-spec.md §8).
  *
  * View mode: action badge, target node link, current → proposed diff,
  * evidence, rationale, Accept / Reject / Edit buttons.

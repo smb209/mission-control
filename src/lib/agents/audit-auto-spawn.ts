@@ -9,7 +9,7 @@
  * `appendNoteProposalId` helper, and both notes are marked consumed by
  * the `pm_proposal` stage so the UI fades the manual "Ask PM" button.
  *
- * See specs/audit-action-recommended.md. Everything here is best-effort
+ * See docs/archive/audit-action-recommended.md. Everything here is best-effort
  * — failures are logged and never thrown into the take_note caller.
  */
 

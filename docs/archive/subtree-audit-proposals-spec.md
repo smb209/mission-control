@@ -24,6 +24,8 @@ related-specs:
   - convoy-mode-spec.md — sibling agent-initiated fan-out substrate (not used here)
 ---
 
+> **Superseded by [specs/audit-pipeline.md](../../specs/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
+
 # Subtree Audit — Structured Proposals
 
 **Version:** 0.1 (draft)

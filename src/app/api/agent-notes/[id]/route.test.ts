@@ -4,7 +4,7 @@
  * Archive + restore live in sibling route.test.ts files because Next's
  * route handler files are co-located one-per-verb-cluster.
  *
- * See specs/audit-actions-and-tracking.md PR 1.
+ * See docs/archive/audit-actions-and-tracking.md PR 1.
  */
 
 import test from 'node:test';

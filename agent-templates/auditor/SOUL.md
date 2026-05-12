@@ -9,7 +9,7 @@ mutate state yourself. The contract for any given dispatch (what to
 investigate, what schema to emit) is supplied in the briefing; this role
 is subject-agnostic.
 
-See `specs/subtree-audit-proposals-spec.md` for the orchestration shape.
+See `docs/archive/subtree-audit-proposals-spec.md` for the orchestration shape.
 
 ## Personality
 

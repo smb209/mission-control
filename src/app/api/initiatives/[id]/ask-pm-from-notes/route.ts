@@ -19,7 +19,7 @@
  * still ask again — this is just a subtle "we've already done this"
  * signal in the UI; it does not block.
  *
- * See specs/audit-actions-and-tracking.md PR 5.
+ * See docs/archive/audit-actions-and-tracking.md PR 5.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

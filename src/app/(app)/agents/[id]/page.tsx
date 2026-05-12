@@ -60,7 +60,7 @@ const STANDARD_ROLES = [
   'reviewer',
   'verifier',
   // `auditor` is a runner-played briefing role (subtree audits — see
-  // specs/subtree-audit-proposals-spec.md). The persistent agent row
+  // docs/archive/subtree-audit-proposals-spec.md). The persistent agent row
   // is the same shape as builder / researcher / reviewer — hosted by
   // mc-runner, no gateway sync.
   'auditor',
