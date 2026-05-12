@@ -77,7 +77,7 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     'save_knowledge',
     'request_knowledge',
     // Coordinator delegation surface (replaces the old `delegate` tool).
-    // See specs/coordinator-delegation-via-convoy-spec.md §3.
+    // See docs/archive/coordinator-delegation-via-convoy-spec.md §3.
     'spawn_subtask',
     'list_my_subtasks',
     'update_subtask',

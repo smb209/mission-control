@@ -10,7 +10,7 @@
  *
  * Long-running rows (live elapsed > 5min) get an amber row tint — the
  * only visual flag in PR 2. Subtree tree view, cancel button, and the
- * sidebar live-count pip ship in PR 3-5. See specs/jobs-in-progress.md.
+ * sidebar live-count pip ship in PR 3-5. See docs/reference/jobs-in-progress.md.
  */
 
 import { useEffect, useState, useMemo } from 'react';

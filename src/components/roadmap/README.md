@@ -1,6 +1,6 @@
 # Roadmap timeline (Phase 3)
 
-Lightweight Gantt-style timeline for the planning layer. SVG + CSS grid only — no external Gantt library. See `specs/roadmap-and-pm-spec.md` §12.2 and §14 for the full design.
+Lightweight Gantt-style timeline for the planning layer. SVG + CSS grid only — no external Gantt library. See `docs/reference/roadmap-and-pm-spec.md` §12.2 and §14 for the full design.
 
 ## Component layout
 

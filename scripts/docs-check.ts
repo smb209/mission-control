@@ -1,16 +1,18 @@
 #!/usr/bin/env tsx
-// Validates YAML frontmatter on specs/**/*.md.
-// Files without frontmatter are skipped (gradual migration).
+// Validates YAML frontmatter on docs/reference/**/*.md, docs/proposals/**/*.md,
+// and docs/decisions/**/*.md. Files without frontmatter are skipped (gradual
+// migration). docs/archive/ is intentionally not scanned — archived content
+// is frozen historical state.
 
 import { readFileSync, statSync, readdirSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 
 const REPO_ROOT = resolve(__dirname, "..");
-const SPECS_DIR = join(REPO_ROOT, "specs");
+const REFERENCE_DIR = join(REPO_ROOT, "docs", "reference");
+const PROPOSALS_DIR = join(REPO_ROOT, "docs", "proposals");
 const DECISIONS_DIR = join(REPO_ROOT, "docs", "decisions");
-const SKIP_DIRS = new Set(["audit-reports"]);
 const SKIP_FILES = new Set([
-  join(SPECS_DIR, "SPEC_AUDIT.md"),
+  join(REPO_ROOT, "docs", "README.md"),
   join(DECISIONS_DIR, "README.md"),
 ]);
 const ALLOWED_STATUS = new Set(["current", "aspirational", "archived", "superseded"]);
@@ -21,10 +23,11 @@ const ADR_FILENAME_RE = /^(\d+)-[a-z0-9-]+\.md$/;
 type Violation = { file: string; field: string; reason: string };
 
 function walk(dir: string, out: string[] = []): string[] {
-  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const ent of entries) {
     const full = join(dir, ent.name);
     if (ent.isDirectory()) {
-      if (SKIP_DIRS.has(ent.name)) continue;
       walk(full, out);
     } else if (ent.isFile() && ent.name.endsWith(".md")) {
       if (SKIP_FILES.has(full)) continue;
@@ -148,11 +151,10 @@ function validate(file: string, fm: FM, violations: Violation[]): void {
 }
 
 function main(): void {
-  const files: string[] = walk(SPECS_DIR);
-  try {
-    statSync(DECISIONS_DIR);
-    walk(DECISIONS_DIR, files);
-  } catch { /* decisions dir optional */ }
+  const files: string[] = [];
+  walk(REFERENCE_DIR, files);
+  walk(PROPOSALS_DIR, files);
+  walk(DECISIONS_DIR, files);
   const violations: Violation[] = [];
   let withFm = 0;
   for (const f of files) {

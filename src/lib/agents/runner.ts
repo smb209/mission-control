@@ -7,7 +7,7 @@
  * `default` workspace and is referenced from any workspace by its
  * UUID via dispatchScope.
  *
- * See specs/scope-keyed-sessions.md §1, §6 Phase C.
+ * See docs/reference/scope-keyed-sessions.md §1, §6 Phase C.
  */
 
 import { queryAll, queryOne } from '@/lib/db';

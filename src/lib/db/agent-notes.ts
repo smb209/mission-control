@@ -3,7 +3,7 @@
  *
  * Notes are the observability + briefing-input + audit-trail spine of
  * the scope-keyed-sessions architecture. See
- * specs/scope-keyed-sessions.md §3 for the full design.
+ * docs/reference/scope-keyed-sessions.md §3 for the full design.
  *
  * Functions in this module are pure DB shape; the MCP-tool layer wraps
  * them with auth + tracing + SSE broadcast. Callers outside MCP (e.g.

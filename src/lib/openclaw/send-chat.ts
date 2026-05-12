@@ -193,7 +193,7 @@ export interface SendChatAndAwaitResult extends SendChatResult {
  * the only thing we rely on is the optional `sessionKey` for routing.
  *
  * Used by `sendChatAndAwaitReply`'s `onAgentEvent` tap (PR D of
- * specs/pm-chat-prompt.md) so callers can surface tool calls to
+ * docs/reference/pm-chat-prompt.md) so callers can surface tool calls to
  * operators as they happen.
  */
 export type AgentEvent = Record<string, unknown> & { sessionKey?: string };

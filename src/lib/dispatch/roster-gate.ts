@@ -6,7 +6,7 @@
  * because no reviewer existed" failure into a one-time, operator-actionable
  * error at dispatch time.
  *
- * See specs/review-stage-robustness-spec.md (Slice 0).
+ * See docs/reference/review-stage-robustness-spec.md (Slice 0).
  *
  * Activated by env var `MC_ROSTER_GATE=1` (default off for one cycle so
  * operators can backfill before flipping default-on).

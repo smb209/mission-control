@@ -4,8 +4,8 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/audit-pipeline.md — consumes the placeholder/reconciler pattern
-  - specs/pm-diff-conventions.md — describes proposed_changes JSON shape
+  - docs/reference/audit-pipeline.md — consumes the placeholder/reconciler pattern
+  - docs/reference/pm-diff-conventions.md — describes proposed_changes JSON shape
 related-adrs: []
 code-anchors:
   - src/lib/db/pm-proposals.ts:777
@@ -25,7 +25,7 @@ review, couldn't queue another request, and the route timed out under
 typical Next.js / Vercel HTTP timeouts.
 
 `docs/archive/pm-dispatch-async.md` is the shipped design doc;
-`specs/audit-pipeline.md` reuses the same pattern for audit-driven PM
+`docs/reference/audit-pipeline.md` reuses the same pattern for audit-driven PM
 proposals.
 
 ## Decision

@@ -106,7 +106,7 @@ function buildSections(taskBoardHref: string, workspaceSettingsHref: string): Na
     {
       // Knowledge: long-lived artifacts the project produces and reasons
       // over. All entries currently render a spec markdown file from
-      // `specs/` — replace with real surfaces as each feature lands.
+      // SpecPage routes — replace with real surfaces as each feature lands.
       title: 'Knowledge',
       items: [
         { href: '/research', label: 'Research', icon: Search, prefix: true },

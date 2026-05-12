@@ -1,7 +1,7 @@
 /**
  * Synthesize the inverse of an accepted PM proposal's diff list.
  *
- * Slice 2 of specs/pm-revertable-proposals.md. Read in tandem with the
+ * Slice 2 of docs/reference/pm-revertable-proposals.md. Read in tandem with the
  * `applyDiff` capture pattern in `src/lib/db/pm-proposals.ts` — every
  * forward apply records enough prior state onto the diff that the inverse
  * is computable as a pure function of the diff row alone, without

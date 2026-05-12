@@ -6,7 +6,7 @@ The Review-Stage Robustness feature stack closes the recurring failure pattern w
 - It marks the task `review` with no reviewer and no evidence.
 - The task stalls indefinitely behind a cosmetic "stalled_no_activity" badge.
 
-Spec: [specs/review-stage-robustness-spec.md](../specs/review-stage-robustness-spec.md)
+Spec: [docs/reference/review-stage-robustness-spec.md](../docs/reference/review-stage-robustness-spec.md)
 
 This runbook covers the four feature flags, the audit script, and the recommended rollout sequence.
 

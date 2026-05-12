@@ -694,7 +694,7 @@ Three paths from audit output to PM proposal, sharing the same
    `decision`-kind note for future delta-run downweighting.
 
 All three paths converge on `pm_proposals` rows, which carry the
-`pm_diff_conventions` contract — see `specs/pm-diff-conventions.md` for
+`pm_diff_conventions` contract — see `docs/reference/pm-diff-conventions.md` for
 the canonical diff shape PM is expected to emit.
 
 The notes the audit produced track which proposal they spawned via

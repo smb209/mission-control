@@ -6,7 +6,7 @@
  * a structured `replacement` (full markdown swap) or a list of
  * clarifying `questions`. The operator reviews + accepts in the UI.
  *
- * Spec: specs/workspace-conventions-structured.md §6.
+ * Spec: docs/reference/workspace-conventions-structured.md §6.
  *
  * v1 keeps the dispatch synchronous (operator sees a spinner, then
  * a result). The refine doesn't write to mc_sessions / agent_runs —

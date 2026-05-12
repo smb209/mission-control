@@ -1,7 +1,7 @@
 /**
  * PM agent definition + soul_md loader.
  *
- * Phase 5 of the roadmap & PM-agent feature (specs/roadmap-and-pm-spec.md).
+ * Phase 5 of the roadmap & PM-agent feature (docs/reference/roadmap-and-pm-spec.md).
  * The PM is a planning-layer agent: one per workspace, role='pm', seeded
  * via migration. It reacts to operator-dropped disruptions and produces
  * `pm_proposals` rows. It never writes to the execution board.

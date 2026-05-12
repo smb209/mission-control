@@ -5,7 +5,7 @@ session model. Every agent dispatch builds its briefing from these
 files (plus per-workspace overrides from the `agent_role_overrides`
 table).
 
-See [`specs/scope-keyed-sessions.md`](../specs/scope-keyed-sessions.md)
+See [`docs/reference/scope-keyed-sessions.md`](../docs/reference/scope-keyed-sessions.md)
 §2 for the architectural context.
 
 ## Layout

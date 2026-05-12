@@ -4,8 +4,8 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/audit-dedupe-followups.md — open backlog for generalising the guard
-  - specs/audit-pipeline.md — §10 documents the cancellation contract
+  - docs/proposals/audit-dedupe-followups.md — open backlog for generalising the guard
+  - docs/reference/audit-pipeline.md — §10 documents the cancellation contract
 related-adrs: []
 code-anchors:
   - src/lib/mcp/groups/core.ts:421
@@ -36,7 +36,7 @@ via `run_group_id`; if its status is `cancelled`, refuse with
 agent to stop and exit. **No other tool currently enforces this.** The
 narrow scope is intentional — `take_note` was the primary source of
 orphan rows; expanding the guard to every write tool is open backlog
-in `specs/audit-dedupe-followups.md`.
+in `docs/proposals/audit-dedupe-followups.md`.
 
 ## Consequences
 

@@ -1,9 +1,9 @@
 # Research Phase 2 — Schedules / Recurring Briefs
 
 **Status:** Draft, awaiting operator OK before any code.
-**Spec source:** [specs/research-area.md](research-area.md) §"Schedule".
+**Spec source:** [docs/reference/research-area.md](research-area.md) §"Schedule".
 **Phase 1 reference:** [docs/archive/research-area-build-plan.md](research-area-build-plan.md).
-**Workflow contract:** [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
+**Workflow contract:** [docs/reference/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
 **Validation directory:** [docs/archive/research-phase-2-validation/](research-phase-2-validation/).
 
 ## 1. Goal

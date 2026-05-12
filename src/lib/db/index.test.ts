@@ -5,7 +5,7 @@
  * direct .all/.get bypasses scattered through the API routes — should
  * post-process string fields that match the bare SQLite datetime shape
  * ("YYYY-MM-DD HH:MM:SS[.fff]") into ISO-Z. See
- * specs/timestamp-handling.md §PR-A.
+ * docs/reference/timestamp-handling.md §PR-A.
  */
 
 import test from 'node:test';

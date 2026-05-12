@@ -2,7 +2,7 @@
  * Initiative DB helpers (Phase 1 of the roadmap planning layer).
  *
  * Initiatives are planning-tree nodes (theme/milestone/epic/story).
- * See specs/roadmap-and-pm-spec.md §3-§6 for the data model.
+ * See docs/reference/roadmap-and-pm-spec.md §3-§6 for the data model.
  *
  * Notes:
  *   - All mutations write through the shared singleton db handle (`getDb`)

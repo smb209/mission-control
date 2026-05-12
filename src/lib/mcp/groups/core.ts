@@ -387,7 +387,7 @@ export function registerCoreTools(server: McpServer): void {
 
   // ── Notes spine (scope-keyed sessions Phase A) ───────────────────
   // take_note / read_notes
-  // See specs/scope-keyed-sessions.md §3 for the full design.
+  // See docs/reference/scope-keyed-sessions.md §3 for the full design.
 
   // take_note ──────────────────────────────────────────────────────
   server.registerTool(

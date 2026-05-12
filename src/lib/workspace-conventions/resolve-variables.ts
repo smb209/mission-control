@@ -14,7 +14,7 @@
  *   - Unknown token → left as the literal `{{whatever}}` so typos are
  *     visible at render time.
  *
- * See specs/workspace-conventions-structured.md §3.
+ * See docs/reference/workspace-conventions-structured.md §3.
  */
 
 /** Tokens the resolver knows about. Keep sorted; add new ones explicitly. */

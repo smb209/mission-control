@@ -7,7 +7,7 @@
  * target repo's `.mc/gates.json`, with auto-discovered defaults when
  * the file is absent so existing repos work without setup.
  *
- * Spec: specs/autonomous-flow-tightening-spec.md (slice 2).
+ * Spec: docs/reference/autonomous-flow-tightening-spec.md (slice 2).
  *
  * The gate config is INTENTIONALLY narrow:
  *   - build_fast      → Builder-stage commands (typecheck/lint/related-tests)
@@ -194,7 +194,7 @@ export type RoleName = 'builder' | 'tester' | 'reviewer';
 
 /**
  * Map a role to the gates it MUST submit before transitioning out of
- * its stage. Mirrors specs/autonomous-flow-tightening-spec.md.
+ * its stage. Mirrors docs/reference/autonomous-flow-tightening-spec.md.
  */
 export const ROLE_REQUIRED_GATES: Record<RoleName, ReadonlyArray<keyof GateConfig>> = {
   builder: ['build_fast'],

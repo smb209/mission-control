@@ -10,7 +10,7 @@
  * template means dropping a `.md` file in this directory; nothing else
  * to wire.
  *
- * See specs/workspace-conventions-structured.md §4.
+ * See docs/reference/workspace-conventions-structured.md §4.
  */
 
 import { promises as fs } from 'node:fs';

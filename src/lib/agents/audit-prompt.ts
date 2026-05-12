@@ -489,7 +489,7 @@ after the manifest is accepted; do NOT call additional tools.
  * Build the L2 per-node briefing for `mode: 'subtree-proposal'` (Phase 3
  * of docs/archive/subtree-audit-proposals-spec.md). Mirrors the
  * Delegation-Contract shape from §3.2 of
- * specs/coordinator-delegation-via-convoy-spec.md: slice / deliverables /
+ * docs/archive/coordinator-delegation-via-convoy-spec.md: slice / deliverables /
  * acceptance criteria. Includes the §4.3 audit_proposal schema reminder
  * + retry guidance.
  */

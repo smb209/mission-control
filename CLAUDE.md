@@ -94,18 +94,29 @@ Native modals block the JS event loop and aren't drivable from
 preview/automation tooling, which surfaces as flaky verification runs.
 Always thread the dialog through component state instead.
 
+## Docs Tree
+
+System documentation lives under `docs/`:
+
+- [`docs/reference/`](docs/reference/) — current shipped capability docs (`status: current`). The canonical "how does X work today" surfaces.
+- [`docs/proposals/`](docs/proposals/) — aspirational / not-yet-built designs (`status: aspirational`). Most are surfaced as SpecPage stubs in-app.
+- [`docs/decisions/`](docs/decisions/) — immutable ADRs (architecture decision records). See its [README](docs/decisions/README.md).
+- [`docs/archive/`](docs/archive/) — historical: shipped build plans, validation passes, superseded specs. Retained for context; not edited.
+
+Start at [`docs/README.md`](docs/README.md) for the index.
+
 ## Spec Frontmatter Contract
 
-Active specs under `specs/` may carry YAML frontmatter with `status`,
-`last-verified`, `code-anchors`, `mcp-tools`, `db-tables`, and
-`related-specs`. Files without frontmatter are skipped, so the
-codebase can migrate gradually.
+Reference docs (`docs/reference/`, `docs/proposals/`) carry YAML frontmatter
+with `status`, `last-verified`, `code-anchors`, `mcp-tools`, `db-tables`,
+and `related-specs`. Files without frontmatter are skipped by the check,
+so the codebase can migrate gradually.
 
-Before editing a file under `src/`, grep `specs/` for that path
-appearing in a `code-anchors` block:
+Before editing a file under `src/`, grep `docs/reference/` and
+`docs/proposals/` for that path appearing in a `code-anchors` block:
 
 ```
-grep -rln "src/lib/foo.ts" specs/
+grep -rln "src/lib/foo.ts" docs/reference/ docs/proposals/
 ```
 
 If a spec references the file, update the spec in the same PR — at
@@ -116,9 +127,9 @@ Frontmatter validity is enforced by `yarn docs:check`: `status` must
 be one of `current` / `aspirational` / `archived` / `superseded`,
 `last-verified` must be `YYYY-MM-DD`, and every `code-anchors` path
 must exist on disk (line-range suffixes like `:42-58` are stripped
-before the existence check). New reference docs should adopt this
-pattern — `status: aspirational` for design specs not yet implemented,
-`status: current` once the code lands.
+before the existence check). New docs should adopt this pattern —
+file goes in `docs/reference/` if the code ships, `docs/proposals/` if
+it's aspirational.
 
 ### Architecture Decisions
 
@@ -156,7 +167,7 @@ Keep responses tight. Prefer code-only edits and 1–3-line status updates over 
 For multi-layer changes (DB migration + service + MCP tool + UI), follow audit → spec → implement → verify rather than editing inline:
 
 1. **Audit**: grep/read the affected files; list current behavior and gaps.
-2. **Spec**: write a short design doc under `specs/` citing specific files/lines and the migration/test strategy.
+2. **Spec**: write a short design doc under `docs/proposals/` (aspirational) or `docs/reference/` (if you'll ship in the same change) citing specific files/lines and the migration/test strategy.
 3. **Implement**: execute against the spec, committing per logical slice.
 4. **Verify**: tests + preview smoke before opening the PR.
 
@@ -164,7 +175,7 @@ For genuinely independent slices, consider fanning out parallel subagents (one p
 
 ## Long Unattended Feature Development
 
-When the operator says "go build this in a structured way, I won't review in between," follow the contract in [specs/long-unattended-feature-dev.md](specs/long-unattended-feature-dev.md). It codifies the 4-doc pattern (build plan + `<feature>-validation/` directory with baseline / pre-check / test plan / criteria / results) used successfully for `scope-keyed-sessions` and `autonomous-flow-tightening`. Use it for any feature that is multi-slice, real-agent-exercisable, and ships behind stacked PRs without per-slice operator review.
+When the operator says "go build this in a structured way, I won't review in between," follow the contract in [docs/reference/long-unattended-feature-dev.md](docs/reference/long-unattended-feature-dev.md). It codifies the 4-doc pattern (build plan + `<feature>-validation/` directory with baseline / pre-check / test plan / criteria / results) used successfully for `scope-keyed-sessions` and `autonomous-flow-tightening`. Use it for any feature that is multi-slice, real-agent-exercisable, and ships behind stacked PRs without per-slice operator review.
 
 ## MCP Server
 

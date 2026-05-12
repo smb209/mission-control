@@ -2,7 +2,7 @@
  * Task evidence service.
  *
  * Implements the "run-and-forward" verification model from
- * specs/autonomous-flow-tightening-spec.md: agents submit the raw stdout/
+ * docs/reference/autonomous-flow-tightening-spec.md: agents submit the raw stdout/
  * stderr of a prescribed command and the server parses pass/fail
  * deterministically. The agent never self-reports a boolean.
  *

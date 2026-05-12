@@ -13,7 +13,7 @@
  * session id we kick `sessions.abort` with a 2s timeout but don't
  * block the cancel response on its result. The DB write IS the
  * cancel; the gateway call is just a courtesy nudge so the underlying
- * agent shuts down sooner. See specs/jobs-in-progress.md PR 4.
+ * agent shuts down sooner. See docs/reference/jobs-in-progress.md PR 4.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

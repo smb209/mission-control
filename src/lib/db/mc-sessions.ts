@@ -3,7 +3,7 @@
  *
  * Openclaw owns the trajectory file; MC owns the metadata so we can
  * list "active sessions for task X" or reap stale scopes. See
- * specs/scope-keyed-sessions.md §1.3.
+ * docs/reference/scope-keyed-sessions.md §1.3.
  *
  * Phase A added the table; Phase B starts populating it via
  * `dispatchScope`. Phase E uses it for cleanup on task completion.

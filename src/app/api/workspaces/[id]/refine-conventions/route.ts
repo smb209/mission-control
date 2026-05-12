@@ -6,7 +6,7 @@
  * replacement or ask clarifying questions, return the structured result
  * for the operator to review.
  *
- * Spec: specs/workspace-conventions-structured.md §6.
+ * Spec: docs/reference/workspace-conventions-structured.md §6.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

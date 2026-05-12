@@ -3,7 +3,7 @@
  *
  * Composes the dispatch message that openclaw receives at the start of
  * a (re-)dispatched session. Composition order per
- * specs/scope-keyed-sessions.md §2.3:
+ * docs/reference/scope-keyed-sessions.md §2.3:
  *
  *   1. Identity preamble (`Your agent_id is: …`).
  *   2. Role section — `agent_role_overrides.soul_md` if a row exists for

@@ -2,15 +2,15 @@
 name: Review-Stage Robustness — Build Plan
 description: Slice plan + design decisions for closing the review-stage stall pattern (roster gate, self-review interlock, soft-lock, SLA)
 status: draft
-spec: specs/review-stage-robustness-spec.md
+spec: docs/reference/review-stage-robustness-spec.md
 ---
 
 # Review-Stage Robustness — Build Plan
 
 Status: draft · Owner: smb209 · Date: 2026-05-09
-Spec: [specs/review-stage-robustness-spec.md](review-stage-robustness-spec.md)
+Spec: [docs/reference/review-stage-robustness-spec.md](review-stage-robustness-spec.md)
 
-Companion to the spec. Commits to slices, files-touched, and load-bearing design calls. Per [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md): operator OKs build plan + validation skeleton; per-slice unit tests are the per-PR contract; full real-agent validation runs against the stack tip before merge.
+Companion to the spec. Commits to slices, files-touched, and load-bearing design calls. Per [docs/reference/long-unattended-feature-dev.md](long-unattended-feature-dev.md): operator OKs build plan + validation skeleton; per-slice unit tests are the per-PR contract; full real-agent validation runs against the stack tip before merge.
 
 ## Audit (verified 2026-05-09)
 

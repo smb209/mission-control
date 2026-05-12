@@ -6,7 +6,7 @@
  * On success: bump run_count + advance next_run_at. On failure:
  * increment consecutive_failures + backoff; pause after 3.
  *
- * Phase E1 of specs/scope-keyed-sessions.md §4.2.
+ * Phase E1 of docs/reference/scope-keyed-sessions.md §4.2.
  */
 
 import {

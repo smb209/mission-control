@@ -722,7 +722,7 @@ export function registerWorkTools(server: McpServer): void {
       // When a delegation subtask fails, notify the coordinator with a
       // deterministic subject line so their triage is mechanical. The
       // `redecompose:` reason prefix is the peer's escape hatch (see
-      // specs/coordinator-delegation-via-convoy-spec.md §3.8) — surface
+      // docs/archive/coordinator-delegation-via-convoy-spec.md §3.8) — surface
       // it explicitly so the coordinator cancels + re-plans rather than
       // re-dispatching the same slice.
       const ctx = queryOne<{ subtask_id: string; slice: string | null; parent_task_id: string; coordinator_id: string | null; convoy_id: string }>(
@@ -1141,7 +1141,7 @@ export function registerWorkTools(server: McpServer): void {
   // writes a SLO-populated convoy_subtasks row, then POSTs to the normal
   // dispatch pipeline so the peer gets the standard briefing plus a
   // Delegation Contract block. Replaces the old `delegate` tool entirely
-  // — see specs/coordinator-delegation-via-convoy-spec.md.
+  // — see docs/archive/coordinator-delegation-via-convoy-spec.md.
   server.registerTool(
     'spawn_subtask',
     {
@@ -1738,7 +1738,7 @@ export function registerWorkTools(server: McpServer): void {
   // attempt) tuple. Without this, MC has no way to attribute subagent
   // activity (notes, deliverables, status transitions) to the right
   // dispatch.
-  // See specs/scope-keyed-sessions-phase-j.md §D3.
+  // See docs/reference/scope-keyed-sessions-phase-j.md §D3.
   server.registerTool(
     'register_subagent_dispatch',
     {

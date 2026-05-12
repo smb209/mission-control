@@ -4,7 +4,7 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/workspace-conventions-structured.md — §6 spec body
+  - docs/reference/workspace-conventions-structured.md — §6 spec body
 related-adrs:
   - 3 — diverges from the proposal-substrate pattern used by PM dispatch
 code-anchors:
@@ -16,7 +16,7 @@ code-anchors:
 
 ## Context
 
-`specs/workspace-conventions-structured.md` originally proposed a new
+`docs/reference/workspace-conventions-structured.md` originally proposed a new
 `workspace_conventions_proposals` table mirroring `pm_proposals` —
 draft / accept / revert lifecycle, SSE events, the whole substrate.
 The intent was symmetry with PM dispatch (see ADR-003).

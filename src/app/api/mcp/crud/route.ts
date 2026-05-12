@@ -9,7 +9,7 @@
  * Operators wire this up by editing `~/.openclaw/openclaw.json` to
  * register the server and grant the appropriate per-agent allowlist.
  *
- * See `specs/mcp-surface-review.md` for rationale.
+ * See `docs/archive/mcp-surface-review.md` for rationale.
  */
 
 import { NextRequest } from 'next/server';

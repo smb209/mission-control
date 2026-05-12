@@ -4,8 +4,8 @@ status: accepted
 date: 2026-05-11
 deciders: smb209
 related-specs:
-  - specs/pm-diff-conventions.md — canonical diff envelope reference
-  - specs/pm-revertable-proposals.md — invert/revert flow
+  - docs/reference/pm-diff-conventions.md — canonical diff envelope reference
+  - docs/reference/pm-revertable-proposals.md — invert/revert flow
 related-adrs:
   - 3 — proposal substrate this lives inside
 code-anchors:
@@ -23,7 +23,7 @@ shape made some queries easier (e.g. "all create_task diffs across
 proposals") but added schema, join overhead, and a second write path
 on apply / revert.
 
-The revert flow (see `specs/pm-revertable-proposals.md`) needs each
+The revert flow (see `docs/reference/pm-revertable-proposals.md`) needs each
 diff to capture its own pre-state at apply time (e.g. `prev_status`,
 `created_dependency_id`) so `invertDiff` can synthesise a pure-
 function revert from the row alone. With diffs in JSON, all that

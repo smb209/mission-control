@@ -156,7 +156,7 @@ Phase A lands and the full plan goes green for the first time.)
 ## 7. Open work hand-off
 
 **Tonight's deliverables (this commit):**
-- [x] [`specs/scope-keyed-sessions.md`](../scope-keyed-sessions.md) — full spec, 804 lines.
+- [x] [`docs/reference/scope-keyed-sessions.md`](../scope-keyed-sessions.md) — full spec, 804 lines.
 - [x] [`docs/archive/scope-keyed-sessions-validation/01-pre-check-initialization.md`](01-pre-check-initialization.md) — destructive runbook for fresh-state setup.
 - [x] [`docs/archive/scope-keyed-sessions-validation/02-test-plan.md`](02-test-plan.md) — concrete dispatch scenarios per role.
 - [x] [`docs/archive/scope-keyed-sessions-validation/03-validation-criteria.md`](03-validation-criteria.md) — pass/fail per scenario + global gates.

@@ -22,7 +22,7 @@ decision*, not *change of any kind*.
 
 - Filename: `NNN-short-slug.md` — `NNN` is zero-padded, monotonic,
   never reused. `slug` is kebab-case.
-- Frontmatter mirrors `specs/`: `adr-number`, `status`, `date`,
+- Frontmatter mirrors `docs/reference/`: `adr-number`, `status`, `date`,
   `deciders`, `related-specs`, `related-adrs`, `code-anchors`.
 - Body sections: **Context** / **Decision** / **Consequences** /
   **Code anchors**. Target 80–160 lines.
@@ -50,7 +50,7 @@ decision*, not *change of any kind*.
 
 ## Related
 
-- `specs/SPEC_AUDIT.md` — the audit that surfaced most of these decisions.
-- `yarn docs:check` — validates frontmatter on both `specs/` and
-  `docs/decisions/`; ADRs additionally must have an integer
-  `adr-number` that matches the `NNN-` filename prefix.
+- `docs/README.md` — the audit that surfaced most of these decisions.
+- `yarn docs:check` — validates frontmatter on `docs/reference/`,
+  `docs/proposals/`, and `docs/decisions/`; ADRs additionally must
+  have an integer `adr-number` that matches the `NNN-` filename prefix.

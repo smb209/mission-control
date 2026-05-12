@@ -36,9 +36,9 @@ This codifies what worked for `scope-keyed-sessions` (`docs/archive/scope-keyed-
 For feature `<feature-name>`, create:
 
 ```
-specs/<feature-name>.md                       # the spec (pre-existing or co-authored)
-specs/<feature-name>-build-plan.md            # this doc — design + slices + PR plan
-specs/<feature-name>-validation/
+docs/reference/<feature-name>.md                       # the spec (pre-existing or co-authored)
+docs/archive/<feature-name>-build-plan.md (after ship)            # this doc — design + slices + PR plan
+docs/archive/<feature-name>-validation/ (after ship)
   README.md                                    # index + how to read
   00-baseline-observations.md                  # state before any slice lands
   01-pre-check-initialization.md               # destructive runbook to reach known-good baseline

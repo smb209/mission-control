@@ -19,7 +19,7 @@ related-specs:
   - pm-revertable-proposals.md — downstream PM proposal flow this dispatches into
 ---
 
-> **Superseded by [specs/audit-pipeline.md](../../specs/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
+> **Superseded by [docs/reference/audit-pipeline.md](../../docs/reference/audit-pipeline.md) on 2026-05-11.** Retained for historical context.
 
 # Audit → PM bridge via `audit_verdict` note kind
 

@@ -427,7 +427,12 @@ mission-control/
 │       ├── master-orchestrator.ts # Cross-cutting dispatch coordination
 │       ├── learner.ts             # Knowledge base / learner
 │       └── …
-├── docs/
+├── docs/                          # System documentation — start at docs/README.md
+│   ├── README.md                  # Index of the docs tree
+│   ├── reference/                 # Current shipped capability docs (status: current)
+│   ├── proposals/                 # Aspirational designs (status: aspirational)
+│   ├── decisions/                 # ADRs (immutable once accepted)
+│   ├── archive/                   # Historical: shipped build plans, validation, superseded
 │   ├── AGENT_PROTOCOL.md
 │   ├── HOW-THE-PIPELINE-WORKS.md
 │   ├── MCP-QUICKSTART.md
@@ -435,8 +440,7 @@ mission-control/
 │   ├── PREVIEW_TEST_FLOW.md
 │   └── PREVIEW_TEST_FINDINGS.md
 ├── mcp-launcher/                  # MCP smoke-test launcher
-├── scripts/                       # Test harnesses, db checkpoints, integration runners
-└── specs/                         # Feature specs
+└── scripts/                       # Test harnesses, db checkpoints, integration runners
 ```
 
 ---

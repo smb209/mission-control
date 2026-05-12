@@ -6,7 +6,7 @@
  *   2. story → task(draft)  (creates task in status='draft', writes initial audit row)
  *   3. task(draft) → task(inbox) (status flip, event emitted)
  *
- * See specs/roadmap-and-pm-spec.md §3.3 (Promotion edges) and §13 (Workflow
+ * See docs/reference/roadmap-and-pm-spec.md §3.3 (Promotion edges) and §13 (Workflow
  * unification). Phase 1 already implemented attachTaskToInitiative and
  * moveTaskToInitiative — those are reused here, not reimplemented.
  *

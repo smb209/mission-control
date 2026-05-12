@@ -6,7 +6,7 @@
  * narrower subset by passing a `groups` array to `buildServer`.
  *
  * See `src/lib/mcp/server.ts` for group definitions and
- * `specs/mcp-surface-review.md` for why we split.
+ * `docs/archive/mcp-surface-review.md` for why we split.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

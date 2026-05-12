@@ -10,7 +10,7 @@
  * are NOT mounted here — the PM uses propose_changes to mutate the
  * roadmap, not direct write tools.
  *
- * See `specs/mcp-surface-review.md` for the route split rationale.
+ * See `docs/archive/mcp-surface-review.md` for the route split rationale.
  */
 
 import { NextRequest } from 'next/server';

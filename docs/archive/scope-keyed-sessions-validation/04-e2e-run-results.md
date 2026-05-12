@@ -169,7 +169,7 @@ incomplete.
 
 **For the spec stack (PRs #148–153):** No code changes required. The
 architecture is sound; behavior matches §1–§5 of
-`specs/scope-keyed-sessions.md`.
+`docs/reference/scope-keyed-sessions.md`.
 
 **For Phase G (deferred follow-up):**
 1. Migrate `pm-resolver.ts` so PM dispatches automatically route via

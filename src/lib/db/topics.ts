@@ -6,7 +6,7 @@
  * JSON array string (`tags_json`); we round-trip to string[] at the
  * DAO boundary so callers don't deal with serialization.
  *
- * See specs/research-area.md "Topic" + docs/archive/research-area-build-plan.md §2.
+ * See docs/reference/research-area.md "Topic" + docs/archive/research-area-build-plan.md §2.
  */
 
 import { v4 as uuidv4 } from 'uuid';

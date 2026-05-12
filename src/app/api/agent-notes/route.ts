@@ -5,7 +5,7 @@
  * filter shape so UI consumers can fetch initial state, then keep
  * themselves up to date via SSE `agent_note_*` events.
  *
- * See specs/scope-keyed-sessions.md §3 for context. POST is intentionally
+ * See docs/reference/scope-keyed-sessions.md §3 for context. POST is intentionally
  * not exposed — agents create notes via MCP `take_note`, not via HTTP.
  */
 

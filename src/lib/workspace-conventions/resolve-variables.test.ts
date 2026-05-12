@@ -1,7 +1,7 @@
 /**
  * Variable resolver — unit tests.
  *
- * See specs/workspace-conventions-structured.md §3.
+ * See docs/reference/workspace-conventions-structured.md §3.
  */
 
 import test from 'node:test';

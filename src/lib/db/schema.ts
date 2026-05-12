@@ -901,7 +901,7 @@ CREATE TABLE IF NOT EXISTS debug_config (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Roadmap planning layer (see specs/roadmap-and-pm-spec.md §5).
+-- Roadmap planning layer (see docs/reference/roadmap-and-pm-spec.md §5).
 -- Initiatives form a tree (parent_initiative_id). Almost every column is
 -- nullable so a backlog item can be a one-line title with no other detail.
 CREATE TABLE IF NOT EXISTS initiatives (

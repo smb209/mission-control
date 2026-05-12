@@ -43,7 +43,7 @@ export async function register() {
 
   // Register the recurring_jobs scheduler — wakes every 60s, picks
   // jobs whose next_run_at has elapsed, dispatches each via
-  // dispatchScope. See specs/scope-keyed-sessions.md §4.
+  // dispatchScope. See docs/reference/scope-keyed-sessions.md §4.
   try {
     const { ensureRecurringSchedulerStarted } = await import(
       '@/lib/agents/recurring-scheduler'
