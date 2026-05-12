@@ -47,12 +47,12 @@ Every gate is **"run this exact command, submit raw output."** The convoy hook p
 | FM1 | Verification gate is pure self-attestation | `src/lib/task-governance.ts:30` `checkStageEvidence` only counts deliverable/activity rows |
 | FM2 | Workspace isolation skipped — Builder ran on `main` | `src/lib/workspace-isolation.ts` exists; dispatch path doesn't always invoke or doesn't enforce |
 | FM3 | Roll-call id lost across stage-isolated session boundary | `src/lib/rollcall.ts:274` `recordRollCallReplyIfMatch` — pattern match only, not propagated |
-| FM4 | `agent_not_coordinator` on first `get_task` for assigned agent | `src/lib/mcp/tools.ts:280-342` |
+| FM4 | `agent_not_coordinator` on first `get_task` for assigned agent | `src/lib/mcp/groups/work.ts` (`get_task` handler) |
 | FM5 | Stale `status_reason` survives forward transitions | `src/lib/services/task-status.ts:149-153` partial fix already (`/^failed:/i` only) |
 | FM6 | `yarn test` stalls with no harness budget / fallback | `package.json:10` test script unbounded |
 | FM7 | Path-scheme drift (`/app/...` vs host paths) in deliverables | `src/lib/deliverables/storage.ts` |
 | FM8 | Builder "spray scaffolding" — no end-to-end wiring trace | role doc absent (`src/lib/agents/` has only `pm-soul.md`) |
-| FM9 | Free-text completion summaries hide verification asymmetry | `register_deliverable` `src/lib/mcp/tools.ts:366-412` |
+| FM9 | Free-text completion summaries hide verification asymmetry | `register_deliverable` in `src/lib/mcp/groups/work.ts` |
 | FM-T | No role-scoped test budget — Builder runs full regression | role-doc + harness-side change |
 | FM-A | Self-attestation everywhere — no run-and-forward primitive | new `submit_evidence` MCP tool |
 
@@ -109,7 +109,7 @@ If isolation fails (no git, no rsync target), fail the dispatch — don't fall b
 
 ### E. ACL widening (FM4)
 
-`get_task` in `src/lib/mcp/tools.ts:280` currently requires coordinator scope. Add: assigned agent of the task (any stage's role mapping) can read the task without elevation. Implementation: check `tasks.assigned_agent_id == calling_agent_id` OR `task_roles.agent_id == calling_agent_id` before falling through to coordinator gate.
+`get_task` in `src/lib/mcp/groups/work.ts` currently requires coordinator scope. Add: assigned agent of the task (any stage's role mapping) can read the task without elevation. Implementation: check `tasks.assigned_agent_id == calling_agent_id` OR `task_roles.agent_id == calling_agent_id` before falling through to coordinator gate.
 
 ### F. status_reason cleanup (FM5)
 
