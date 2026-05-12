@@ -4064,7 +4064,7 @@ const migrations: Migration[] = [
     id: '075',
     name: 'research_area_phase_1',
     up: (db) => {
-      // Phase 1 of the Research Area (specs/research-area-build-plan.md).
+      // Phase 1 of the Research Area (docs/archive/research-area-build-plan.md).
       //
       // Three additive tables:
       //   - agent_runs    — shared dispatch envelope for non-task agent
@@ -4210,7 +4210,7 @@ const migrations: Migration[] = [
       // Research phase 2: bind a recurring_jobs row to a topic +
       // brief template so the scheduler can dispatch via run-brief
       // instead of dispatchScope. See
-      // specs/research-phase-2-schedules-build-plan.md §3.1.
+      // docs/archive/research-phase-2-schedules-build-plan.md §3.1.
       //
       // Both columns are nullable: a row whose topic_id IS NULL is a
       // pre-phase-2 scope-keyed job and the scheduler keeps using
@@ -4236,7 +4236,7 @@ const migrations: Migration[] = [
     up: (db) => {
       // Extend the mc_sessions.scope_type CHECK constraint to include
       // 'initiative_audit' for the researcher-driven initiative audit
-      // flow. See specs/initiative-investigate.md.
+      // flow. See docs/archive/initiative-investigate.md.
       //
       // SQLite has no ALTER CONSTRAINT, so we rebuild the table.
       const schemaRow = db
@@ -4295,7 +4295,7 @@ const migrations: Migration[] = [
     name: 'workspaces_audit_settings',
     up: (db) => {
       // Workspace-scoped knobs for the initiative audit (subtree) flow.
-      // See specs/initiative-investigate.md §"Decisions" item 1.
+      // See docs/archive/initiative-investigate.md §"Decisions" item 1.
       const cols = db.prepare(`PRAGMA table_info(workspaces)`).all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === 'audit_per_node_timeout_ms')) {
         db.exec(`
@@ -4614,7 +4614,7 @@ const migrations: Migration[] = [
     id: '089',
     name: 'initiative_research_loop',
     up: (db) => {
-      // Substrate for the initiative research loop (specs/initiative-research-loop.md):
+      // Substrate for the initiative research loop (docs/archive/initiative-research-loop.md):
       //   - briefs.initiative_id: lets a brief belong to an initiative so refine/decompose
       //     pull its result into context via the existing read_notes channel.
       //   - briefs.summary: one-liner populated at completion time, used in the suggest

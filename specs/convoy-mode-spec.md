@@ -1,5 +1,7 @@
 # Convoy Mode — Parallel Sub-Task Execution for Mission Control
 
+> **§7 superseded by [coordinator-delegation-via-convoy-spec.md](coordinator-delegation-via-convoy-spec.md) (2026-04-22).** The AI-decomposition flow described in §7 is no longer current. See the linked spec for `spawn_subtask`-based delegation.
+
 **Version:** 1.0  
 **Date:** 2026-03-18  
 **Status:** Draft  
@@ -396,73 +398,11 @@ GET    /api/convoy/{convoyId}/mail          Get all mail in a convoy (for visibi
 
 ## 7. Task Decomposition
 
-### Three Modes
+**Status as of 2026-05-11: SUPERSEDED.** This section originally proposed three decomposition modes (manual / AI / planning-integrated) driven by a `POST /api/tasks/{id}/convoy` endpoint with a `strategy` field, generating sub-tasks from the parent's planning spec.
 
-#### Manual Decomposition
-User explicitly creates sub-tasks in the UI.
+What actually shipped is agent-driven delegation via the `spawn_subtask` MCP tool (`src/lib/mcp/groups/work.ts:1146`), which lets a coordinator agent create or append to a convoy on its own task with a declared Delegation Contract (deliverables, acceptance criteria, SLO, check-in cadence). The `UNIQUE` constraint on `convoys.parent_task_id` shown in §4 was dropped (`src/lib/db/migrations.ts:2110-2118`) so a task can host multiple convoys over its lifetime. The legacy `delegate` tool was removed (see `src/lib/mcp/mcp.test.ts:90`).
 
-```typescript
-// POST /api/tasks/{id}/convoy
-{
-  "strategy": "manual",
-  "subtasks": [
-    { "title": "Build login page", "description": "...", "agent_id": "agent-1" },
-    { "title": "Build dashboard", "description": "...", "agent_id": "agent-2" },
-    { "title": "Build contact form", "description": "...", "agent_id": "agent-3" }
-  ]
-}
-```
-
-#### AI Decomposition
-System calls the planning agent to auto-decompose based on the task spec.
-
-```typescript
-// POST /api/tasks/{id}/convoy
-{
-  "strategy": "ai"
-  // No subtasks needed — AI generates them from the planning spec
-}
-```
-
-The AI decomposition prompt should:
-- Read the parent task's planning spec
-- Identify independent work streams
-- Create sub-tasks that can run in parallel
-- Identify dependencies between sub-tasks (if any)
-- Suggest agent assignments based on role matching
-- Store its reasoning in `decomposition_spec`
-
-#### Planning-Integrated Decomposition
-During the planning phase, the planning agent can identify that a task should be a convoy and pre-generate sub-tasks as part of the spec. When planning completes, the convoy is created automatically.
-
-```typescript
-// In the planning spec output, include:
-{
-  "convoy": true,
-  "subtasks": [
-    { "title": "...", "description": "...", "suggested_role": "developer" },
-    { "title": "...", "description": "...", "suggested_role": "developer", "depends_on": ["subtask-0"] }
-  ]
-}
-```
-
-### Dependency Graph
-
-Sub-tasks can declare dependencies on other sub-tasks:
-
-```typescript
-{
-  "depends_on": ["subtask-id-1", "subtask-id-2"]
-}
-```
-
-A sub-task with dependencies will NOT be dispatched until all dependencies are in `done` status. This allows mixed parallel/sequential workflows:
-
-```
-Sub-task A (no deps) ──→ runs immediately
-Sub-task B (no deps) ──→ runs immediately (parallel with A)
-Sub-task C (depends on A, B) ──→ waits for both, then runs
-```
+Canonical reference: [`coordinator-delegation-via-convoy-spec.md`](coordinator-delegation-via-convoy-spec.md).
 
 ---
 
@@ -532,6 +472,8 @@ This is analogous to Gas Town's `gt prime` (context recovery) and `gt nudge` com
 
 ## 9. Work State Persistence (Checkpoints)
 
+**Status as of 2026-05-11: PARTIAL.** The `work_checkpoints` table shipped per §4, but driver use is light — auto-checkpoints and crash-recovery re-dispatch flow described below are not the primary stall-recovery path in production. Stall detection is now handled per-subtask via the Delegation Contract SLOs in `spawn_subtask`.
+
 ### What Gas Town Does
 
 Gas Town uses **git worktrees** as persistent storage. Each agent's work lives in a git branch. If the agent crashes, the worktree still has all the files.
@@ -584,6 +526,8 @@ Agent picks up where the previous agent left off
 ---
 
 ## 10. Inter-Agent Mailboxes
+
+**Status as of 2026-05-11: SUPERSEDED IN SURFACE.** The `agent_mailbox` table exists, but the active inter-agent communication surface is the `send_mail` MCP tool plus `rollcall_entries`, not the convoy-scoped mailbox endpoints proposed below. Treat this section as historical.
 
 ### Purpose
 

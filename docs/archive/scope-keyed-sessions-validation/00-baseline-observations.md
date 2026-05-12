@@ -157,11 +157,11 @@ Phase A lands and the full plan goes green for the first time.)
 
 **Tonight's deliverables (this commit):**
 - [x] [`specs/scope-keyed-sessions.md`](../scope-keyed-sessions.md) — full spec, 804 lines.
-- [x] [`specs/scope-keyed-sessions-validation/01-pre-check-initialization.md`](01-pre-check-initialization.md) — destructive runbook for fresh-state setup.
-- [x] [`specs/scope-keyed-sessions-validation/02-test-plan.md`](02-test-plan.md) — concrete dispatch scenarios per role.
-- [x] [`specs/scope-keyed-sessions-validation/03-validation-criteria.md`](03-validation-criteria.md) — pass/fail per scenario + global gates.
+- [x] [`docs/archive/scope-keyed-sessions-validation/01-pre-check-initialization.md`](01-pre-check-initialization.md) — destructive runbook for fresh-state setup.
+- [x] [`docs/archive/scope-keyed-sessions-validation/02-test-plan.md`](02-test-plan.md) — concrete dispatch scenarios per role.
+- [x] [`docs/archive/scope-keyed-sessions-validation/03-validation-criteria.md`](03-validation-criteria.md) — pass/fail per scenario + global gates.
 - [x] [`scripts/seed-foia-fixture.ts`](../../scripts/seed-foia-fixture.ts) — idempotent FOIA tree fixture for tests.
-- [x] [`specs/scope-keyed-sessions-validation/00-baseline-observations.md`](00-baseline-observations.md) — this file.
+- [x] [`docs/archive/scope-keyed-sessions-validation/00-baseline-observations.md`](00-baseline-observations.md) — this file.
 
 **For morning review:**
 1. Read the spec — push back on anything that's wrong; the design is

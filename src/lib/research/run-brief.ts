@@ -571,7 +571,7 @@ async function runBriefInternal(briefId: string, options: RunBriefOptions): Prom
 /**
  * First-sentence-of-result summary, capped at 160 chars. Used as the
  * one-liner index entry in the suggest prompt's prior-briefs block.
- * Intentionally simple — see specs/initiative-research-loop-build-plan.md
+ * Intentionally simple — see docs/archive/initiative-research-loop-build-plan.md
  * §D1 (LLM-generate is a deferred follow-up).
  */
 export function extractBriefSummary(resultMd: string | null): string | null {

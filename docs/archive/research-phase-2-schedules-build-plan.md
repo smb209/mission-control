@@ -2,9 +2,9 @@
 
 **Status:** Draft, awaiting operator OK before any code.
 **Spec source:** [specs/research-area.md](research-area.md) §"Schedule".
-**Phase 1 reference:** [specs/research-area-build-plan.md](research-area-build-plan.md).
+**Phase 1 reference:** [docs/archive/research-area-build-plan.md](research-area-build-plan.md).
 **Workflow contract:** [specs/long-unattended-feature-dev.md](long-unattended-feature-dev.md).
-**Validation directory:** [specs/research-phase-2-validation/](research-phase-2-validation/).
+**Validation directory:** [docs/archive/research-phase-2-validation/](research-phase-2-validation/).
 
 ## 1. Goal
 

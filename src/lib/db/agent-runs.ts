@@ -4,7 +4,7 @@
  * Schema added in migration 075. The shared dispatch envelope for
  * non-task agent work; per-kind domain tables (briefs first;
  * sweeps/readiness_checks/comms_drafts/workflow_node_runs later) link
- * via agent_run_id. See specs/research-area-build-plan.md §2.2.
+ * via agent_run_id. See docs/archive/research-area-build-plan.md §2.2.
  *
  * Lifecycle: queued → running → (complete | failed | cancelled).
  * Each transition stamps started_at / completed_at / updated_at as

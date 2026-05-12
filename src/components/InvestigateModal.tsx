@@ -4,7 +4,7 @@
  * Investigate modal — mode-aware (narrow / subtree).
  *
  * PR 3 wired narrow mode through the POST /api/initiatives/:id/investigate
- * endpoint. PR 4 (specs/initiative-investigate.md) extends it for subtree
+ * endpoint. PR 4 (docs/archive/initiative-investigate.md) extends it for subtree
  * mode: the re-audit-policy radio is hidden (subtree always fresh in
  * PR 4), and a pre-flight `?dryrun=1` GET fetches the planned-layers /
  * planned-nodes / concurrency numbers so the modal can render an

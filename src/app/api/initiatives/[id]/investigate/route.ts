@@ -2,7 +2,7 @@
  * POST /api/initiatives/:id/investigate
  *
  * Dispatches a researcher to audit an initiative against reality.
- * See specs/initiative-investigate.md.
+ * See docs/archive/initiative-investigate.md.
  *
  * PR 2: narrow mode (one researcher dispatch).
  * PR 4: subtree mode — MC-driven layered fan-out.

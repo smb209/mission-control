@@ -6,7 +6,7 @@
  * produced and the schedule's run_count advanced.
  *
  * Mirrors RP2.S6.1 in
- * specs/research-phase-2-validation/02-test-plan.md.
+ * docs/archive/research-phase-2-validation/02-test-plan.md.
  */
 
 import test from 'node:test';

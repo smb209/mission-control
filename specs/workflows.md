@@ -1,4 +1,12 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Workflows — Spec (Draft)
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. The `/workflows` route renders this doc as a placeholder. No schema, MCP tools, or backing code exist yet.
 
 A **visual flowchart editor** for defining structured, reusable, multi-step automations. Nodes are authored in markdown (LLM-interpreted), then progressively *solidified* into deterministic code where possible. The result is a workflow that starts as a sketch and ends as a cheap, fast, debuggable pipeline — without ever leaving the editor.
 

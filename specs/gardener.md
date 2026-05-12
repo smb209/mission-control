@@ -1,4 +1,12 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Gardener — memory curation, seeding, and dissemination
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. No backing code, schema, or agent exists yet. It also depends on the (also-unbuilt) memory layer spec.
 
 ## Why
 

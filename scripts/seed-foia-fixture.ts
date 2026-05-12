@@ -1,7 +1,7 @@
 /**
  * Seeds the canonical FOIA initiative tree fixture used by the
  * scope-keyed-sessions validation pack. See
- * `specs/scope-keyed-sessions-validation/01-pre-check-initialization.md` §6.
+ * `docs/archive/scope-keyed-sessions-validation/01-pre-check-initialization.md` §6.
  *
  * Idempotent: re-running against an existing FOIA workspace updates titles
  * but does not duplicate rows. Safe to run after `yarn db:reset`.

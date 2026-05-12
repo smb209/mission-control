@@ -1,4 +1,12 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Calendar — Spec (Draft)
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. The `/calendar` route renders this doc as a placeholder. No schema, MCP tools, or backing code exist yet.
 
 A unified timeline of **dated obligations and milestones** the project needs to track: regulatory deadlines, releases, recurring filings, stakeholder updates, sweep cadences, vendor contract renewals. Fully addressable via natural language through the PM chat, fed by research briefs and roadmap milestones, and backed by a proactive lookahead agent that surfaces prep work before deadlines arrive.
 

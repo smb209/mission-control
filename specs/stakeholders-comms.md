@@ -1,4 +1,12 @@
+---
+status: aspirational
+built: false
+last-verified: 2026-05-11
+---
+
 # Stakeholders & Comms — Spec (Draft)
+
+> **Status: aspirational — not yet built.** This doc describes intended behavior. The `/stakeholders` route renders this doc as a placeholder. No schema, MCP tools, or backing code exist yet.
 
 Track **who needs to know what, when**, and let agents draft the updates. Closes the "what should I tell people this week" loop without auto-sending anything.
 

@@ -8,7 +8,7 @@ Today the narrow `initiative_audit` flow (one researcher dispatch via
 picks up the finding on the operator's next move — Plan, Decompose, or
 manual `Ask PM to propose` ([src/app/api/initiatives/[id]/ask-pm-from-notes](src/app/api/initiatives/[id]/ask-pm-from-notes/route.ts)).
 
-That's the design called out as "out of scope" in [specs/initiative-investigate.md](initiative-investigate.md):
+That's the design called out as "out of scope" in [docs/archive/initiative-investigate.md](initiative-investigate.md):
 
 > Auto-applying audit findings as proposals (operator decides + clicks Plan).
 

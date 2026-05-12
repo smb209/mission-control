@@ -187,7 +187,7 @@ function buildIdentityPreamble(pm: Agent): string {
  * arrives within the tail window.
  *
  * Mirror of `dispatchPmSynthesized` for the disruption code path. See
- * specs/pm-dispatch-async.md for the architectural rationale.
+ * docs/archive/pm-dispatch-async.md for the architectural rationale.
  *
  * `allowFallback: false` (used by `propose_from_notes`) keeps the strict
  * gateway-required behavior: if the gateway is down we throw

@@ -1037,7 +1037,7 @@ export type SSEEventType =
   | 'agent_note_archived'
   | 'agent_note_restored'
   | 'agent_note_deleted'
-  // Research Area phase 1 (specs/research-area-build-plan.md). Per-brief
+  // Research Area phase 1 (docs/archive/research-area-build-plan.md). Per-brief
   // execution lifecycle. brief_progress fires for streamed chunks /
   // status heartbeats while running so the hub's in-progress lane can
   // animate without polling.

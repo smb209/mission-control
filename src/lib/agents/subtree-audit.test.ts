@@ -1,6 +1,6 @@
 /**
  * Unit tests for the subtree-audit pure helpers
- * (PR 4 of specs/initiative-investigate.md).
+ * (PR 4 of docs/archive/initiative-investigate.md).
  *
  * Covers:
  *   - enumerateLayersBottomUp: skips terminal nodes, layers leaves

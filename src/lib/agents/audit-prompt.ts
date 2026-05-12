@@ -3,7 +3,7 @@
  *
  * Pure function that builds the researcher's trigger_body for one
  * initiative audit dispatch. Skeleton tracks the spec at
- * `specs/initiative-investigate.md` §"Audit prompt template".
+ * `docs/archive/initiative-investigate.md` §"Audit prompt template".
  *
  * For PR 2 we only handle narrow mode. Subtree / roll-up mode lands
  * with PR 4 (it'll add a `childFindings` parameter and a `mode` switch).
