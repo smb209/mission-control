@@ -22,6 +22,8 @@ related-specs:
   - agent-health.md — sibling stall coverage for non-convoy tasks
 ---
 
+> **Superseded by [specs/task-delegation-and-convoys.md](../../specs/task-delegation-and-convoys.md) on 2026-05-11.** Retained for historical context.
+
 # Coordinator Delegation via Convoy — Spec
 
 **Version:** 0.1 (draft)

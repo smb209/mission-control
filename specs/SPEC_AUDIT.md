@@ -11,6 +11,7 @@ Audit of every spec file against current code on `main` (after `feat/audit-actio
 - **2026-05-11 (frontmatter contract)** All 34 active specs now carry YAML frontmatter (`status`, `last-verified`, `audience`, `code-anchors`, `mcp-tools`, `db-tables`, `migrations`, `related-specs`). `scripts/docs-check.ts` validates `code-anchors` paths exist; wired as `yarn docs:check`. CLAUDE.md got a 25-line "Spec Frontmatter Contract" section instructing subagents to update specs in the same PR as code edits to anchor files. Check passes clean: 34/34 frontmatter, 0 violations.
 - **2026-05-11 (body-text cleanup)** Wave-4 surfaced specs whose body prose cited stale paths (`src/lib/mcp/tools.ts` from before the groups split, `src/app/feed/page.tsx` from before scope-keyed-sessions). Fixed in 3 specs; 4th verified clean.
 - **2026-05-11 (audit-pipeline consolidation)** Three audit specs (`subtree-audit-proposals-spec.md`, `audit-actions-and-tracking.md`, `audit-action-recommended.md`) consolidated into a single 943-line `specs/audit-pipeline.md` deep-dive. The three sources archived to `docs/archive/` with supersession banners. 39 inbound references rewritten.
+- **2026-05-11 (task-delegation consolidation)** Three task-delegation specs (`coordinator-delegation-via-convoy-spec.md`, `convoy-mode-spec.md`, `parallel-build-isolation-spec.md`) consolidated into a single 903-line `specs/task-delegation-and-convoys.md` deep-dive (`spawn_subtask`, convoy lifecycle, workspace isolation, evidence gates, escalate_to_parent, checkpoints, mailbox, rollcall). Three sources archived.
 
 Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under [`specs/audit-reports/`](audit-reports/).
 
@@ -25,10 +26,10 @@ Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under 
 
 | Class | Count |
 |---|---|
-| 1. Current & accurate | 21 |
-| 2. Current & aspirational | 11 |
+| 1. Current & accurate | 19 |
+| 2. Current & aspirational | 10 |
 | 3. Feature drift | 0 |
-| 4. Historical / superseded (in `docs/archive/`) | 21 |
+| 4. Historical / superseded (in `docs/archive/`) | 24 |
 | **Total** | **53** |
 
 Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.md`), `autopilot-build-pipeline-spec.md` (merged into `product-autopilot-spec.md`).
@@ -45,8 +46,7 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [autopilot-resilience-and-activity-feed.md](autopilot-resilience-and-activity-feed.md) | 1 | `research_cycles` phase columns + `ideation_cycles` shipped (`migrations.ts:1177-1212`) |
 | [calendar.md](calendar.md) | 2 | Aspirational banner added; `/calendar` is a SpecPage stub |
 | [cascade-rules.md](cascade-rules.md) | 1 | Backed by live guardrail test (`src/lib/db/schema-cascade.test.ts`) |
-| [convoy-mode-spec.md](convoy-mode-spec.md) | 2 | §7 supersession banner added 2026-05-11 (now points to coordinator-delegation-via-convoy); §9 + §10 status notes added; some §8 / §9 driver use still light |
-| [coordinator-delegation-via-convoy-spec.md](coordinator-delegation-via-convoy-spec.md) | 1 | `spawn_subtask` shipped (`work.ts:1146`); `delegate` removed; UNIQUE on `convoys.parent_task_id` dropped (`migrations.ts:2110`) |
+| [task-delegation-and-convoys.md](task-delegation-and-convoys.md) | 1 | **New 2026-05-11** — 903-line canonical consolidating coordinator-delegation + convoy-mode + parallel-build-isolation. Covers `spawn_subtask`, convoy lifecycle, workspace isolation, evidence gates, `escalate_to_parent`, checkpoints, mailbox, rollcall. Three sources archived. |
 | [decisions-assumptions.md](decisions-assumptions.md) | 2 | Aspirational banner added; `/decisions` is a SpecPage stub |
 | [audit-dedupe-followups.md](audit-dedupe-followups.md) | 2 | New 2026-05-11. Owns the two genuinely-open dedupe items: generalize `run_cancelled` guard beyond `take_note`, and close the brief-dispatch dedupe gap (`skip_run_row: true` bypasses `agent_runs`). Parent `dedupe-investigations.md` archived after subagent verified PR #1/#2/#3 all shipped |
 | [pm-diff-conventions.md](pm-diff-conventions.md) | 1 | New 2026-05-11. Canonical reference for the `PmDiff` discriminated union + the 7-step contract for adding a new diff kind. 11-kind inventory with capture/inverter columns. Cites `src/lib/db/pm-proposals.ts` + `src/lib/pm/invertDiff.ts` |
@@ -56,7 +56,6 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [long-unattended-feature-dev.md](long-unattended-feature-dev.md) | 1 | Cited by CLAUDE.md; 4-doc pattern observable in every archived `*-validation/` dir |
 | [mcp-surface-review.md](mcp-surface-review.md) | 4 | Refactor PRs 1, 2, 4, 5 shipped; PR 3/3.5 (openclaw scripts) + PR 6 (PM SOUL doc) status uncertain |
 | [memory-layer.md](memory-layer.md) | 2 | Aspirational banner added; no `memory_entries` table; absorbed `memory.md` intro |
-| [parallel-build-isolation-spec.md](parallel-build-isolation-spec.md) | 1 | Workspace columns + `workspace-isolation.ts` shipped; strict mode enforced via autonomous-flow-tightening |
 | [pm-chat-prompt.md](pm-chat-prompt.md) | 1 | Rewritten 2026-05-11 — both PR A (SOUL + 1-at-a-time UI) AND PR B (`steerSession`/`abortSession`, `pm_dispatch_in_flight` SSE) verified shipped (`src/lib/openclaw/client.ts:636,645`, `src/lib/agents/pm-dispatch.ts:419-458`, `src/app/(app)/pm/page.tsx:374-405`). One open sub-scope: queue-mode UI affordance (cite `client.ts:629-634`) |
 | [pm-revertable-proposals.md](pm-revertable-proposals.md) | 2 | Slices 1/2/4 + capture pattern + revert pipeline shipped; verify activity-timeline UI matches §3 |
 | [product-autopilot-spec.md](product-autopilot-spec.md) | 2 | Phase 1+2 shipped; Phase 3 ops + Phase 4 full-loop aspirational. Now incorporates merged `autopilot-build-pipeline-spec.md` content |
@@ -91,6 +90,9 @@ All class 4. Listed for reference:
 - [subtree-audit-proposals-spec.md](../docs/archive/subtree-audit-proposals-spec.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
 - [audit-actions-and-tracking.md](../docs/archive/audit-actions-and-tracking.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
 - [audit-action-recommended.md](../docs/archive/audit-action-recommended.md) — archived 2026-05-11 (superseded by `audit-pipeline.md`)
+- [coordinator-delegation-via-convoy-spec.md](../docs/archive/coordinator-delegation-via-convoy-spec.md) — archived 2026-05-11 (superseded by `task-delegation-and-convoys.md`)
+- [convoy-mode-spec.md](../docs/archive/convoy-mode-spec.md) — archived 2026-05-11 (superseded by `task-delegation-and-convoys.md`)
+- [parallel-build-isolation-spec.md](../docs/archive/parallel-build-isolation-spec.md) — archived 2026-05-11 (superseded by `task-delegation-and-convoys.md`)
 
 ## Consolidation progress
 
