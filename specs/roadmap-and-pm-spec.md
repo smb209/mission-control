@@ -1,4 +1,28 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/pm-agent.ts
+  - src/lib/agents/pm-standup.ts
+  - src/lib/agents/pm-dispatch.ts
+  - src/lib/db/pm-proposals.ts
+  - src/lib/db/migrations.ts (initiatives, pm_proposals, owner_availability, task_initiative_history)
+mcp-tools: [propose_changes, ...]
+db-tables: [initiatives, initiative_dependencies, pm_proposals, owner_availability, task_initiative_history, initiative_parent_history]
+---
+
 # Roadmap & PM Agent — Project Planning Layer for Mission Control
+
+> **Status: current as of 2026-05-11.** Canonical reference for PM/Roadmap design (phases 1-6 + Polish B all shipped).
+>
+> **Post-merge addenda (layered on top of this spec):**
+> - [pm-revertable-proposals.md](pm-revertable-proposals.md) — revert pipeline, `reverts_proposal_id`, `/pm/activity` UI.
+> - [audit-action-recommended.md](audit-action-recommended.md) — `audit_verdict` note kind + opt-in auto-spawn (PR #326).
+> - [pm-diff-conventions.md](pm-diff-conventions.md) — canonical contract for adding new PmDiff kinds (sibling reference).
+> - [pm-chat-prompt.md](pm-chat-prompt.md) — PR A SOUL/UI changes layered on top.
+> - [pm-steer-abort.md](pm-steer-abort.md) — aspirational steer/abort/in-flight visibility.
+> - Archived: [pm-confirm-task-done.md](../docs/archive/pm-confirm-task-done.md), [pm-dispatch-async.md](../docs/archive/pm-dispatch-async.md), [roadmap-navigation-polish.md](../docs/archive/roadmap-navigation-polish.md).
 
 **Version:** 0.2
 **Date:** 2026-04-24

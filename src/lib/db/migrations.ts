@@ -4501,7 +4501,7 @@ const migrations: Migration[] = [
       // dispatch-scope. Lets tools (take_note first; later
       // register_deliverable, log_activity, propose_changes) refuse
       // writes from a worker whose run was already cancelled.
-      // See specs/dedupe-investigations.md.
+      // See docs/archive/dedupe-investigations.md.
       const cols = db.prepare(`PRAGMA table_info(agent_runs)`).all() as Array<{ name: string }>;
       if (!cols.some((c) => c.name === 'run_group_id')) {
         db.exec(`ALTER TABLE agent_runs ADD COLUMN run_group_id TEXT`);

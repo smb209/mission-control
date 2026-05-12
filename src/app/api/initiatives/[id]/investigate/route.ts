@@ -61,7 +61,7 @@ const InvestigateSchema = z.object({
    * When `true`, cancel any in-flight `initiative_audit` runs on this
    * initiative before dispatching a fresh one. When `false` (default),
    * an in-flight audit causes the route to refuse with 409. See
-   * specs/dedupe-investigations.md §2.
+   * docs/archive/dedupe-investigations.md §2.
    */
   supersede: z.boolean().optional().default(false),
 });
@@ -86,7 +86,7 @@ function findInFlightAudits(initiativeId: string): AgentRun[] {
  * Find the most recent successfully-completed `initiative_audit` for
  * this initiative. Surfaced via `?dryrun=1` so the modal can render a
  * soft "audited recently" cooldown hint. See
- * specs/dedupe-investigations.md §3.
+ * docs/archive/dedupe-investigations.md §3.
  */
 function lastCompleteAudit(initiativeId: string): { run_id: string; completed_at: string | null } | null {
   const rows = queryAll<{ id: string; completed_at: string | null }>(
@@ -208,7 +208,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
     const { mode, guidance, reaudit, supersede } = parsed.data;
 
-    // Concurrent-audit guard (specs/dedupe-investigations.md §2). An
+    // Concurrent-audit guard (docs/archive/dedupe-investigations.md §2). An
     // operator clicking "Audit" twice in a row used to silently spawn
     // duplicates; require an explicit `supersede` to cancel the
     // in-flight run, otherwise refuse with 409 + the live run's id so

@@ -7,6 +7,7 @@ Audit of every spec file against current code on `main` (after `feat/audit-actio
 - **2026-05-11 (post-merge of #326)** `audit-action-recommended.md` reclassified 2 → 1.
 - **2026-05-11 (drift-fix pass)** 17 historical artifacts moved to `docs/archive/`; `memory.md` + `autopilot-build-pipeline-spec.md` merged & deleted; `agent-health-overhaul-spec.md` rewritten and renamed to `agent-health.md`; `workspace-conventions-structured.md` §6 rewritten to match shipped `refine.ts`; `convoy-mode-spec.md` §7 banner + body replaced; 7 aspirational specs got `status: aspirational` frontmatter banners.
 - **2026-05-11 (research deep-dive)** `research-area.md` rewritten as a 598-line comprehensive reference for the entire research capability; reclassified 2 → 1.
+- **2026-05-11 (extractions wave)** New canonical specs: `pm-diff-conventions.md` (616 lines) + `audit-dedupe-followups.md` (81 lines). `dedupe-investigations.md` archived. `roadmap-and-pm-spec.md` got "post-merge addenda" callout. `pm-chat-prompt.md` rewritten to reflect both PR A *and* PR B shipped (audit had it as half-aspirational — code says otherwise). Two more class-2 specs reclassified to class 1.
 
 Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under [`specs/audit-reports/`](audit-reports/).
 
@@ -21,11 +22,11 @@ Detailed per-cluster reports (from the initial audit, pre-drift-fix) live under 
 
 | Class | Count |
 |---|---|
-| 1. Current & accurate | 20 |
-| 2. Current & aspirational | 13 |
+| 1. Current & accurate | 23 |
+| 2. Current & aspirational | 11 |
 | 3. Feature drift | 0 |
-| 4. Historical / superseded (in `docs/archive/`) | 17 |
-| **Total** | **50** |
+| 4. Historical / superseded (in `docs/archive/`) | 18 |
+| **Total** | **52** |
 
 Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.md`), `autopilot-build-pipeline-spec.md` (merged into `product-autopilot-spec.md`).
 
@@ -45,7 +46,8 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [convoy-mode-spec.md](convoy-mode-spec.md) | 2 | §7 supersession banner added 2026-05-11 (now points to coordinator-delegation-via-convoy); §9 + §10 status notes added; some §8 / §9 driver use still light |
 | [coordinator-delegation-via-convoy-spec.md](coordinator-delegation-via-convoy-spec.md) | 1 | `spawn_subtask` shipped (`work.ts:1146`); `delegate` removed; UNIQUE on `convoys.parent_task_id` dropped (`migrations.ts:2110`) |
 | [decisions-assumptions.md](decisions-assumptions.md) | 2 | Aspirational banner added; `/decisions` is a SpecPage stub |
-| [dedupe-investigations.md](dedupe-investigations.md) | 2 (residual) | PR #1 shipped; #2 (dispatch-time 409 guard) and #3 (UI cooldown) still open by design. Keep as live backlog until extracted to `audit-dedupe-followups.md` |
+| [audit-dedupe-followups.md](audit-dedupe-followups.md) | 2 | New 2026-05-11. Owns the two genuinely-open dedupe items: generalize `run_cancelled` guard beyond `take_note`, and close the brief-dispatch dedupe gap (`skip_run_row: true` bypasses `agent_runs`). Parent `dedupe-investigations.md` archived after subagent verified PR #1/#2/#3 all shipped |
+| [pm-diff-conventions.md](pm-diff-conventions.md) | 1 | New 2026-05-11. Canonical reference for the `PmDiff` discriminated union + the 7-step contract for adding a new diff kind. 11-kind inventory with capture/inverter columns. Cites `src/lib/db/pm-proposals.ts` + `src/lib/pm/invertDiff.ts` |
 | [foia-pipeline.md](foia-pipeline.md) | 2 | Zero code: no `foia_*` tables, no FOIA MCP tools, no `/requests`/`/agencies` routes |
 | [gardener.md](gardener.md) | 2 | Aspirational banner added; no gardener/curator agent; depends on unbuilt memory-layer |
 | [jobs-in-progress.md](jobs-in-progress.md) | 2 | Migrations 080/081 + API + UI shipped; PR 5 sidebar pip / drill-down status uncertain |
@@ -53,7 +55,7 @@ Two specs deleted in the drift-fix pass: `memory.md` (merged into `memory-layer.
 | [mcp-surface-review.md](mcp-surface-review.md) | 4 | Refactor PRs 1, 2, 4, 5 shipped; PR 3/3.5 (openclaw scripts) + PR 6 (PM SOUL doc) status uncertain |
 | [memory-layer.md](memory-layer.md) | 2 | Aspirational banner added; no `memory_entries` table; absorbed `memory.md` intro |
 | [parallel-build-isolation-spec.md](parallel-build-isolation-spec.md) | 1 | Workspace columns + `workspace-isolation.ts` shipped; strict mode enforced via autonomous-flow-tightening |
-| [pm-chat-prompt.md](pm-chat-prompt.md) | 2 | PR A (SOUL prompt + 1-at-a-time UI) wired; PR B (`steerSession`/`abortSession`, in-flight SSE) absent |
+| [pm-chat-prompt.md](pm-chat-prompt.md) | 1 | Rewritten 2026-05-11 — both PR A (SOUL + 1-at-a-time UI) AND PR B (`steerSession`/`abortSession`, `pm_dispatch_in_flight` SSE) verified shipped (`src/lib/openclaw/client.ts:636,645`, `src/lib/agents/pm-dispatch.ts:419-458`, `src/app/(app)/pm/page.tsx:374-405`). One open sub-scope: queue-mode UI affordance (cite `client.ts:629-634`) |
 | [pm-revertable-proposals.md](pm-revertable-proposals.md) | 2 | Slices 1/2/4 + capture pattern + revert pipeline shipped; verify activity-timeline UI matches §3 |
 | [product-autopilot-spec.md](product-autopilot-spec.md) | 2 | Phase 1+2 shipped; Phase 3 ops + Phase 4 full-loop aspirational. Now incorporates merged `autopilot-build-pipeline-spec.md` content |
 | [review-stage-robustness-spec.md](review-stage-robustness-spec.md) | 1 | All six slices (0–5) shipped — roster gate, strict gating, governance hooks, escalate_to_parent, autobounce, role souls |
@@ -84,6 +86,7 @@ All class 4. Listed for reference:
 - [review-stage-robustness-build-plan.md](../docs/archive/review-stage-robustness-build-plan.md) + [validation/](../docs/archive/review-stage-robustness-validation/)
 - [roadmap-navigation-polish.md](../docs/archive/roadmap-navigation-polish.md)
 - [scope-keyed-sessions-validation/](../docs/archive/scope-keyed-sessions-validation/)
+- [dedupe-investigations.md](../docs/archive/dedupe-investigations.md) — archived 2026-05-11; live followups extracted to `audit-dedupe-followups.md`
 
 ## Consolidation progress
 
@@ -103,10 +106,10 @@ All class 4. Listed for reference:
 - `roadmap-and-pm-spec.md` — add "post-merge addenda" pointer at top to layered specs (audit-action-recommended, pm-revertable-proposals).
 
 **New specs to write (gaps)**:
-- `audit-dedupe-followups.md` — capture dedupe-investigations' deferred PR #2 (dispatch-time 409 guard) and PR #3 (UI cooldown) before the parent is archived.
-- `pm-diff-conventions.md` — promote the `PmDiffCapture` / `invertDiff` pattern that three specs all re-describe (`pm-revertable-proposals`, archived `pm-confirm-task-done`, `audit-action-recommended`) into one reference doc.
+- ✅ `audit-dedupe-followups.md` (extracted 2026-05-11; parent archived).
+- ✅ `pm-diff-conventions.md` (extracted 2026-05-11).
+- ~~`pm-steer-abort.md`~~ — not needed; PR B turned out to be shipped. `pm-chat-prompt.md` rewritten to reflect.
 - `foia-pipeline-build-plan.md` — when work resumes, pair the aspirational `foia-pipeline.md` with a structured-feature-dev build plan per CLAUDE.md.
-- `pm-steer-abort.md` — split `pm-chat-prompt.md` PR B into its own spec; PR A is shipped, PR B has no other home.
 
 **Out-of-band fold-in (deferred)**:
 - Fold `audit-action-recommended.md` into `subtree-audit-proposals-spec.md` as a §4.6 "audit_verdict (narrow-mode bridge)" subsection. Both are class 1; consolidation is cosmetic, not a drift fix.

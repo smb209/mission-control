@@ -250,7 +250,7 @@ export async function dispatchScope(input: DispatchScopeInput): Promise<Dispatch
         // Persist the briefing's run_group_id on the agent_runs row so
         // downstream tools (take_note, …) can map a worker's
         // run_group_id back to its run and refuse writes after cancel.
-        // See specs/dedupe-investigations.md.
+        // See docs/archive/dedupe-investigations.md.
         run_group_id,
       });
     } catch (err) {
