@@ -21,6 +21,8 @@ related-specs:
 
 # Convoy Mode — Parallel Sub-Task Execution for Mission Control
 
+> **Superseded by [specs/task-delegation-and-convoys.md](../../specs/task-delegation-and-convoys.md) on 2026-05-11.** Retained for historical context.
+>
 > **§7 superseded by [coordinator-delegation-via-convoy-spec.md](coordinator-delegation-via-convoy-spec.md) (2026-04-22).** The AI-decomposition flow described in §7 is no longer current. See the linked spec for `spawn_subtask`-based delegation.
 
 **Version:** 1.0  

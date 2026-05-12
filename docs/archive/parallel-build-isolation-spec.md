@@ -15,6 +15,8 @@ related-specs:
   - product-autopilot-spec.md — repo_url / build_mode source for isolation strategy
 ---
 
+> **Superseded by [specs/task-delegation-and-convoys.md](../../specs/task-delegation-and-convoys.md) on 2026-05-11.** Retained for historical context.
+
 # Parallel Build Isolation — Same-App Concurrent Task Execution
 
 **Version:** 1.0  
