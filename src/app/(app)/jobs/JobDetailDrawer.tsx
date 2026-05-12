@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { showAlertDialog } from '@/lib/show-alert';
 import Drawer from '@/components/Drawer';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import Link from 'next/link';
@@ -270,12 +271,12 @@ export default function JobDetailDrawer({ jobId, onClose, onReset }: JobDetailDr
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        window.alert(`Reset failed: ${body.error || `HTTP ${res.status}`}`);
+        showAlertDialog('Reset failed', body.error || `HTTP ${res.status}`);
       } else {
         onReset?.();
       }
     } catch (err) {
-      window.alert(`Reset failed: ${err instanceof Error ? err.message : String(err)}`);
+      showAlertDialog('Reset failed', err instanceof Error ? err.message : String(err));
     } finally {
       setResetting(false);
       setResetPending(false);

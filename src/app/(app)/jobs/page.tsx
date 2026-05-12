@@ -15,6 +15,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { showAlertDialog } from '@/lib/show-alert';
 import { Activity, Clock, Calendar, History, AlertTriangle, Copy, Check } from 'lucide-react';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -213,13 +214,11 @@ export default function JobsPage() {
         const body = await res.json().catch(() => ({}));
         // Route through the global alert shim — same affordance as the
         // rest of the app per UI conventions in CLAUDE.md.
-        window.alert(
-          `Cancel failed: ${body.error || `HTTP ${res.status}`}`,
-        );
+        showAlertDialog('Cancel failed', body.error || `HTTP ${res.status}`);
       }
       // 200 path: the 2s poll picks up the cancelled status; no manual mutation needed.
     } catch (err) {
-      window.alert(`Cancel failed: ${err instanceof Error ? err.message : String(err)}`);
+      showAlertDialog('Cancel failed', err instanceof Error ? err.message : String(err));
     } finally {
       setCancelling(false);
       setPendingCancel(null);
