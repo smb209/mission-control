@@ -1,3 +1,24 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/task-governance.ts:30
+  - src/lib/workspace-isolation.ts
+  - src/lib/rollcall.ts:274
+  - src/lib/mcp/groups/work.ts
+  - src/lib/services/task-status.ts:149-153
+  - src/lib/deliverables/storage.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts:33
+  - src/lib/agents/pm-soul.md
+mcp-tools: [submit_evidence, get_task, register_deliverable]
+db-tables: [task_evidence, tasks, task_roles, agents]
+related-specs:
+  - convoy-mode-spec.md — convoy primitive that these gates run on top of
+  - coordinator-delegation-via-convoy-spec.md — spawn_subtask Delegation Contract
+  - agent-health.ts — stall thresholds referenced by gate budgets
+---
+
 # Autonomous Flow Tightening
 
 Status: draft

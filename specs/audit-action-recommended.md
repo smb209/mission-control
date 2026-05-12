@@ -1,3 +1,24 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/audit-prompt.ts
+  - src/lib/agents/audit-proposals/schemas.ts
+  - src/lib/mcp/groups/core.ts
+  - src/lib/db/agent-notes.ts
+  - src/lib/db/workspaces.ts
+  - src/app/api/initiatives/[id]/investigate/route.ts
+  - src/app/api/initiatives/[id]/ask-pm-from-notes/route.ts
+  - src/lib/db/migrations.ts
+mcp-tools: [take_note]
+db-tables: [agent_notes, workspaces, pm_proposals]
+related-specs:
+  - subtree-audit-proposals-spec.md — defines audit_manifest/audit_proposal/audit_synthesis kinds this extends with audit_verdict
+  - audit-actions-and-tracking.md — manual Ask-PM path this auto-spawn complements
+  - pm-revertable-proposals.md — downstream PM proposal flow this dispatches into
+---
+
 # Audit → PM bridge via `audit_verdict` note kind
 
 ## Motivation

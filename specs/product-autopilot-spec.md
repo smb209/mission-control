@@ -1,3 +1,24 @@
+---
+status: aspirational
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/autopilot/swipe.ts:284
+  - src/lib/autopilot/research.ts
+  - src/lib/autopilot/ideation.ts
+  - src/lib/autopilot/stall-detection.ts
+  - src/lib/db/migrations.ts:1238-1279
+  - src/app/api/tasks/[id]/dispatch/route.ts
+db-tables: [products, research_cycles, ideas, swipe_history, preference_models, maybe_pool, product_feedback, cost_events, cost_caps, product_schedules, tasks]
+migrations:
+  - "019 products + autopilot columns on tasks — migrations.ts:1238-1279"
+  - "cost_caps table — migrations.ts:985"
+related-specs:
+  - autopilot-resilience-and-activity-feed.md — Phase 1/2 resilience + live feed
+  - convoy-mode-spec.md — pipeline phase used for parallel builds
+  - parallel-build-isolation-spec.md — workspace isolation for auto_build tasks
+---
+
 # Product Autopilot — Autonomous Product Development Engine for Mission Control
 
 **Version:** 1.0  

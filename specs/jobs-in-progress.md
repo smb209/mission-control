@@ -1,3 +1,20 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/db/agent-runs.ts
+  - src/lib/agents/dispatch-scope.ts
+  - src/lib/agents/subtree-audit.ts
+  - src/app/api/jobs/route.ts
+  - src/lib/db/migrations.ts
+db-tables: [agent_runs, mc_sessions, pm_proposals, recurring_jobs]
+related-specs:
+  - audit-actions-and-tracking.md — per-initiative filter + InitiativeRunsStrip consume this surface
+  - subtree-audit-proposals-spec.md — uses parent_run_id linkage defined here
+  - autopilot-resilience-and-activity-feed.md — sibling resilience surface
+---
+
 # Jobs in Progress
 
 A unified queue surface for every in-flight agent dispatch in the workspace — PM chats, plan/decompose dispatches, initiative audits (narrow + subtree fan-out nodes), recurring-job ticks, brief runs. Operators currently have no single place to see "what is the system doing right now," and parallel dispatches (subtree audits dispatch 5+ researchers; recurring jobs tick alongside live PM turns) make the gap visible.

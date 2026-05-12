@@ -94,6 +94,32 @@ Native modals block the JS event loop and aren't drivable from
 preview/automation tooling, which surfaces as flaky verification runs.
 Always thread the dialog through component state instead.
 
+## Spec Frontmatter Contract
+
+Active specs under `specs/` may carry YAML frontmatter with `status`,
+`last-verified`, `code-anchors`, `mcp-tools`, `db-tables`, and
+`related-specs`. Files without frontmatter are skipped, so the
+codebase can migrate gradually.
+
+Before editing a file under `src/`, grep `specs/` for that path
+appearing in a `code-anchors` block:
+
+```
+grep -rln "src/lib/foo.ts" specs/
+```
+
+If a spec references the file, update the spec in the same PR — at
+minimum bump `last-verified` to today's date. Fix the anchor too if
+the referenced code moved or was deleted.
+
+Frontmatter validity is enforced by `yarn docs:check`: `status` must
+be one of `current` / `aspirational` / `archived` / `superseded`,
+`last-verified` must be `YYYY-MM-DD`, and every `code-anchors` path
+must exist on disk (line-range suffixes like `:42-58` are stripped
+before the existence check). New reference docs should adopt this
+pattern — `status: aspirational` for design specs not yet implemented,
+`status: current` once the code lands.
+
 ## Verification (MCP Preview)
 
 After multi-file changes that touch UI or MCP tool surfaces, verify before opening a PR:

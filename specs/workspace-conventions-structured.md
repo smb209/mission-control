@@ -1,3 +1,25 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/workspace-conventions/refine.ts
+  - src/lib/workspace-conventions/resolve-variables.ts
+  - src/app/api/workspaces/[id]/refine-conventions/route.ts
+  - src/lib/workspace-templates/index.ts
+  - src/lib/workspace-templates/code.md
+  - src/lib/db/migrations.ts:4441
+  - src/app/api/tasks/[id]/dispatch/route.ts
+mcp-tools: [get_workspace_context]
+db-tables: [workspaces]
+migrations:
+  - "082 workspaces_local_repo_init — migrations.ts:4441"
+  - "083 workspaces_repo_fields — migrations.ts:4460"
+related-specs:
+  - timestamp-handling.md — shares workspaces table + settings page
+  - scope-keyed-sessions.md — dispatch route consumer of resolved context
+---
+
 # Workspace Conventions: Structured Fields + Templates + Refine
 
 The workspace `conventions` text on `/workspace/<slug>/settings` is one freeform markdown blob. Operators end up rewriting the same boilerplate per project (paths, repo URL, base branch, package manager, port reservations). The blob also gets duplicated visually inside `<AgentPromptPreview>` on the same page, eating vertical space in narrow viewports.

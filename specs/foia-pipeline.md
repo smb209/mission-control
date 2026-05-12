@@ -1,3 +1,19 @@
+---
+status: aspirational
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors-target:
+  - src/lib/db/foia.ts                  # planned DAO module
+  - src/lib/mcp/tools.ts                # planned MCP tool registrations
+  - src/app/(app)/requests/page.tsx     # planned list+detail UI
+  - src/app/(app)/agencies/page.tsx     # planned profiles UI
+db-tables: [foia_agencies, foia_statutes, foia_requests, foia_correspondence]
+mcp-tools: [search_agencies, upsert_agency, lookup_statute, enqueue_contract_target, list_contract_queue, create_foia_request, update_foia_draft, request_for_approval, mark_submitted, record_response, list_open_requests, list_overdue_requests]
+related-specs:
+  - workspace-conventions-structured.md — workspace_id scoping pattern this depends on
+  - scope-keyed-sessions.md — gateway/agent isolation this builds on
+---
+
 # FOIA Pipeline — Agent-Managed Discover → Draft → Submit → Track
 
 **Status:** Draft v0

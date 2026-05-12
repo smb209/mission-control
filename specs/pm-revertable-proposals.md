@@ -1,3 +1,23 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/pm/invertDiff.ts
+  - src/lib/db/pm-proposals.ts
+  - src/app/api/pm/proposals/[id]/revert/route.ts
+  - src/app/(app)/pm/activity/page.tsx
+  - src/app/(app)/pm/page.tsx
+  - src/app/(app)/initiatives/page.tsx
+  - src/components/pm/ProposalDiffsList.tsx
+  - src/lib/db/migrations.ts
+db-tables: [pm_proposals, initiative_parent_history, task_initiative_history, rollback_history]
+related-specs:
+  - pm-diff-conventions.md — PmDiff kinds enumerated here are inverted
+  - audit-action-recommended.md — audit-spawned proposals flow through this revert surface
+  - roadmap-and-pm-spec.md — broader PM mutation model
+---
+
 # PM action audit log + revertable proposals
 
 ## Why

@@ -1,3 +1,18 @@
+---
+status: aspirational
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/dispatch-subagent.ts
+  - src/lib/mcp/groups/work.ts
+  - src/lib/mcp/server.ts
+mcp-tools: [spawn_subagent, submit_subagent_report, request_extension, send_mail, fetch_mail, whoami, log_activity]
+db-tables: [subagent_runs, mail]
+related-specs:
+  - coordinator-delegation-via-convoy-spec.md — sibling fan-out primitive for task-level delegation
+  - convoy-mode-spec.md — convoy machinery the spawn pattern is modeled against
+---
+
 # Subagent orchestration — MCP-compliant context offloading and fan-out
 
 ## Why

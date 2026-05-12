@@ -1,3 +1,34 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/dispatch-scope.ts
+  - src/lib/agents/briefing.ts
+  - src/lib/db/agent-notes.ts
+  - src/lib/db/mc-sessions.ts
+  - src/lib/db/recurring-jobs.ts
+  - src/lib/agents/pm-dispatch.ts
+  - src/lib/agents/pm-resolver.ts
+  - src/lib/mcp/groups/core.ts
+  - src/app/api/tasks/[id]/dispatch/route.ts
+  - src/components/notes/NotesRail.tsx
+  - src/app/(app)/workspace/[slug]/feed
+  - src/lib/db/migrations.ts:3722
+  - src/lib/db/migrations.ts:3749
+mcp-tools: [take_note, read_notes, mark_note_consumed, archive_note, get_workspace_context]
+db-tables: [agent_role_overrides, agent_notes, mc_sessions, recurring_jobs, agents, workspaces, tasks, initiatives]
+migrations:
+  - "064 agent_role_overrides — migrations.ts:3722"
+  - "065 agent_notes — migrations.ts:3749"
+  - "066 mc_sessions — migrations.ts:3790"
+  - "067 recurring_jobs — migrations.ts:3826"
+related-specs:
+  - scope-keyed-sessions-phase-j.md — subagent-spawn extension of this design
+  - cascade-rules.md — FK rules for the new tables
+  - workspace-conventions-structured.md — briefing context source
+---
+
 # Scope-Keyed Sessions — End of Durable Worker Agents
 
 ## Why

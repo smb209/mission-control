@@ -1,3 +1,29 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/agents/subtree-audit.ts
+  - src/lib/agents/audit-survey.ts
+  - src/lib/agents/audit-synthesizer.ts
+  - src/lib/agents/audit-prompt.ts
+  - src/lib/agents/audit-proposals/schemas.ts
+  - src/lib/agents/audit-proposals/operator-actions.ts
+  - src/lib/agents/audit-proposals/operator-review.ts
+  - src/lib/db/agent-notes.ts
+  - src/lib/mcp/groups/core.ts
+  - src/lib/mcp/shared.ts
+  - src/app/api/initiatives/[id]/investigate/route.ts
+  - src/app/api/initiatives/[id]/investigate/resynthesize/route.ts
+mcp-tools: [take_note]
+db-tables: [agent_notes, agent_runs, initiatives]
+related-specs:
+  - audit-action-recommended.md — extends with audit_verdict kind for narrow-mode bridge
+  - audit-actions-and-tracking.md — operator surfaces for the notes this produces
+  - coordinator-delegation-via-convoy-spec.md — Delegation-Contract pattern reused here
+  - convoy-mode-spec.md — sibling agent-initiated fan-out substrate (not used here)
+---
+
 # Subtree Audit — Structured Proposals
 
 **Version:** 0.1 (draft)

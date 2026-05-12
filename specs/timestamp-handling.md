@@ -1,3 +1,21 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/timestamps.ts
+  - src/components/Time.tsx
+  - src/lib/db/index.ts
+  - src/lib/db/migrations.ts:4520
+  - src/app/api/workspaces/[id]/route.ts
+db-tables: [workspaces]
+migrations:
+  - "086 workspaces_display_timezone — migrations.ts:4520"
+related-specs:
+  - workspace-conventions-structured.md — shares workspaces table + settings page
+  - cascade-rules.md — DB-layer discipline
+---
+
 # Timestamp handling: UTC drift fix + display timezone setting
 
 ## Why

@@ -1,3 +1,24 @@
+---
+status: superseded
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - src/lib/convoy.ts
+  - src/lib/agent-health.ts
+  - src/lib/stall-detection.ts
+  - src/lib/mcp/groups/work.ts
+  - src/lib/workspace-isolation.ts
+  - src/components/ConvoyTab.tsx
+  - src/app/api/tasks/[id]/convoy/route.ts
+  - src/app/api/tasks/[id]/route.ts
+mcp-tools: [spawn_subtask, send_mail, get_task, register_deliverable, update_task_status]
+db-tables: [convoys, convoy_subtasks, agent_health, work_checkpoints, agent_mailbox, tasks]
+related-specs:
+  - coordinator-delegation-via-convoy-spec.md — supersedes §7 (agent-driven delegation)
+  - agent-health.md — health-monitoring section §8 (partly shipped)
+  - parallel-build-isolation-spec.md — filesystem complement
+---
+
 # Convoy Mode — Parallel Sub-Task Execution for Mission Control
 
 > **§7 superseded by [coordinator-delegation-via-convoy-spec.md](coordinator-delegation-via-convoy-spec.md) (2026-04-22).** The AI-decomposition flow described in §7 is no longer current. See the linked spec for `spawn_subtask`-based delegation.

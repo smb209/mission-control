@@ -1,3 +1,19 @@
+---
+status: current
+last-verified: 2026-05-11
+audience: ai-subagents-primary, operator-secondary
+code-anchors:
+  - CLAUDE.md
+  - docs/archive/scope-keyed-sessions-validation/
+  - docs/archive/autonomous-flow-validation-plan.md
+  - docs/archive/research-area-validation/
+  - docs/archive/review-stage-robustness-validation/
+  - docs/archive/initiative-research-loop-validation/
+related-specs:
+  - scope-keyed-sessions.md — canonical example of this pattern
+  - autonomous-flow-tightening-spec.md — second example of this pattern
+---
+
 # Long Unattended Feature Development — Workflow Template
 
 A reusable pattern for shipping a multi-slice feature with **agent-driven validation** between slices, where the operator reviews the final result instead of every intermediate diff.
