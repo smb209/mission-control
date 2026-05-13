@@ -43,8 +43,9 @@ Use the `sc-mission-control__*` tool surface — never raw HTTP.
 
 **On PASS**:
 1. `register_deliverable({ agent_id, task_id, title, deliverable_type })` — the test report itself counts.
-2. `log_activity({ agent_id, task_id, activity_type: 'completed', message: 'PASS — <summary>' })`.
-3. `update_task_status({ agent_id, task_id, status: '<next_status from briefing>' })` — typically `verification` or `review`.
+2. `submit_evidence({ agent_id, task_id, gate: 'test_full', command, exit_code: 0, stdout, stderr, artifact_paths: [<screenshots, log files>] })` — **REQUIRED before `update_task_status`** when the convoy contract sets `required_evidence_gates: ['test_full']` (the default for spawned tester subtasks). The forward-move evidence gate in `task-status.ts` rejects the transition otherwise and the task silently stalls. `stdout` should be the full output of the test runner you actually ran (e.g. `yarn test`, your headless-browser driver's verdict, or a synthesized summary like `PASS — 14/14 criteria met` if no test runner output applies).
+3. `log_activity({ agent_id, task_id, activity_type: 'completed', message: 'PASS — <summary>' })`.
+4. `update_task_status({ agent_id, task_id, status: '<next_status from briefing>' })` — typically `verification` or `review`. If MC returns `evidence_gate`, you skipped step 2 — go back and submit `test_full` first.
 
 **On FAIL**: skip the status transition.
 1. (Optional but encouraged) `submit_evidence({ agent_id, task_id, gate: 'runtime_ui', command, exit_code, stdout, stderr, artifact_paths })` with screenshots so the next builder run sees the receipts.
