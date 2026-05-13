@@ -130,6 +130,10 @@ export async function POST(request: NextRequest) {
         `ride in the same PR by the same role, fuse them. Do not emit ` +
         `"task 2 and 3 can be done together by the same implementer" — that is the ` +
         `decomposer confessing it over-fragmented; collapse them instead. ` +
+        `Each task's \`description\` must stand alone: lead with one sentence ` +
+        `restating the parent purpose, then state the concrete deliverable, then ` +
+        `flag peer-interface boundaries (shared file paths, types, names) so the ` +
+        `implementer composes cleanly with siblings without coordinating mid-flight. ` +
         `See SOUL.md "Decompose a story into tasks" for the full granularity contract. ` +
         `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
         `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,

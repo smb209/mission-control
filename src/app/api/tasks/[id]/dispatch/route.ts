@@ -29,6 +29,7 @@ import {
   type RoleName,
 } from '@/lib/gates/config';
 import { formatRoleSoulSection } from '@/lib/agents/role-souls';
+import { getInitiative } from '@/lib/db/initiatives';
 import { dispatchScope } from '@/lib/agents/dispatch-scope';
 import { dispatchSubagent } from '@/lib/agents/dispatch-subagent';
 import {
@@ -1002,7 +1003,56 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
       console.warn('[Dispatch] workspace context lookup failed:', (err as Error).message);
     }
 
-    const taskMessage = `${workspaceConventionsSection}${priorityEmoji} **${headline}**
+    // Story context — if the task is bound to an initiative (typical
+    // for PM-decomposed tasks), prepend the parent's title/description
+    // and the sibling task titles so the dispatched agent can ground
+    // its work in the wider intent rather than relying on the bare
+    // task row alone. Without this block the coordinator only sees
+    // title + description and has to call MCP lookups (or guess) to
+    // recover why the task exists. Bounded: parent description capped
+    // at 600 chars, sibling list capped at 10 titles.
+    let storyContextSection = '';
+    try {
+      const initiativeId = (task as Task & { initiative_id?: string | null }).initiative_id;
+      if (initiativeId) {
+        const initiative = getInitiative(initiativeId, { includeTasks: true });
+        if (initiative) {
+          const parent = initiative.parent_initiative_id
+            ? getInitiative(initiative.parent_initiative_id)
+            : null;
+          const trimDesc = (s: string | null | undefined, n: number) =>
+            !s ? '' : (s.length > n ? s.slice(0, n).trimEnd() + '…' : s);
+          const siblings = (initiative.tasks ?? [])
+            .filter(t => t.id !== task.id)
+            .slice(0, 10);
+          const lines: string[] = ['## Story context', ''];
+          lines.push(`This task belongs to ${initiative.kind} **"${initiative.title}"** (id: ${initiative.id}).`);
+          if (initiative.description) {
+            lines.push('', `> ${trimDesc(initiative.description, 600).replace(/\n+/g, ' ')}`);
+          }
+          if (parent) {
+            lines.push('', `Part of ${parent.kind} **"${parent.title}"** (id: ${parent.id}).`);
+          }
+          if (siblings.length > 0) {
+            lines.push('', 'Sibling tasks under the same initiative:');
+            for (const s of siblings) {
+              lines.push(`- ${s.title} _(${s.status})_`);
+            }
+            lines.push('');
+            lines.push(
+              'Your scope is *this task only* — do not absorb sibling work. ' +
+              'But align with peers where the interface meets (shared types, ' +
+              'naming, file boundaries) so the pieces compose.',
+            );
+          }
+          storyContextSection = lines.join('\n') + '\n\n---\n\n';
+        }
+      }
+    } catch (err) {
+      console.warn('[Dispatch] story context lookup failed:', (err as Error).message);
+    }
+
+    const taskMessage = `${workspaceConventionsSection}${storyContextSection}${priorityEmoji} **${headline}**
 
 **Title:** ${task.title}
 ${task.description ? `**Description:** ${task.description}\n` : ''}
