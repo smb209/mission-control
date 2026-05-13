@@ -125,7 +125,12 @@ export async function POST(request: NextRequest) {
         `See SOUL.md "Ingest recent audit findings".\n\n` +
         `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
         `\`create_task_under_initiative\` diff per task, all targeting initiative_id='${parent.id}'. ` +
-        `Each task should be focused enough to land in a single PR. ` +
+        `Each task = one PR by one role, independently reviewable. ` +
+        `Bias toward FEWER, FATTER tasks — if two candidate tasks would naturally ` +
+        `ride in the same PR by the same role, fuse them. Do not emit ` +
+        `"task 2 and 3 can be done together by the same implementer" — that is the ` +
+        `decomposer confessing it over-fragmented; collapse them instead. ` +
+        `See SOUL.md "Decompose a story into tasks" for the full granularity contract. ` +
         `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
         `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
     });
