@@ -221,7 +221,7 @@ export default function ProposalDetailPage({
               render the InFlightProposalCard instead of the synthetic proposal
               card. The card subscribes to SSE events and transitions to
               replaced/synth_only automatically. */}
-            {proposal.dispatch_state === 'pending_agent' ? (
+            {proposal.dispatch_state === 'pending_agent' && proposal.status === 'draft' ? (
               <InFlightProposalCard
                 proposalId={proposal.id}
                 workspaceId={proposal.workspace_id}

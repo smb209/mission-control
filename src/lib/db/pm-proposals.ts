@@ -852,7 +852,16 @@ export function supersedeWithAgentProposal(
       `SELECT trigger_text FROM pm_proposals WHERE id = ?`,
       [synthRowId],
     );
-    run(`UPDATE pm_proposals SET status = 'superseded' WHERE id = ?`, [synthRowId]);
+    // Flip the placeholder's dispatch_state too — leaving it on
+    // 'pending_agent' after supersede leaves /pm's in-flight card
+    // gate (proposal.dispatch_state === 'pending_agent') matching a
+    // proposal that's no longer in flight, so the chat thread renders
+    // a stuck in-flight card next to the real agent row's card. See
+    // the InFlightProposalCard wiring in src/app/(app)/pm/page.tsx.
+    run(
+      `UPDATE pm_proposals SET status = 'superseded', dispatch_state = 'agent_complete' WHERE id = ?`,
+      [synthRowId],
+    );
     const sets: string[] = ['parent_proposal_id = ?', 'trigger_kind = ?', 'dispatch_state = ?'];
     const vals: unknown[] = [synthRowId, intent.trigger_kind, 'agent_complete'];
     if (intent.target_initiative_id) {
@@ -950,9 +959,12 @@ export function tryAdoptOrphanedPlaceholder(
     // an orphan. If a concurrent reconciler already linked it, the
     // UPDATE matches zero rows and we bail without touching the agent
     // row.
+    // Flip the placeholder's dispatch_state to 'agent_complete' alongside
+    // the supersede so the /pm in-flight render gate stops matching it.
+    // See supersedeWithAgentProposal for the same fix on the fast path.
     const stmt = db.prepare(
       `UPDATE pm_proposals
-          SET status = 'superseded'
+          SET status = 'superseded', dispatch_state = 'agent_complete'
         WHERE id = ?
           AND status = 'draft'
           AND dispatch_state = 'synth_only'
