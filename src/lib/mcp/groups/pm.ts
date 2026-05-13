@@ -176,11 +176,22 @@ export function registerPmTools(server: McpServer): void {
       annotations: { destructiveHint: false, openWorldHint: false },
     },
     async (args) => safeWrap(() => {
+      // Some LLM tool-use serializers (and the relay path between the
+      // gateway and our MCP server) double-escape newline / tab chars,
+      // so impact_md arrives with literal "\n" (two characters) instead
+      // of an actual newline. Unescape on the way in so the proposal
+      // page's ReactMarkdown renders paragraph breaks rather than the
+      // string "\n" inline with the prose. Conservative: only the
+      // canonical JSON whitespace escapes — leaves \\, \", \uXXXX, and
+      // anything else untouched.
+      const unescapeWhitespace = (s: string): string =>
+        s.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+
       const created = createProposal({
         workspace_id: args.workspace_id,
         trigger_text: args.trigger_text,
         trigger_kind: args.trigger_kind,
-        impact_md: args.impact_md,
+        impact_md: unescapeWhitespace(args.impact_md),
         proposed_changes: args.changes as PmDiff[],
         plan_suggestions: args.plan_suggestions ?? null,
         parent_proposal_id: args.parent_proposal_id ?? null,
