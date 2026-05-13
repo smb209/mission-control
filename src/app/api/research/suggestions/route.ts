@@ -6,6 +6,7 @@ import {
   type SuggestionStatus,
 } from '@/lib/db/research-suggestions';
 import { generateSuggestions } from '@/lib/research/suggest';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,12 @@ export async function GET(request: NextRequest) {
       initiative_id: initiativeIdParam,
     }));
   } catch (error) {
-    console.error('Failed to list research_suggestions:', error);
+    logApiError({
+      route: '/api/research/suggestions',
+      method: 'GET',
+      status: 500,
+      error,
+    });
     return NextResponse.json({ error: 'Failed to list suggestions' }, { status: 500 });
   }
 }
@@ -90,8 +96,13 @@ export async function POST(request: NextRequest) {
       { status: 201 },
     );
   } catch (error) {
-    console.error('Failed to generate research suggestions:', error);
     const msg = error instanceof Error ? error.message : 'Failed to generate suggestions';
+    logApiError({
+      route: '/api/research/suggestions',
+      method: 'POST',
+      status: 500,
+      error,
+    });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

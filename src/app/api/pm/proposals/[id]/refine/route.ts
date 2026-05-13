@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import { getProposal, refineProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { dispatchPm, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
@@ -379,9 +380,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         const { run: del } = await import('@/lib/db');
         del('DELETE FROM pm_proposals WHERE id = ?', [child.id]);
       } catch (cleanupErr) {
-        console.warn(
-          '[refine] orphan child cleanup failed:',
-          (cleanupErr as Error).message,
+        serverLog.warn(
+          'pm-refine',
+          `orphan child cleanup failed: ${(cleanupErr as Error).message}`,
         );
       }
       throw innerErr;
@@ -391,7 +392,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to refine proposal';
-    console.error('Failed to refine proposal:', err);
+    logApiError({ route: '/api/pm/proposals/[id]/refine', method: 'POST', status: 500, error: err });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

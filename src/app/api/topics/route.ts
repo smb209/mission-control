@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import {
   createTopic,
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
     const includeArchived = searchParams.get('include') === 'archived';
     return NextResponse.json(listTopics(workspaceId, { includeArchived }));
   } catch (error) {
-    console.error('Failed to list topics:', error);
+    logApiError({ route: '/api/topics', method: 'GET', status: 500, error });
     return NextResponse.json({ error: 'Failed to list topics' }, { status: 500 });
   }
 }
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof TopicValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error('Failed to create topic:', error);
+    logApiError({ route: '/api/topics', method: 'POST', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to create topic';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

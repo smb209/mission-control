@@ -17,6 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import {
   acceptProposal,
@@ -145,7 +146,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           },
         });
       } catch (err) {
-        console.warn('[pm-accept] chat insert failed:', (err as Error).message);
+        serverLog.warn('pm-accept', `chat insert failed: ${(err as Error).message}`);
       }
 
       return NextResponse.json({
@@ -156,7 +157,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to apply suggestions';
-      console.error('Failed to apply plan_initiative suggestions:', err);
+      logApiError({ route: '/api/pm/proposals/[id]/accept', method: 'POST', status: 500, error: err, metadata: { phase: 'apply_plan_initiative', proposal_id: id } });
       return NextResponse.json({ error: msg }, { status: 500 });
     }
   }
@@ -198,7 +199,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           });
         }
       } catch (err) {
-        console.warn('[pm-accept] chat insert failed:', (err as Error).message);
+        serverLog.warn('pm-accept', `chat insert failed: ${(err as Error).message}`);
       }
     }
 
@@ -208,7 +209,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to accept proposal';
-    console.error('Failed to accept proposal:', err);
+    logApiError({ route: '/api/pm/proposals/[id]/accept', method: 'POST', status: 500, error: err, metadata: { proposal_id: id } });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

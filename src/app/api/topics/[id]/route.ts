@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import {
   archiveTopic,
@@ -68,7 +69,7 @@ export async function PATCH(
     if (error instanceof TopicValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error('Failed to update topic:', error);
+    logApiError({ route: '/api/topics/[id]', method: 'PATCH', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to update topic';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

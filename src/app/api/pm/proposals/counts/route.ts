@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { countProposalsByStatus } from '@/lib/db/pm-proposals';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
     const counts = countProposalsByStatus(workspaceId);
     return NextResponse.json(counts);
   } catch (err) {
-    console.error('[proposals/counts] failed:', err);
+    logApiError({ route: '/api/pm/proposals/counts', method: 'GET', status: 500, error: err });
     return NextResponse.json({ error: 'count failed' }, { status: 500 });
   }
 }

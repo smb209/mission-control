@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { rejectProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to reject proposal';
-    console.error('Failed to reject proposal:', err);
+    logApiError({ route: '/api/pm/proposals/[id]/reject', method: 'POST', status: 500, error: err, metadata: { proposal_id: id } });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

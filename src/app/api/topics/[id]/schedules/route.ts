@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import { getTopic } from '@/lib/db/topics';
 import {
@@ -79,7 +80,7 @@ export async function POST(
     if (error instanceof RecurringJobValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error('Failed to create schedule:', error);
+    logApiError({ route: '/api/topics/[id]/schedules', method: 'POST', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to create schedule';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

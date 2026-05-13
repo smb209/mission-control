@@ -18,6 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import { getInitiative } from '@/lib/db/initiatives';
 import { synthesizeDecompose } from '@/lib/agents/pm-agent';
@@ -157,7 +158,7 @@ export async function POST(request: NextRequest) {
         context: ctx,
       });
     } catch (err) {
-      console.warn('[pm-decompose] chat insert failed:', (err as Error).message);
+      serverLog.warn('pm-decompose', `chat insert failed: ${(err as Error).message}`);
     }
 
     return NextResponse.json({ proposal }, { status: 201 });
@@ -166,7 +167,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to decompose initiative';
-    console.error('Failed to decompose initiative:', err);
+    logApiError({ route: '/api/pm/decompose-initiative', method: 'POST', status: 500, error: err });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
