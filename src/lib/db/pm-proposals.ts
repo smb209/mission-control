@@ -1648,6 +1648,15 @@ export interface RefineProposalResult {
   parent: PmProposal;
   /** The new (still-empty) draft slot. The dispatch path fills it. */
   child: PmProposal;
+  /**
+   * False when an existing draft child for this parent was returned
+   * instead of creating a new one (server-side dedupe of double-fires —
+   * client-side disable guards aren't sufficient when the route hangs
+   * 60–180s on `await dispatch.completion` and the operator clicks
+   * again). The caller must skip the dispatch step in that case to
+   * avoid layering a second in-flight LLM run on the same slot.
+   */
+  created: boolean;
 }
 
 /**
@@ -1659,6 +1668,11 @@ export interface RefineProposalResult {
  * In v1 the new draft starts with empty impact + empty changes — the
  * caller (`/api/pm/proposals/[id]/refine` route) then triggers the
  * synthesize/LLM path which rewrites both fields.
+ *
+ * Dedupe: if a draft child of `parentId` already exists, return it
+ * (`created: false`). The refine route's `await dispatch.completion`
+ * stalls 60–180s, and a second submit during that window otherwise
+ * creates a second `_(refining…)_` slot that never settles.
  */
 export function refineProposal(
   parentId: string,
@@ -1670,6 +1684,20 @@ export function refineProposal(
     throw new PmProposalValidationError(
       `proposal ${parentId} already accepted; cannot refine`,
     );
+  }
+
+  const existingDraft = queryOne<{ id: string }>(
+    `SELECT id FROM pm_proposals
+       WHERE parent_proposal_id = ? AND status = 'draft'
+       ORDER BY created_at DESC LIMIT 1`,
+    [parentId],
+  );
+  if (existingDraft) {
+    return {
+      parent,
+      child: getProposal(existingDraft.id)!,
+      created: false,
+    };
   }
 
   const childId = uuidv4();
@@ -1700,5 +1728,5 @@ export function refineProposal(
     );
   })();
 
-  return { parent: getProposal(parentId)!, child: getProposal(childId)! };
+  return { parent: getProposal(parentId)!, child: getProposal(childId)!, created: true };
 }
