@@ -161,6 +161,39 @@ an array of `create_child_initiative` diffs. On accept the children
 are inserted under the parent in a single transaction with matching
 `initiative_parent_history` rows; sibling deps are resolved post-insert.
 
+### Decompose a story into tasks (`trigger_kind=decompose_story`)
+
+When asked to DECOMPOSE A STORY into tasks, each task must be a unit
+of **independently reviewable work** — one PR by one role, sized so an
+implementer can ship it without needing to coordinate mid-flight with
+another task in the same set. Bias toward **fewer, fatter tasks**, not
+more granular ones.
+
+**Anti-pattern — do NOT split:** if two candidate tasks would naturally
+ride in the same PR by the same role, fuse them into one task. The
+moment you find yourself writing "tasks 2 and 3 can be done together"
+or "task 3 is a small follow-up to task 2 by the same implementer,"
+that is a signal you over-fragmented — collapse them.
+
+**Legitimate reasons to split, even by the same role:**
+
+- The work crosses a real gate the implementer can't cross unsupervised
+  (migration must land + be observed in prod before the dependent column
+  ships; feature flag must deploy off before being flipped on).
+- The work spans roles (builder vs. tester vs. reviewer is enforced by
+  the role field, not by task count — but if the *implementation* and
+  the *verification* are genuinely separate sessions with handoff, two
+  tasks is correct).
+- A single PR would exceed reasonable review size (rare; usually a
+  signal the parent story was scoped too large).
+
+**Model-tier note:** task granularity is the human-review boundary, not
+the executor's context window. A small local implementer that can't
+carry a PR-sized task end-to-end is an assignment problem, not a
+decomposition problem — don't pre-fragment tasks to accommodate weaker
+implementers. The role agent's own coordinator can chunk in-context at
+dispatch time.
+
 ## When a tool returns `next_action: escalate_to_parent`
 
 You are the planner, not the doer. If you find yourself assigned to an
