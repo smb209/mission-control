@@ -24,7 +24,7 @@ import { sendAgentMail } from '@/lib/services/agent-mailbox';
 import { saveKnowledge, searchKnowledge } from '@/lib/services/knowledge';
 import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import { spawnDelegationSubtask } from '@/lib/convoy';
+import { spawnDelegationSubtask, dispatchReadyConvoySubtasks } from '@/lib/convoy';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { upsertSession, type ScopeType } from '@/lib/db/mc-sessions';
 import {
@@ -98,7 +98,17 @@ async function acceptSubtaskImpl(args: { agent_id: string; subtask_id: string })
   const convoyId = queryOne<{ convoy_id: string }>(
     'SELECT convoy_id FROM convoy_subtasks WHERE id = ?', [args.subtask_id],
   )?.convoy_id;
-  if (convoyId) checkConvoyCompletion(convoyId);
+  if (convoyId) {
+    checkConvoyCompletion(convoyId);
+    // Release any siblings whose depends_on now resolves. Subtasks
+    // spawned with unsatisfied deps stay in 'inbox' (see spawn_subtask
+    // dep gate); this is the matching release path. Best-effort — a
+    // dispatch failure surfaces in the convoy view, not as an accept
+    // error, since the accept itself already succeeded.
+    void dispatchReadyConvoySubtasks(convoyId).catch(err => {
+      console.warn('[update_subtask:accept] dispatchReadyConvoySubtasks failed:', (err as Error).message);
+    });
+  }
 
   return textResult(`Accepted subtask ${args.subtask_id}.`, {
     subtask_id: args.subtask_id,
@@ -1481,6 +1491,52 @@ export function registerWorkTools(server: McpServer): void {
         activityType: 'updated',
         message: `[delegation_spawned] peer=${peer.name} role=${peerRoleForLog}${peerGatewayForLog ? ` gateway_id=${peerGatewayForLog}` : ''} addressed_via=${resolvedVia} child_task=${spawn.childTaskId} due_at=${spawn.dueAt} slice="${args.slice.replace(/"/g, "'")}"`,
       });
+
+      // Dep gate: if any depends_on_subtask_ids aren't done yet, leave
+      // the child task in 'inbox' so dispatchReadyConvoySubtasks (called
+      // from acceptSubtaskImpl when a parent dep completes) picks it up
+      // later. Without this gate every spawn_subtask immediately ran
+      // its briefing through the gateway regardless of declared
+      // dependencies — tester/reviewer briefings landed before the
+      // builder branch even existed.
+      const depIds = args.depends_on_subtask_ids ?? [];
+      const unsatisfiedDeps = depIds.length > 0
+        ? queryAll<{ id: string; task_status: string }>(
+            `SELECT cs.id, t.status as task_status
+               FROM convoy_subtasks cs JOIN tasks t ON t.id = cs.task_id
+              WHERE cs.id IN (${depIds.map(() => '?').join(',')})`,
+            depIds,
+          ).filter(r => r.task_status !== 'done').map(r => r.id)
+        : [];
+
+      if (unsatisfiedDeps.length > 0) {
+        logActivity({
+          taskId: args.task_id,
+          actingAgentId: args.agent_id,
+          activityType: 'updated',
+          message: `[delegation_queued] child_task=${spawn.childTaskId} awaiting_deps=${unsatisfiedDeps.join(',')}`,
+        });
+        const payload = {
+          subtask_id: spawn.subtaskId,
+          child_task_id: spawn.childTaskId,
+          convoy_id: spawn.convoyId,
+          peer: {
+            id: peer.id,
+            name: peer.name,
+            role: peerRoleForLog,
+            gateway_agent_id: peer.gateway_agent_id,
+            addressed_via: resolvedVia,
+          },
+          dispatched_at: null,
+          due_at: spawn.dueAt,
+          checkin_interval_minutes: checkinInterval,
+          awaiting_deps: unsatisfiedDeps,
+        };
+        return textResult(
+          `Queued subtask ${spawn.subtaskId} to ${peer.name} (role: ${peerRoleForLog}). Awaiting ${unsatisfiedDeps.length} dependenc${unsatisfiedDeps.length === 1 ? 'y' : 'ies'}; dispatches automatically when each dep is accepted.`,
+          payload,
+        );
+      }
 
       // Move child to 'assigned' before dispatch so the dispatch route
       // sees a valid state. The convoy dispatcher does the same.
