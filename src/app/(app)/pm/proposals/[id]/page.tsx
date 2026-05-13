@@ -259,6 +259,22 @@ export default function ProposalDetailPage({
                 </span>
               </div>
 
+              {/* Supersedes-link row. Surfaced here because the /pm chat
+                  hides superseded proposals (they're synth-template
+                  noise once the agent's real proposal lands). The only
+                  way back to a parent is from its child's detail page. */}
+              {proposal.parent_proposal_id && (
+                <div className="px-4 py-2 text-xs border-b border-amber-500/20 text-mc-text-secondary">
+                  Supersedes{' '}
+                  <Link
+                    href={`/pm/proposals/${proposal.parent_proposal_id}`}
+                    className="font-mono text-mc-accent hover:underline"
+                  >
+                    {proposal.parent_proposal_id.slice(0, 8)}…
+                  </Link>
+                </div>
+              )}
+
               {/* Plan suggestions summary for plan_initiative proposals */}
               {suggestions && (
                 <div className="px-4 py-3 border-b border-amber-500/20 grid grid-cols-3 gap-3 text-xs">
