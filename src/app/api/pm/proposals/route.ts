@@ -8,6 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import { listProposals, type PmProposalStatus } from '@/lib/db/pm-proposals';
 import { dispatchPm } from '@/lib/agents/pm-dispatch';
@@ -46,7 +47,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Failed to create proposal';
-    console.error('Failed to create PM proposal:', error);
+    logApiError({ route: '/api/pm/proposals', method: 'POST', status: 500, error });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
@@ -85,7 +86,7 @@ export async function GET(request: NextRequest) {
     );
     return NextResponse.json(visible);
   } catch (error) {
-    console.error('Failed to list PM proposals:', error);
+    logApiError({ route: '/api/pm/proposals', method: 'GET', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to list proposals';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

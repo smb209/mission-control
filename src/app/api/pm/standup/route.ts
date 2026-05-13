@@ -21,6 +21,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import { generateStandup } from '@/lib/agents/pm-standup';
 import { applyDerivation } from '@/lib/roadmap/apply-derivation';
@@ -62,9 +63,9 @@ export async function POST(request: NextRequest) {
         // Don't fail the standup just because derivation hit a snag — the
         // standup synthesizer also recomputes a preview internally and
         // will degrade gracefully.
-        console.warn(
-          '[POST /api/pm/standup] applyDerivation failed (continuing):',
-          (err as Error).message,
+        serverLog.warn(
+          'pm-standup',
+          `applyDerivation failed (continuing): ${(err as Error).message}`,
         );
       }
     }
@@ -94,7 +95,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Failed to generate standup';
-    console.error('Failed to generate PM standup:', err);
+    logApiError({ route: '/api/pm/standup', method: 'POST', status: 500, error: err });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

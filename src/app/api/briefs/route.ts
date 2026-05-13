@@ -5,6 +5,7 @@ import {
   createBriefWithRun,
   listBriefs,
 } from '@/lib/db/briefs';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
       limit,
     }));
   } catch (error) {
-    console.error('Failed to list briefs:', error);
+    logApiError({ route: '/api/briefs', method: 'GET', status: 500, error });
     return NextResponse.json({ error: 'Failed to list briefs' }, { status: 500 });
   }
 }
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof BriefValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error('Failed to create brief:', error);
+    logApiError({ route: '/api/briefs', method: 'POST', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to create brief';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

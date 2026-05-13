@@ -55,7 +55,12 @@ export type DebugEventType =
   // relevant), success/error, duration. Pairs with the dispatch
   // debug-events export so operators can see tool calls inline with
   // chat traffic.
-  | 'mcp.tool_call';
+  | 'mcp.tool_call'
+  // Server-side errors and warnings. Always persisted (regardless of
+  // the collection toggle) so post-hoc review survives HMR reloads
+  // and dev-server restarts. Written via logApiError() / serverLog.
+  | 'api.error'
+  | 'server.warn';
 
 export type DebugEventDirection = 'outbound' | 'inbound' | 'internal';
 
@@ -124,19 +129,28 @@ export function setDebugCollectionEnabled(enabled: boolean): void {
   cachedEnabled = { value: enabled, expires: Date.now() + 2000 };
 }
 
-export function clearDebugEvents(): number {
+export function clearDebugEvents(eventType?: DebugEventType): number {
+  if (eventType) {
+    const before = queryOne<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM debug_events WHERE event_type = ?',
+      [eventType],
+    )?.cnt ?? 0;
+    run('DELETE FROM debug_events WHERE event_type = ?', [eventType]);
+    return before;
+  }
   const before = queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM debug_events')?.cnt ?? 0;
   run('DELETE FROM debug_events');
   return before;
 }
 
 /**
- * Append a debug event. No-op when collection is disabled. Call sites can
- * invoke this unconditionally — the gate is enforced here so instrumentation
- * code stays clean.
+ * Insert one row into debug_events. Internal — `logDebugEvent` and
+ * `logApiError` are the public entry points. `force=true` bypasses the
+ * `debug_config.collection_enabled` gate so errors/warnings survive even
+ * when the operator hasn't opted into verbose capture.
  */
-export function logDebugEvent(input: LogInput): void {
-  if (!isDebugCollectionEnabled()) return;
+function insertDebugEvent(input: LogInput, force: boolean): void {
+  if (!force && !isDebugCollectionEnabled()) return;
 
   const id = uuidv4();
   const now = new Date().toISOString();
@@ -174,6 +188,98 @@ export function logDebugEvent(input: LogInput): void {
     console.error('[DebugLog] insert failed:', err);
   }
 }
+
+/**
+ * Append a debug event. No-op when collection is disabled. Call sites can
+ * invoke this unconditionally — the gate is enforced here so instrumentation
+ * code stays clean.
+ */
+export function logDebugEvent(input: LogInput): void {
+  insertDebugEvent(input, false);
+}
+
+/**
+ * Persist an API-route error regardless of the collection toggle. Use
+ * inside `catch` blocks in API routes so a record survives even when
+ * the dev server's rolling stdout buffer has wrapped.
+ *
+ * `route` is the URL path (e.g. `/api/research/suggestions/[id]`),
+ * `status` is the HTTP status the route is about to return.
+ */
+export function logApiError(input: {
+  route: string;
+  method: string;
+  status: number;
+  error: unknown;
+  requestBody?: unknown;
+  responseBody?: unknown;
+  taskId?: string | null;
+  agentId?: string | null;
+  metadata?: Record<string, unknown>;
+}): void {
+  const errMsg =
+    input.error instanceof Error
+      ? `${input.error.name}: ${input.error.message}`
+      : String(input.error);
+  const stack = input.error instanceof Error ? input.error.stack : undefined;
+  insertDebugEvent(
+    {
+      type: 'api.error',
+      direction: 'internal',
+      taskId: input.taskId ?? null,
+      agentId: input.agentId ?? null,
+      requestBody: input.requestBody,
+      responseBody: input.responseBody,
+      error: errMsg,
+      metadata: {
+        route: input.route,
+        method: input.method,
+        status: input.status,
+        stack,
+        ...input.metadata,
+      },
+    },
+    true,
+  );
+  // Keep the stderr breadcrumb so live `tail -f /tmp/mc-dev.log` still works.
+  console.error(`[api.error] ${input.method} ${input.route} (${input.status}):`, input.error);
+}
+
+/**
+ * Generic always-on logger for server-side error/warn that isn't tied to
+ * a specific API route. Mirrors to `console` so existing `tail -f` flows
+ * keep working, and persists to `debug_events` so post-hoc review
+ * survives HMR reloads. Prefer this over raw `console.error` in API
+ * routes, route helpers, and background workers.
+ */
+export const serverLog = {
+  error(scope: string, error: unknown, metadata?: Record<string, unknown>): void {
+    const errMsg = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+    insertDebugEvent(
+      {
+        type: 'api.error',
+        direction: 'internal',
+        error: errMsg,
+        metadata: { scope, stack, ...metadata },
+      },
+      true,
+    );
+    console.error(`[${scope}]`, error);
+  },
+  warn(scope: string, message: string, metadata?: Record<string, unknown>): void {
+    insertDebugEvent(
+      {
+        type: 'server.warn',
+        direction: 'internal',
+        error: message,
+        metadata: { scope, ...metadata },
+      },
+      true,
+    );
+    console.warn(`[${scope}]`, message);
+  },
+};
 
 export interface DebugEventFilter {
   taskId?: string;
@@ -256,6 +362,12 @@ export function getDebugEventsForExport(filter: DebugEventFilter = {}): DebugEve
   );
 }
 
-export function getDebugEventCount(): number {
+export function getDebugEventCount(eventType?: DebugEventType): number {
+  if (eventType) {
+    return queryOne<{ cnt: number }>(
+      'SELECT COUNT(*) as cnt FROM debug_events WHERE event_type = ?',
+      [eventType],
+    )?.cnt ?? 0;
+  }
   return queryOne<{ cnt: number }>('SELECT COUNT(*) as cnt FROM debug_events')?.cnt ?? 0;
 }

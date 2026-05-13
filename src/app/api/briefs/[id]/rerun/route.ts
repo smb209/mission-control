@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import {
   BriefValidationError,
   createBriefWithRun,
@@ -67,7 +68,7 @@ export async function POST(
     if (error instanceof BriefValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    console.error('Failed to rerun brief:', error);
+    logApiError({ route: '/api/briefs/[id]/rerun', method: 'POST', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to rerun brief';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

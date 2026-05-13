@@ -11,6 +11,24 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // Persistent log file — tees stdout/stderr to disk so post-hoc review
+  // survives HMR reloads, dev-server restarts, and preview-tool buffer
+  // wraps. Gated on MC_LOG_FILE (explicit opt-in) plus a dev default so
+  // local sessions get it for free without filling prod disks. The
+  // implementation lives in `lib/server/log-mirror` so the `node:fs`
+  // import doesn't trip the Edge-runtime analyzer on this file.
+  //
+  // Pairs with the `api.error` channel in `debug_events` (see
+  // `src/lib/debug-log.ts`): structured route errors land in SQLite,
+  // free-form stdout/stderr lands here.
+  try {
+    const { installLogMirror } = await import('@/lib/server/log-mirror');
+    installLogMirror();
+  } catch (err) {
+    // Logging setup must never block boot. Fall back to console only.
+    console.error('[Instrumentation] log-mirror setup failed:', err);
+  }
+
   const { getDb } = await import('@/lib/db');
   try {
     getDb();

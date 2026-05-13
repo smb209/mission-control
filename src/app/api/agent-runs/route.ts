@@ -4,6 +4,7 @@ import {
   type AgentRunKind,
   type AgentRunStatus,
 } from '@/lib/db/agent-runs';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
       }),
     );
   } catch (error) {
-    console.error('Failed to list agent_runs:', error);
+    logApiError({ route: '/api/agent-runs', method: 'GET', status: 500, error });
     return NextResponse.json({ error: 'Failed to list agent_runs' }, { status: 500 });
   }
 }

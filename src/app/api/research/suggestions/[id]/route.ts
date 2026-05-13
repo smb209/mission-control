@@ -10,6 +10,7 @@ import {
 } from '@/lib/db/research-suggestions';
 import { createTopic } from '@/lib/db/topics';
 import { createBriefWithRun } from '@/lib/db/briefs';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,8 +107,19 @@ export async function POST(
       { status: 501 },
     );
   } catch (error) {
-    console.error('Failed to accept research suggestion:', error);
     const msg = error instanceof Error ? error.message : 'Failed to accept suggestion';
+    logApiError({
+      route: '/api/research/suggestions/[id]',
+      method: 'POST',
+      status: 500,
+      error,
+      requestBody: parsed.data,
+      metadata: {
+        suggestion_id: id,
+        suggestion_kind: suggestion.kind,
+        workspace_id: suggestion.workspace_id,
+      },
+    });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

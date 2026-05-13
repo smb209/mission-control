@@ -15,6 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import {
   bulkDeleteProposalsByStatus,
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
       body.statuses as PmProposalStatus[],
     );
   } catch (err) {
-    console.error('[proposals/bulk-delete] failed:', err);
+    logApiError({ route: '/api/pm/proposals/bulk-delete', method: 'POST', status: 500, error: err });
     return NextResponse.json({ error: 'bulk delete failed' }, { status: 500 });
   }
 

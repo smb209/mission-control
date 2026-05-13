@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runBrief } from '@/lib/research/run-brief';
+import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function POST(
     }
     return NextResponse.json(result, { status: 202 });
   } catch (error) {
-    console.error('Failed to run brief:', error);
+    logApiError({ route: '/api/briefs/[id]/run', method: 'POST', status: 500, error });
     const msg = error instanceof Error ? error.message : 'Failed to run brief';
     return NextResponse.json({ error: msg }, { status: 500 });
   }

@@ -34,17 +34,30 @@ export async function GET(request: NextRequest) {
 
   const events = getDebugEvents(filter);
   const total = getDebugEventCount();
+  // Always-on error count so the /debug UI can surface "(N errors)" in
+  // the header even when the current filter scopes the visible list to
+  // something else.
+  const error_count = getDebugEventCount('api.error');
 
-  return NextResponse.json({ events, total });
+  return NextResponse.json({ events, total, error_count });
 }
 
 /**
- * DELETE /api/debug/events — wipe all captured rows. Operator-invoked from
- * the /debug UI. Intentionally not soft-delete; debug data has no
- * auditing value after the operator says "clear".
+ * DELETE /api/debug/events[?event_type=api.error] — wipe captured rows.
+ * Operator-invoked from the /debug UI. Intentionally not soft-delete;
+ * debug data has no auditing value after the operator says "clear".
+ *
+ * `event_type` scopes the delete to one bucket (e.g. clear only
+ * `api.error` rows without losing trace history captured during a
+ * separate collection session).
  */
-export async function DELETE() {
-  const cleared = clearDebugEvents();
-  broadcast({ type: 'debug_events_cleared', payload: { cleared } });
-  return NextResponse.json({ cleared });
+export async function DELETE(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const eventType = (searchParams.get('event_type') as DebugEventType | null) || undefined;
+  const cleared = clearDebugEvents(eventType);
+  broadcast({
+    type: 'debug_events_cleared',
+    payload: eventType ? { cleared, event_type: eventType } : { cleared },
+  });
+  return NextResponse.json({ cleared, event_type: eventType ?? null });
 }

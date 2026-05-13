@@ -31,6 +31,7 @@ import { PmProposalValidationError } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { parseSuggestionsFromImpactMd } from '@/lib/pm/applyPlanInitiativeProposal';
 import { queryOne } from '@/lib/db';
+import { logApiError, serverLog } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -202,7 +203,7 @@ export async function POST(request: NextRequest) {
         context: ctx,
       });
     } catch (err) {
-      console.warn('[pm-plan] chat insert failed:', (err as Error).message);
+      serverLog.warn('pm-plan', `chat insert failed: ${(err as Error).message}`);
     }
 
     // Prefer structured plan_suggestions stored on the proposal (set by the
@@ -226,7 +227,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to plan initiative';
-    console.error('Failed to plan initiative:', err);
+    logApiError({ route: '/api/pm/plan-initiative', method: 'POST', status: 500, error: err });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

@@ -11,6 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { getProposal, deleteProposal } from '@/lib/db/pm-proposals';
 import { broadcast } from '@/lib/events';
 
@@ -47,7 +48,7 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   try {
     deleteProposal(id);
   } catch (err) {
-    console.error('[proposals/delete] failed:', err);
+    logApiError({ route: '/api/pm/proposals/[id]', method: 'DELETE', status: 500, error: err });
     return NextResponse.json({ error: 'Delete failed' }, { status: 500 });
   }
   // Broadcast so the /pm recents list refreshes for any open clients.

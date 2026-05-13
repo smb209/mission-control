@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Trash2, Play, Pause, Users, ListX, Activity, Download, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Trash2, Play, Pause, Users, ListX, Activity, Download, ChevronDown, AlertTriangle } from 'lucide-react';
 import type { DebugEvent, DebugEventType, DebugEventDirection } from '@/lib/debug-log';
 import { DebugEventRow } from '@/components/debug/DebugEventRow';
 import { showAlertDialog } from '@/lib/show-alert';
@@ -39,6 +39,10 @@ const EVENT_TYPE_OPTIONS: Array<{ value: '' | DebugEventType; label: string }> =
   { value: 'autopilot.ideation_llm', label: '↕ autopilot.ideation_llm' },
   { value: 'autopilot.cycle_stalled', label: '• autopilot.cycle_stalled' },
   { value: 'autopilot.cycle_aborted', label: '• autopilot.cycle_aborted' },
+  // Always-on server-side errors / warnings (persisted regardless of
+  // the collection toggle).
+  { value: 'api.error', label: '✗ api.error (always on)' },
+  { value: 'server.warn', label: '⚠ server.warn (always on)' },
 ];
 
 const DIRECTION_OPTIONS: Array<{ value: '' | DebugEventDirection; label: string }> = [
@@ -52,6 +56,7 @@ export default function DebugConsolePage() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [events, setEvents] = useState<DebugEvent[]>([]);
   const [total, setTotal] = useState(0);
+  const [errorCount, setErrorCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState({
     taskId: '',
@@ -85,6 +90,7 @@ export default function DebugConsolePage() {
     const data = await res.json();
     setEvents(data.events || []);
     setTotal(data.total || 0);
+    setErrorCount(data.error_count || 0);
     setLoading(false);
   };
 
@@ -107,6 +113,10 @@ export default function DebugConsolePage() {
         const parsed = JSON.parse(event.data) as { type: string; payload: unknown };
         if (parsed.type === 'debug_event_logged') {
           const incoming = parsed.payload as DebugEvent;
+          // Always-on counters update even when the filter would hide the row.
+          if (incoming.event_type === 'api.error') {
+            setErrorCount(prev => prev + 1);
+          }
           // Respect active filters — if the incoming row doesn't match, skip.
           const f = filterRef.current;
           if (f.taskId && incoming.task_id !== f.taskId) return;
@@ -116,8 +126,19 @@ export default function DebugConsolePage() {
           setEvents(prev => [incoming, ...prev].slice(0, 200));
           setTotal(prev => prev + 1);
         } else if (parsed.type === 'debug_events_cleared') {
-          setEvents([]);
-          setTotal(0);
+          const payload = parsed.payload as { cleared: number; event_type?: DebugEventType };
+          if (payload.event_type === 'api.error') {
+            // Scoped clear of errors only — drop matching rows from the
+            // visible list and zero the error counter. Full counters are
+            // refreshed by a refetch on the next filter change / poll.
+            setEvents(prev => prev.filter(e => e.event_type !== 'api.error'));
+            setTotal(prev => Math.max(0, prev - payload.cleared));
+            setErrorCount(0);
+          } else if (!payload.event_type) {
+            setEvents([]);
+            setTotal(0);
+            setErrorCount(0);
+          }
         } else if (parsed.type === 'debug_collection_toggled') {
           const p = parsed.payload as { collection_enabled: boolean };
           setEnabled(p.collection_enabled);
@@ -142,7 +163,22 @@ export default function DebugConsolePage() {
     await fetch('/api/debug/events', { method: 'DELETE' });
     setEvents([]);
     setTotal(0);
+    setErrorCount(0);
     setExpandedIds(new Set());
+  };
+
+  const clearErrors = async () => {
+    if (errorCount === 0) return;
+    if (!confirm(`Delete ${errorCount} api.error event(s)? Other debug events stay.`)) return;
+    await fetch('/api/debug/events?event_type=api.error', { method: 'DELETE' });
+    setEvents(prev => prev.filter(e => e.event_type !== 'api.error'));
+    setTotal(prev => Math.max(0, prev - errorCount));
+    setErrorCount(0);
+    setExpandedIds(new Set());
+  };
+
+  const showErrorsOnly = () => {
+    setFilter(f => ({ ...f, eventType: 'api.error' as DebugEventType }));
   };
 
   // Build the query string for the export endpoint using the current
@@ -310,12 +346,34 @@ export default function DebugConsolePage() {
               )}
             </div>
             <button
+              onClick={showErrorsOnly}
+              disabled={errorCount === 0}
+              className={`min-h-11 px-3 rounded-lg border flex items-center gap-2 text-sm disabled:cursor-not-allowed ${
+                errorCount > 0
+                  ? 'bg-red-500/15 border-red-500/40 text-red-300 hover:bg-red-500/25'
+                  : 'border-mc-border bg-mc-bg text-mc-text-secondary opacity-50'
+              }`}
+              title={errorCount > 0 ? 'Filter to api.error events' : 'No errors recorded'}
+            >
+              <AlertTriangle className="w-4 h-4" />
+              {errorCount} error{errorCount === 1 ? '' : 's'}
+            </button>
+            <button
+              onClick={clearErrors}
+              disabled={errorCount === 0}
+              className="min-h-11 px-3 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Delete api.error rows without touching other debug events"
+            >
+              <Trash2 className="w-4 h-4" />
+              Clear errors
+            </button>
+            <button
               onClick={clearAll}
               disabled={total === 0}
               className="min-h-11 px-4 rounded-lg border border-mc-border bg-mc-bg text-mc-text-secondary hover:text-mc-text hover:bg-mc-bg-tertiary flex items-center gap-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Trash2 className="w-4 h-4" />
-              Clear ({total})
+              Clear all ({total})
             </button>
           </div>
         </div>
@@ -331,8 +389,8 @@ export default function DebugConsolePage() {
           {enabled === null
             ? 'Loading collection state...'
             : enabled
-            ? `Collection is ON — capturing every outbound chat.send. ${total} event(s) stored.`
-            : `Collection is OFF. ${total} event(s) stored from previous sessions. Click "Start collection" to capture new traffic.`}
+            ? `Collection is ON — capturing every outbound chat.send. ${total} event(s) stored. (api.error rows are always captured, regardless of this toggle.)`
+            : `Collection is OFF. ${total} event(s) stored from previous sessions. Click "Start collection" to capture new traffic. (api.error rows are still captured automatically.)`}
         </div>
 
         {/* Diagnostic tools */}

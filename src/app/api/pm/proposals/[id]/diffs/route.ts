@@ -14,6 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { logApiError } from '@/lib/debug-log';
 import { z } from 'zod';
 import {
   getProposal,
@@ -80,7 +81,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: err.message, hints: err.hints }, { status: 400 });
     }
     const msg = err instanceof Error ? err.message : 'Failed to update diffs';
-    console.error('Failed to update proposal diffs:', err);
+    logApiError({ route: '/api/pm/proposals/[id]/diffs', method: 'PUT', status: 500, error: err, metadata: { proposal_id: id } });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
