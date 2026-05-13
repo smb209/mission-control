@@ -1622,11 +1622,15 @@ function ChatMessageRow({
     );
   }
 
-  // In-flight placeholder: when dispatch_state === 'pending_agent', render
-  // the InFlightProposalCard instead of the synthetic proposal card. The
-  // card subscribes to SSE events and transitions to replaced/synth_only
-  // automatically. This matches the backend's state machine exactly.
-  if (proposal.dispatch_state === 'pending_agent') {
+  // In-flight placeholder: when dispatch_state === 'pending_agent' AND
+  // the proposal is still a live draft, render the InFlightProposalCard
+  // instead of the synthetic proposal card. The status='draft' clause
+  // is defence-in-depth — supersedeWithAgentProposal now flips
+  // dispatch_state to 'agent_complete' when the agent row lands, but
+  // any legacy row still on (status='superseded', dispatch_state='pending_agent')
+  // would otherwise render a stuck in-flight card next to the real
+  // proposal card.
+  if (proposal.dispatch_state === 'pending_agent' && proposal.status === 'draft') {
     return (
       <div
         ref={(el) => setMessageRef?.(message.id, el)}

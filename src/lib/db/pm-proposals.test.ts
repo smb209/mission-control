@@ -21,6 +21,7 @@ import {
   acceptProposal,
   rejectProposal,
   refineProposal,
+  supersedeWithAgentProposal,
   validateProposedChanges,
   PmProposalValidationError,
   tryAdoptOrphanedPlaceholder,
@@ -360,6 +361,36 @@ test('refineProposal refuses to refine an already-accepted proposal', () => {
   const p = createProposal({ workspace_id: ws, trigger_text: '.', impact_md: '.', proposed_changes: [] });
   acceptProposal(p.id);
   assert.throws(() => refineProposal(p.id, 'x'), PmProposalValidationError);
+});
+
+test('supersedeWithAgentProposal flips placeholder dispatch_state to agent_complete', () => {
+  // Regression: leaving placeholder.dispatch_state on 'pending_agent'
+  // after supersede made the /pm chat thread render a stuck
+  // InFlightProposalCard next to the real agent row's card. The
+  // render gate matches dispatch_state==='pending_agent'.
+  const ws = freshWorkspace();
+  const placeholder = createProposal({
+    workspace_id: ws,
+    trigger_text: '{"mode":"decompose_initiative"}',
+    trigger_kind: 'decompose_initiative',
+    impact_md: '_(synth placeholder)_',
+    proposed_changes: [],
+    dispatch_state: 'pending_agent',
+  });
+  const agentRow = createProposal({
+    workspace_id: ws,
+    trigger_text: 'agent freeform',
+    trigger_kind: 'decompose_initiative',
+    impact_md: 'real impact',
+    proposed_changes: [],
+    dispatch_state: 'agent_complete',
+  });
+  supersedeWithAgentProposal(placeholder.id, agentRow.id, {
+    trigger_kind: 'decompose_initiative',
+  });
+  const after = getProposal(placeholder.id)!;
+  assert.equal(after.status, 'superseded');
+  assert.equal(after.dispatch_state, 'agent_complete', 'placeholder must leave pending_agent so the in-flight render gate stops matching');
 });
 
 test('refineProposal dedupes: second call returns existing draft child with created=false', () => {
