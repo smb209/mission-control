@@ -128,6 +128,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         // same large-prompt cold-session profile.
         timeoutMs: 120_000,
         synth: { impact_md: synth.impact_md, changes: synth.changes },
+        chat_context: {
+          target_initiative_id: parent.target_initiative_id ?? null,
+          origin: 'pm_dispatch',
+        },
         agent_prompt:
           `Refine the plan for initiative titled "${draftTitle}". ` +
           `Original draft: ${JSON.stringify(draft)}. ` +
@@ -136,8 +140,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
           `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
           `See your SOUL.md for the plan_suggestions shape. ` +
-          `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
-          `no freeform summary (the operator UI discards it).`,
+          `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
+          `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
       });
       // Refine has a pre-allocated child row to copy content onto, so we
       // wait for the full dispatch lifecycle (Tier 2 reconciliation
@@ -236,6 +240,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         target_initiative_id: story.id,
         timeoutMs: 120_000,
         synth: { impact_md: synth.impact_md, changes: synth.changes },
+        chat_context: {
+          target_initiative_id: story.id,
+          origin: 'pm_dispatch',
+        },
         agent_prompt:
           `Refine the task decomposition for story ${story.id} ("${story.title}").\n\n` +
           `Operator refinement request: "${parsed.data.additional_constraint}"\n\n` +
@@ -250,8 +258,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
           `\`create_task_under_initiative\` diff per task, all targeting ` +
           `initiative_id='${story.id}'. Output discipline: tool call FIRST, then ` +
-          `a single-line \`Proposal {id}.\` reply — no freeform summary (the ` +
-          `operator UI discards it).`,
+          `a short confirmation sentence — do NOT echo the id or use \`{...}\` ` +
+          `placeholder syntax (the operator UI discards freeform replies).`,
       });
       const settled = await dispatch.completion;
       newImpactMd = settled.final.impact_md;

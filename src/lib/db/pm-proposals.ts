@@ -768,6 +768,64 @@ export function deleteProposal(id: string): void {
 }
 
 /**
+ * Per-status counts for a workspace's pm_proposals. Drives the
+ * "Delete all rejected/draft/superseded" panel modal — operator sees
+ * how many rows each checkbox would remove before confirming.
+ */
+export type PmProposalStatusCounts = Record<PmProposalStatus, number>;
+
+export function countProposalsByStatus(workspaceId: string): PmProposalStatusCounts {
+  const rows = queryAll<{ status: PmProposalStatus; n: number }>(
+    `SELECT status, COUNT(*) AS n
+       FROM pm_proposals
+      WHERE workspace_id = ?
+      GROUP BY status`,
+    [workspaceId],
+  );
+  const out: PmProposalStatusCounts = {
+    draft: 0,
+    accepted: 0,
+    rejected: 0,
+    superseded: 0,
+  };
+  for (const r of rows) {
+    if (r.status in out) out[r.status] = r.n;
+  }
+  return out;
+}
+
+/**
+ * Bulk hard-delete every proposal in `workspaceId` whose status is in
+ * `statuses`. Refuses to touch `accepted` rows for the same reason as
+ * the single-row DELETE endpoint (their diffs already mutated other
+ * tables, and history rows reference their ids). Returns the ids that
+ * were actually deleted so the caller can broadcast individual SSE
+ * events.
+ */
+export function bulkDeleteProposalsByStatus(
+  workspaceId: string,
+  statuses: PmProposalStatus[],
+): string[] {
+  const safe = statuses.filter(s => s !== 'accepted');
+  if (safe.length === 0) return [];
+  const placeholders = safe.map(() => '?').join(',');
+  const rows = queryAll<{ id: string }>(
+    `SELECT id FROM pm_proposals
+      WHERE workspace_id = ?
+        AND status IN (${placeholders})`,
+    [workspaceId, ...safe],
+  );
+  if (rows.length === 0) return [];
+  run(
+    `DELETE FROM pm_proposals
+      WHERE workspace_id = ?
+        AND status IN (${placeholders})`,
+    [workspaceId, ...safe],
+  );
+  return rows.map(r => r.id);
+}
+
+/**
  * Mark a row as superseded by another. Used when the agent's `propose_changes`
  * lands after a synth placeholder was already persisted: the synth row is
  * superseded, and the agent's row inherits the synth row's
@@ -808,6 +866,174 @@ export function supersedeWithAgentProposal(
     vals.push(agentRowId);
     run(`UPDATE pm_proposals SET ${sets.join(', ')} WHERE id = ?`, vals);
   })();
+}
+
+/**
+ * Retroactively link a freshly-created agent proposal to any orphaned
+ * synth placeholder from the same dispatch.
+ *
+ * Why: pm-dispatch fires a synth placeholder, dispatches the named PM
+ * agent, and waits with a primary timeout + tail-window reconciler for
+ * the agent's `propose_changes` row to land — at which point
+ * `supersedeWithAgentProposal` links them and broadcasts
+ * `pm_proposal_replaced`. Under heavy ML-server load the agent's tool
+ * call can land AFTER both windows elapse, leaving the placeholder
+ * stuck in `synth_only` and the agent row floating without a
+ * `parent_proposal_id`. The UI never swaps the card and the operator
+ * sees an empty "0 changes" placeholder.
+ *
+ * This function is the self-healing fallback: when the MCP
+ * `propose_changes` handler finishes inserting the agent row, it calls
+ * us, we look for a matching orphan placeholder within a recent
+ * window, and we adopt it atomically. The in-flight reconciler is a
+ * fast path; this is the correctness fallback.
+ *
+ * Returns the placeholder id that was adopted (so the caller can
+ * broadcast `pm_proposal_replaced`), or null when no match was found
+ * or another writer beat us to the supersede.
+ *
+ * Match key:
+ *   - same workspace_id
+ *   - same trigger_kind
+ *   - placeholder status='draft', dispatch_state='synth_only',
+ *     parent_proposal_id IS NULL (i.e. genuinely orphaned)
+ *   - placeholder.created_at within `windowMs` of the agent row
+ *   - excludes self
+ *
+ * The pm-dispatch registry only allows one in-flight dispatch per
+ * workspace, so the most-recent matching orphan is unambiguously the
+ * one this agent row belongs to.
+ */
+export function tryAdoptOrphanedPlaceholder(
+  agentProposalId: string,
+  windowMs: number = 10 * 60 * 1000,
+): string | null {
+  const agentRow = queryOne<{
+    workspace_id: string;
+    trigger_kind: PmProposalTriggerKind;
+    created_at: string;
+  }>(
+    `SELECT workspace_id, trigger_kind, created_at FROM pm_proposals WHERE id = ?`,
+    [agentProposalId],
+  );
+  if (!agentRow) return null;
+
+  const earliestMs = new Date(agentRow.created_at).getTime() - windowMs;
+  const earliestIso = new Date(earliestMs).toISOString();
+
+  const candidate = queryOne<{ id: string; trigger_text: string | null; target_initiative_id: string | null }>(
+    `SELECT id, trigger_text, target_initiative_id FROM pm_proposals
+      WHERE workspace_id = ?
+        AND trigger_kind = ?
+        AND status = 'draft'
+        AND dispatch_state = 'synth_only'
+        AND parent_proposal_id IS NULL
+        AND id != ?
+        AND created_at >= ?
+        AND created_at <= ?
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [
+      agentRow.workspace_id,
+      agentRow.trigger_kind,
+      agentProposalId,
+      earliestIso,
+      agentRow.created_at,
+    ],
+  );
+  if (!candidate) return null;
+
+  const db = getDb();
+  let adopted = false;
+  db.transaction(() => {
+    // Atomic claim: only mark superseded if the placeholder is still
+    // an orphan. If a concurrent reconciler already linked it, the
+    // UPDATE matches zero rows and we bail without touching the agent
+    // row.
+    const stmt = db.prepare(
+      `UPDATE pm_proposals
+          SET status = 'superseded'
+        WHERE id = ?
+          AND status = 'draft'
+          AND dispatch_state = 'synth_only'
+          AND parent_proposal_id IS NULL`,
+    );
+    const info = stmt.run(candidate.id);
+    if (info.changes !== 1) return;
+
+    const sets: string[] = ['parent_proposal_id = ?', 'dispatch_state = ?'];
+    const vals: unknown[] = [candidate.id, 'agent_complete'];
+    if (candidate.target_initiative_id) {
+      sets.push('target_initiative_id = ?');
+      vals.push(candidate.target_initiative_id);
+    }
+    if (candidate.trigger_text) {
+      sets.push('trigger_text = ?');
+      vals.push(candidate.trigger_text);
+    }
+    vals.push(agentProposalId);
+    run(`UPDATE pm_proposals SET ${sets.join(', ')} WHERE id = ?`, vals);
+    adopted = true;
+  })();
+
+  return adopted ? candidate.id : null;
+}
+
+/**
+ * Boot-time sweep: find orphaned synth placeholders that have a
+ * matching agent-authored row already in the DB, and link them via
+ * `tryAdoptOrphanedPlaceholder`. Idempotent.
+ *
+ * Used by the Next.js instrumentation hook to heal orphans left by a
+ * prior process that crashed mid-dispatch or where the agent's tool
+ * call landed after the reconciler had already given up. Returns the
+ * number of placeholders successfully adopted.
+ *
+ * The reverse-lookup (agent row → orphan placeholder) is what
+ * `tryAdoptOrphanedPlaceholder` already implements, so the sweep
+ * iterates candidate agent rows and delegates.
+ */
+export function sweepOrphanedPlaceholders(): number {
+  // Bound the lookback so a long-running DB with thousands of rows
+  // doesn't scan everything. 24h covers any realistic gap between
+  // dispatch and boot (the orphan window inside
+  // tryAdoptOrphanedPlaceholder is 10m by default, but a placeholder
+  // that's been orphaned for hours is still a candidate as long as
+  // its agent row was created shortly after).
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const candidates = queryAll<{ id: string }>(
+    `SELECT a.id
+       FROM pm_proposals a
+       JOIN pm_proposals p
+         ON p.workspace_id = a.workspace_id
+        AND p.trigger_kind = a.trigger_kind
+        AND p.status = 'draft'
+        AND p.dispatch_state = 'synth_only'
+        AND p.parent_proposal_id IS NULL
+        AND p.id != a.id
+        AND p.created_at <= a.created_at
+      WHERE a.dispatch_state = 'agent_complete'
+        AND a.parent_proposal_id IS NULL
+        AND a.created_at >= ?
+      GROUP BY a.id`,
+    [cutoff],
+  );
+
+  let linked = 0;
+  for (const { id } of candidates) {
+    try {
+      // Use a wider window for the sweep than the live path — agent
+      // and placeholder may be hours apart in a long-orphan scenario.
+      const adopted = tryAdoptOrphanedPlaceholder(id, 24 * 60 * 60 * 1000);
+      if (adopted) linked += 1;
+    } catch (err) {
+      console.warn(
+        `[sweepOrphanedPlaceholders] adopt failed for agent row ${id}:`,
+        (err as Error).message,
+      );
+    }
+  }
+  return linked;
 }
 
 export function getProposal(id: string): PmProposal | undefined {

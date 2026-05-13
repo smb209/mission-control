@@ -117,6 +117,12 @@ export async function POST(
 
   const triggerText = formatNoteAsTrigger(notes, initiative.title);
 
+  // Most/all notes from one operator click share the same run_group_id
+  // because they came from the same audit run. Pick the first one and
+  // pass it as the audit-run chip; the renderer treats it as a single
+  // anchor (cross-run mixes are rare and harmless).
+  const auditRunGroupId = notes.find(n => n.run_group_id)?.run_group_id ?? null;
+
   try {
     const result = dispatchPm({
       workspace_id: initiative.workspace_id,
@@ -124,6 +130,12 @@ export async function POST(
       trigger_kind: 'notes_intake',
       // Same as the MCP path — regex on freeform is worse than nothing.
       allowFallback: false,
+      chat_context: {
+        target_initiative_id: id,
+        source_note_ids: notes.map(n => n.id),
+        audit_run_group_id: auditRunGroupId,
+        origin: 'ask_pm_from_notes',
+      },
     });
 
     // Mark notes consumed so the UI can fade the "Ask PM" button on

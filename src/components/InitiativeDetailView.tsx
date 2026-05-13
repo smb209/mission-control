@@ -33,6 +33,7 @@ import {
   Activity,
   MoreHorizontal,
   List,
+  MessageSquare,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -43,6 +44,7 @@ import { InvestigatePicker, type InvestigateOption } from '@/components/inline/I
 import InvestigateModal from '@/components/InvestigateModal';
 import { NotesRail } from '@/components/notes/NotesRail';
 import { InitiativeRunsStrip } from '@/components/initiative/InitiativeRunsStrip';
+import { RecentPmActivity } from '@/components/initiative/RecentPmActivity';
 import { AuditProposalsSection } from '@/components/audit-proposals/AuditProposalsSection';
 import { useAgentNotes } from '@/hooks/useAgentNotes';
 import { countPriorAudits } from '@/components/inline/investigate-helpers';
@@ -1113,6 +1115,19 @@ or "carve out the onboarding flow as its own story first"`}
           />
         </Section>
 
+        {/* Recent PM activity — reverse-direction link from the /pm
+            chat context strip. Shows the last N PM-chat messages whose
+            provenance points at this initiative; click-through jumps
+            to /pm?focus=<id>. See
+            docs/proposals/pm-chat-context-strip.md. */}
+        <Section
+          id="pm-activity"
+          title="Recent PM activity"
+          icon={<MessageSquare className="w-4 h-4" />}
+        >
+          <RecentPmActivity initiativeId={initiative.id} />
+        </Section>
+
         {/* Notes — agent-generated observations for this initiative.
             Surface for the Investigate flow's take_note output. Filters
             to scoped notes only (no child-task rollup) since the audit
@@ -1292,6 +1307,7 @@ or "carve out the onboarding flow as its own story first"`}
             { id: 'tasks', label: 'Tasks', visible: true },
             { id: 'dependencies', label: 'Dependencies', visible: true },
             { id: 'activity', label: 'Activity', visible: true },
+            { id: 'pm-activity', label: 'Recent PM activity', visible: true },
             { id: 'notes', label: 'Notes', visible: true },
             { id: 'parent-history', label: 'Parent-change history', visible: true },
           ].filter(s => s.visible)}

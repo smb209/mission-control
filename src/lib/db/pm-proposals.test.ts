@@ -23,6 +23,8 @@ import {
   refineProposal,
   validateProposedChanges,
   PmProposalValidationError,
+  tryAdoptOrphanedPlaceholder,
+  sweepOrphanedPlaceholders,
   type PmDiff,
 } from './pm-proposals';
 import { createInitiative, addInitiativeDependency } from './initiatives';
@@ -1106,4 +1108,118 @@ test('set_task_status: forward proposal still rejects status != cancelled', () =
       }),
     PmProposalValidationError,
   );
+});
+
+// ─── Orphan-placeholder retroactive adoption ───────────────────────
+
+function seedSynthPlaceholder(ws: string, triggerKind: string = "notes_intake") {
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: "operator notes about scrubbing localhost:4000",
+    trigger_kind: triggerKind as Parameters<typeof createProposal>[0]["trigger_kind"],
+    impact_md: "### No structured changes inferred yet",
+    proposed_changes: [],
+    dispatch_state: "synth_only",
+  });
+  return p;
+}
+
+function seedAgentRow(ws: string, triggerKind: string = "notes_intake") {
+  const init = createInitiative({ workspace_id: ws, kind: "story", title: "X" });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: "agent freeform trigger",
+    trigger_kind: triggerKind as Parameters<typeof createProposal>[0]["trigger_kind"],
+    impact_md: "### Real agent analysis",
+    proposed_changes: [
+      { kind: "set_initiative_status", initiative_id: init.id, status: "blocked" },
+    ],
+    // createProposal default is agent_complete — matches MCP propose_changes path
+  });
+  return p;
+}
+
+test("tryAdoptOrphanedPlaceholder links matching orphan", () => {
+  const ws = freshWorkspace();
+  const placeholder = seedSynthPlaceholder(ws);
+  const agentRow = seedAgentRow(ws);
+
+  const adoptedId = tryAdoptOrphanedPlaceholder(agentRow.id);
+  assert.equal(adoptedId, placeholder.id);
+
+  const refreshedPlaceholder = getProposal(placeholder.id);
+  const refreshedAgent = getProposal(agentRow.id);
+  assert.equal(refreshedPlaceholder?.status, "superseded");
+  assert.equal(refreshedAgent?.parent_proposal_id, placeholder.id);
+  assert.equal(refreshedAgent?.dispatch_state, "agent_complete");
+});
+
+test("tryAdoptOrphanedPlaceholder ignores other workspaces", () => {
+  const wsA = freshWorkspace();
+  const wsB = freshWorkspace();
+  seedSynthPlaceholder(wsA); // orphan in workspace A
+  const agentRow = seedAgentRow(wsB); // agent row in workspace B
+  const adoptedId = tryAdoptOrphanedPlaceholder(agentRow.id);
+  assert.equal(adoptedId, null);
+});
+
+test("tryAdoptOrphanedPlaceholder ignores mismatched trigger_kind", () => {
+  const ws = freshWorkspace();
+  seedSynthPlaceholder(ws, "notes_intake");
+  const agentRow = seedAgentRow(ws, "disruption_event");
+  const adoptedId = tryAdoptOrphanedPlaceholder(agentRow.id);
+  assert.equal(adoptedId, null);
+});
+
+test("tryAdoptOrphanedPlaceholder is a no-op when placeholder is already linked", () => {
+  const ws = freshWorkspace();
+  const placeholder = seedSynthPlaceholder(ws);
+  // Pre-link via direct UPDATE to simulate the in-flight reconciler having won.
+  run(
+    `UPDATE pm_proposals SET status = ? WHERE id = ?`,
+    ["superseded", placeholder.id],
+  );
+  const agentRow = seedAgentRow(ws);
+  const adoptedId = tryAdoptOrphanedPlaceholder(agentRow.id);
+  assert.equal(adoptedId, null);
+  const refreshedAgent = getProposal(agentRow.id);
+  assert.equal(refreshedAgent?.parent_proposal_id, null);
+});
+
+test("tryAdoptOrphanedPlaceholder skips placeholders outside the time window", () => {
+  const ws = freshWorkspace();
+  const placeholder = seedSynthPlaceholder(ws);
+  // Backdate the placeholder by 1 hour.
+  run(
+    `UPDATE pm_proposals SET created_at = ? WHERE id = ?`,
+    [new Date(Date.now() - 60 * 60 * 1000).toISOString(), placeholder.id],
+  );
+  const agentRow = seedAgentRow(ws);
+  // Default window is 10 minutes.
+  const adoptedId = tryAdoptOrphanedPlaceholder(agentRow.id);
+  assert.equal(adoptedId, null);
+  // A wider window finds it.
+  const widerAdoptedId = tryAdoptOrphanedPlaceholder(agentRow.id, 2 * 60 * 60 * 1000);
+  assert.equal(widerAdoptedId, placeholder.id);
+});
+
+test("sweepOrphanedPlaceholders links eligible pairs in bulk", () => {
+  const wsA = freshWorkspace();
+  const wsB = freshWorkspace();
+  const phA = seedSynthPlaceholder(wsA);
+  const phB = seedSynthPlaceholder(wsB);
+  const agentA = seedAgentRow(wsA);
+  const agentB = seedAgentRow(wsB);
+  // wsC has only a placeholder, no agent row — should remain orphaned.
+  const wsC = freshWorkspace();
+  const phC = seedSynthPlaceholder(wsC);
+
+  const linked = sweepOrphanedPlaceholders();
+  assert.ok(linked >= 2, `expected ≥2 links, got ${linked}`);
+
+  assert.equal(getProposal(phA.id)?.status, "superseded");
+  assert.equal(getProposal(phB.id)?.status, "superseded");
+  assert.equal(getProposal(phC.id)?.status, "draft");
+  assert.equal(getProposal(agentA.id)?.parent_proposal_id, phA.id);
+  assert.equal(getProposal(agentB.id)?.parent_proposal_id, phB.id);
 });

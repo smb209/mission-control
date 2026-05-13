@@ -109,6 +109,10 @@ export async function POST(request: NextRequest) {
       target_initiative_id: parent.id,
       timeoutMs: 120_000,
       synth: { impact_md: synth.impact_md, changes: synth.changes },
+      chat_context: {
+        target_initiative_id: parent.id,
+        origin: 'pm_dispatch',
+      },
       agent_prompt:
         `Decompose story ${parent.id} ("${parent.title}") into a small set of ` +
         `draft TASKS (not initiatives) that an implementer can pick up directly.` +
@@ -121,24 +125,31 @@ export async function POST(request: NextRequest) {
         `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
         `\`create_task_under_initiative\` diff per task, all targeting initiative_id='${parent.id}'. ` +
         `Each task should be focused enough to land in a single PR. ` +
-        `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
-        `no freeform summary (the operator UI discards it).`,
+        `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
+        `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
     });
     const proposal = dispatch.proposal;
 
     try {
+      const ctx = {
+        trigger_kind: 'decompose_story' as const,
+        target_initiative_id: parent.id,
+        origin: 'pm_dispatch' as const,
+      };
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'user',
         content:
           `Create tasks: "${parent.title}"` +
           (parsed.data.hint ? ` (hint: ${parsed.data.hint})` : ''),
+        context: ctx,
       });
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'assistant',
         content: proposal.impact_md,
         proposal_id: proposal.id,
+        context: ctx,
       });
     } catch (err) {
       console.warn('[pm-decompose-story] chat insert failed:', (err as Error).message);

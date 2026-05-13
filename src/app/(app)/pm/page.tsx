@@ -13,7 +13,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
-import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles } from 'lucide-react';
+import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles, FileText, StickyNote, ArrowRight, GitBranch, ScanSearch, Maximize2 } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   parseSuggestionsFromImpactMd,
@@ -61,6 +61,7 @@ interface PmProposal {
   status: 'draft' | 'accepted' | 'rejected' | 'superseded';
   applied_at: string | null;
   parent_proposal_id: string | null;
+  target_initiative_id: string | null;
   created_at: string;
 }
 
@@ -103,6 +104,15 @@ export default function PmChatPage() {
   // One-slot pending-delete confirmation. Routes through ConfirmDialog
   // per project convention (no native window.confirm).
   const [pendingDeleteProposal, setPendingDeleteProposal] = useState<PmProposal | null>(null);
+  // Bulk-delete modal: when non-null, render the per-status checklist.
+  // `counts` is the per-status row count for the current workspace,
+  // fetched on open. `selected` is the operator's checkbox selection.
+  const [bulkDelete, setBulkDelete] = useState<{
+    counts: Record<'draft' | 'accepted' | 'rejected' | 'superseded', number>;
+    selected: Set<'draft' | 'rejected' | 'superseded'>;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
   const [deletingProposalId, setDeletingProposalId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -145,12 +155,21 @@ export default function PmChatPage() {
   // no effects ever firing. Reading post-mount avoids the prerender path
   // entirely. See PR #271 for the repro.
   const [focusProposalId, setFocusProposalId] = useState<string | null>(null);
+  // PR pm-chat-context-strip: parallel `?focus=<message_id>` deep link.
+  // Used by the initiative-page "Recent PM activity" rail to jump to a
+  // specific chat row (not all rows have a proposal anchor). Same
+  // post-mount read pattern as `?proposal=` for the same Suspense
+  // reasons.
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     setFocusProposalId(params.get('proposal'));
+    setFocusMessageId(params.get('focus'));
   }, []);
   const [highlightedProposalId, setHighlightedProposalId] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const messageRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
   // Load workspace list once. The global switcher in the left nav owns the
   // selected id; we only fetch the list here so the legacy fallback path
@@ -600,6 +619,67 @@ export default function PmChatPage() {
     }
   };
 
+  const openBulkDelete = useCallback(async () => {
+    if (!workspaceId) return;
+    // Open immediately with zero-counts placeholder so the modal isn't
+    // gated on the network round-trip; replace with real counts when
+    // the fetch returns. Pre-select "rejected" + "superseded" — those
+    // are the noise statuses an operator usually wants to sweep, and
+    // it matches the common "delete all rejected" ask.
+    setBulkDelete({
+      counts: { draft: 0, accepted: 0, rejected: 0, superseded: 0 },
+      selected: new Set(['rejected', 'superseded']),
+      busy: false,
+      error: null,
+    });
+    try {
+      const res = await fetch(
+        `/api/pm/proposals/counts?workspace_id=${encodeURIComponent(workspaceId)}`,
+      );
+      if (!res.ok) throw new Error(`counts ${res.status}`);
+      const counts = (await res.json()) as Record<
+        'draft' | 'accepted' | 'rejected' | 'superseded',
+        number
+      >;
+      setBulkDelete(prev => (prev ? { ...prev, counts } : prev));
+    } catch (err) {
+      setBulkDelete(prev =>
+        prev ? { ...prev, error: (err as Error).message } : prev,
+      );
+    }
+  }, [workspaceId]);
+
+  const performBulkDelete = useCallback(async () => {
+    if (!workspaceId || !bulkDelete) return;
+    if (bulkDelete.selected.size === 0) return;
+    if (bulkDelete.busy) return;
+    setBulkDelete(prev => (prev ? { ...prev, busy: true, error: null } : prev));
+    try {
+      const res = await fetch('/api/pm/proposals/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          statuses: Array.from(bulkDelete.selected),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Bulk delete failed (${res.status})`);
+      }
+      const data = (await res.json()) as { deleted_count: number; deleted_ids: string[] };
+      // Optimistic prune; loadRecent will also catch up.
+      const gone = new Set(data.deleted_ids);
+      setRecentProposals(prev => prev.filter(p => !gone.has(p.id)));
+      setBulkDelete(null);
+      await loadRecent();
+    } catch (err) {
+      setBulkDelete(prev =>
+        prev ? { ...prev, busy: false, error: (err as Error).message } : prev,
+      );
+    }
+  }, [workspaceId, bulkDelete, loadRecent]);
+
   const performDelete = useCallback(async (proposalId: string) => {
     setDeletingProposalId(proposalId);
     try {
@@ -694,6 +774,21 @@ export default function PmChatPage() {
       return () => clearTimeout(timer);
     }
   }, [focusProposalId, proposals]);
+
+  // Same pattern for ?focus=<message_id>: scroll the chat row into view
+  // and pulse the highlight. Waits on `messages` so the row exists in
+  // the DOM by the time we try to grab its ref.
+  useEffect(() => {
+    if (!focusMessageId) return;
+    if (!messages.find(m => m.id === focusMessageId)) return;
+    const el = messageRefs.current.get(focusMessageId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedMessageId(focusMessageId);
+      const timer = setTimeout(() => setHighlightedMessageId(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [focusMessageId, messages]);
 
   const proposalCount = useMemo(() => {
     const draft = recentProposals.filter(p => p.status === 'draft').length;
@@ -891,6 +986,8 @@ export default function PmChatPage() {
                   onRefineTextChange={setRefineText}
                   setCardRef={(id, el) => cardRefs.current.set(id, el)}
                   highlighted={proposal ? highlightedProposalId === proposal.id : false}
+                  setMessageRef={(id, el) => messageRefs.current.set(id, el)}
+                  messageHighlighted={highlightedMessageId === m.id}
                   resolveInitiativeTitle={resolveInitiativeTitle}
                 />
               );
@@ -1043,14 +1140,26 @@ export default function PmChatPage() {
         <aside className="w-80 border-l border-mc-border overflow-y-auto shrink-0 hidden lg:block">
           <div className="px-4 py-3 border-b border-mc-border flex items-center justify-between">
             <h2 className="text-sm font-semibold">Recent proposals</h2>
-            <button
-              type="button"
-              onClick={loadRecent}
-              className="text-xs text-mc-text-secondary hover:text-mc-text"
-              title="Refresh"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={openBulkDelete}
+                disabled={!workspaceId}
+                className="text-xs text-mc-text-secondary hover:text-red-300 disabled:opacity-40 p-1"
+                title="Delete proposals by status…"
+                aria-label="Bulk delete proposals"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={loadRecent}
+                className="text-xs text-mc-text-secondary hover:text-mc-text p-1"
+                title="Refresh"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
           <ul className="divide-y divide-mc-border">
             {recentProposals.length === 0 && (
@@ -1138,16 +1247,260 @@ export default function PmChatPage() {
         }}
       />
 
+      <ConfirmDialog
+        open={bulkDelete !== null}
+        title="Delete proposals by status"
+        body={
+          bulkDelete ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-mc-text-secondary">
+                Pick which statuses to remove from this workspace. Accepted proposals can&apos;t be bulk-deleted — their diffs already mutated initiatives/tasks.
+              </p>
+              <div className="space-y-1.5">
+                {(['draft', 'rejected', 'superseded'] as const).map(status => {
+                  const count = bulkDelete.counts[status];
+                  const checked = bulkDelete.selected.has(status);
+                  return (
+                    <label
+                      key={status}
+                      className={`flex items-center gap-2 px-2 py-1.5 rounded-sm border cursor-pointer ${
+                        checked
+                          ? 'border-red-500/40 bg-red-500/5'
+                          : 'border-mc-border hover:border-mc-border/80'
+                      } ${count === 0 ? 'opacity-60' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={bulkDelete.busy}
+                        onChange={() => {
+                          setBulkDelete(prev => {
+                            if (!prev) return prev;
+                            const next = new Set(prev.selected);
+                            if (next.has(status)) next.delete(status);
+                            else next.add(status);
+                            return { ...prev, selected: next };
+                          });
+                        }}
+                      />
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded-sm font-mono ${STATUS_BADGE[status]}`}>
+                        {status}
+                      </span>
+                      <span className="text-mc-text-secondary">
+                        {count} proposal{count === 1 ? '' : 's'}
+                      </span>
+                    </label>
+                  );
+                })}
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-sm border border-mc-border opacity-50 cursor-not-allowed">
+                  <input type="checkbox" disabled checked={false} />
+                  <span className={`px-1.5 py-0.5 text-[10px] rounded-sm font-mono ${STATUS_BADGE['accepted']}`}>
+                    accepted
+                  </span>
+                  <span className="text-mc-text-secondary">
+                    {bulkDelete.counts.accepted} proposal{bulkDelete.counts.accepted === 1 ? '' : 's'} · can&apos;t bulk-delete
+                  </span>
+                </div>
+              </div>
+              {bulkDelete.error && (
+                <p className="text-xs text-red-300">{bulkDelete.error}</p>
+              )}
+            </div>
+          ) : null
+        }
+        confirmLabel={
+          bulkDelete && bulkDelete.selected.size > 0
+            ? `Delete ${Array.from(bulkDelete.selected).reduce(
+                (n, s) => n + bulkDelete.counts[s],
+                0,
+              )}`
+            : 'Delete'
+        }
+        destructive
+        onCancel={() => setBulkDelete(null)}
+        onConfirm={performBulkDelete}
+      />
+
     </div>
   );
 }
 
-function parseProposalId(m: AgentChatMessage): string | null {
+interface PmChatMetadata {
+  proposal_id?: string;
+  trigger_kind?: string;
+  target_initiative_id?: string | null;
+  source_note_ids?: string[];
+  audit_run_group_id?: string | null;
+  parent_proposal_id?: string | null;
+  origin?: string;
+}
+
+function parseChatMetadata(m: AgentChatMessage): PmChatMetadata | null {
   if (!m.metadata) return null;
   try {
-    const parsed = JSON.parse(m.metadata) as { proposal_id?: string };
-    return parsed.proposal_id ?? null;
-  } catch { return null; }
+    return JSON.parse(m.metadata) as PmChatMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function parseProposalId(m: AgentChatMessage): string | null {
+  return parseChatMetadata(m)?.proposal_id ?? null;
+}
+
+/**
+ * Merge fields available on the linked proposal back into the chat
+ * metadata so old rows (which only carry `{ proposal_id }`) still get
+ * the trigger badge / initiative chip / parent-of-refine chip. The
+ * metadata value takes precedence — the proposal is a fallback only.
+ */
+function enrichChatMetadata(
+  meta: PmChatMetadata | null,
+  proposal: PmProposal | undefined,
+): PmChatMetadata | null {
+  if (!meta && !proposal) return null;
+  const out: PmChatMetadata = { ...(meta ?? {}) };
+  if (proposal) {
+    if (!out.proposal_id) out.proposal_id = proposal.id;
+    if (!out.trigger_kind) out.trigger_kind = proposal.trigger_kind;
+    if (out.target_initiative_id == null && proposal.target_initiative_id) {
+      out.target_initiative_id = proposal.target_initiative_id;
+    }
+    if (out.parent_proposal_id == null && proposal.parent_proposal_id) {
+      out.parent_proposal_id = proposal.parent_proposal_id;
+    }
+  }
+  return out;
+}
+
+/**
+ * One-line context strip rendered above each chat row. Shows trigger
+ * badge, initiative chip, source-note chips, audit-run chip, parent-of-
+ * refine chip, and a "View proposal →" link when applicable.
+ *
+ * Reads from `enrichChatMetadata(...)` so old rows that only have
+ * `{ proposal_id }` still get badges via fallback from the linked
+ * proposal. Renders nothing when the row has no meaningful provenance
+ * (very oldest rows + system messages with no metadata).
+ *
+ * Spec: docs/proposals/pm-chat-context-strip.md.
+ */
+function ChatContextStrip({
+  meta,
+  resolveInitiativeTitle,
+}: {
+  meta: PmChatMetadata | null;
+  resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
+}) {
+  if (!meta) return null;
+
+  const chips: React.ReactNode[] = [];
+
+  if (meta.trigger_kind) {
+    const tb = triggerBadgeFor(meta.trigger_kind);
+    chips.push(
+      <span
+        key="trigger"
+        className={`px-1.5 py-0.5 text-[10px] rounded-sm border uppercase tracking-wide ${tb.cls}`}
+        title={`trigger_kind: ${meta.trigger_kind}`}
+      >
+        {tb.label}
+      </span>,
+    );
+  }
+
+  if (meta.target_initiative_id) {
+    const title = resolveInitiativeTitle?.(meta.target_initiative_id);
+    const label = title ?? `Initiative ${meta.target_initiative_id.slice(0, 8)}`;
+    chips.push(
+      <Link
+        key="initiative"
+        href={`/initiatives/${meta.target_initiative_id}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-sm border border-mc-border bg-mc-surface/40 text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/50 transition-colors"
+        title={`Initiative ${meta.target_initiative_id}`}
+      >
+        <FileText className="w-3 h-3" />
+        <span className="max-w-[16rem] truncate">{label}</span>
+      </Link>,
+    );
+  }
+
+  if (meta.source_note_ids && meta.source_note_ids.length > 0) {
+    for (const noteId of meta.source_note_ids.slice(0, 4)) {
+      chips.push(
+        <Link
+          key={`note-${noteId}`}
+          href={
+            meta.target_initiative_id
+              ? `/initiatives/${meta.target_initiative_id}#note-${noteId}`
+              : `#note-${noteId}`
+          }
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-sm border border-yellow-500/30 bg-yellow-500/5 text-yellow-200/80 hover:text-yellow-100 transition-colors"
+          title={`Audit note ${noteId}`}
+        >
+          <StickyNote className="w-3 h-3" />
+          {noteId.slice(0, 8)}
+        </Link>,
+      );
+    }
+    if (meta.source_note_ids.length > 4) {
+      chips.push(
+        <span
+          key="note-overflow"
+          className="px-1.5 py-0.5 text-[10px] text-mc-text-secondary"
+        >
+          +{meta.source_note_ids.length - 4} more
+        </span>,
+      );
+    }
+  }
+
+  if (meta.audit_run_group_id) {
+    chips.push(
+      <span
+        key="audit"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-sm border border-violet-500/30 bg-violet-500/5 text-violet-200/80"
+        title={`Audit run ${meta.audit_run_group_id}`}
+      >
+        <ScanSearch className="w-3 h-3" />
+        audit {meta.audit_run_group_id.slice(0, 8)}
+      </span>,
+    );
+  }
+
+  if (meta.parent_proposal_id) {
+    chips.push(
+      <Link
+        key="parent"
+        href={`/pm/proposals/${meta.parent_proposal_id}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-sm border border-mc-border bg-mc-surface/40 text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/50 transition-colors"
+        title="Refined from prior proposal"
+      >
+        <GitBranch className="w-3 h-3" />
+        refined from
+      </Link>,
+    );
+  }
+
+  if (meta.proposal_id) {
+    chips.push(
+      <Link
+        key="proposal"
+        href={`/pm/proposals/${meta.proposal_id}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded-sm border border-mc-border bg-mc-surface/40 text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/50 transition-colors"
+      >
+        view proposal
+        <ArrowRight className="w-3 h-3" />
+      </Link>,
+    );
+  }
+
+  if (chips.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mb-1 text-mc-text-secondary">
+      {chips}
+    </div>
+  );
 }
 
 interface ChatMessageRowProps {
@@ -1175,6 +1528,12 @@ interface ChatMessageRowProps {
   setCardRef?: (id: string, el: HTMLDivElement | null) => void;
   /** Phase 6: visual highlight after a deep-link scroll. */
   highlighted?: boolean;
+  /** PR pm-chat-context-strip: register the row wrapper so
+   *  ?focus=<message_id> deep links can scroll to a specific message
+   *  (covers rows that have no proposal anchor). */
+  setMessageRef?: (id: string, el: HTMLDivElement | null) => void;
+  /** Transient ring on the row wrapper after a ?focus=<id> scroll. */
+  messageHighlighted?: boolean;
   /** Resolver for diff renderer — id → initiative title. Falls through
    *  to short-hash when undefined. */
   resolveInitiativeTitle?: (id: string | null | undefined) => string | undefined;
@@ -1194,9 +1553,18 @@ function ChatMessageRow({
   onRefineTextChange,
   setCardRef,
   highlighted,
+  setMessageRef,
+  messageHighlighted,
   resolveInitiativeTitle,
 }: ChatMessageRowProps) {
   const isUser = message.role === 'user';
+  // Enriched chat-provenance for the context strip. Pulls from
+  // message.metadata first, falls back to the linked proposal for
+  // legacy rows that only stored `{ proposal_id }`.
+  const stripMeta = useMemo(
+    () => enrichChatMetadata(parseChatMetadata(message), proposal),
+    [message.metadata, proposal?.id],
+  );
 
   // Per-diff selection state. Initialized to "all selected" (the
   // legacy behavior) and reset whenever the proposal id changes —
@@ -1227,7 +1595,15 @@ function ChatMessageRow({
   // Bare chat bubble for messages that aren't proposal cards.
   if (!proposal) {
     return (
-      <div className={isUser ? 'ml-12' : 'mr-12'}>
+      <div
+        ref={(el) => setMessageRef?.(message.id, el)}
+        className={`${isUser ? 'ml-12' : 'mr-12'} ${
+          messageHighlighted
+            ? 'rounded-md ring-2 ring-mc-accent shadow-lg shadow-mc-accent/20 transition-shadow'
+            : ''
+        }`}
+      >
+        <ChatContextStrip meta={stripMeta} resolveInitiativeTitle={resolveInitiativeTitle} />
         <div className={`border rounded-md px-3 py-2 ${
           isUser
             ? 'bg-blue-500/10 border-blue-500/20'
@@ -1245,7 +1621,15 @@ function ChatMessageRow({
   // Proposal card
   const trigger = triggerBadgeFor(proposal.trigger_kind);
   return (
-    <div className="mr-12">
+    <div
+      ref={(el) => setMessageRef?.(message.id, el)}
+      className={`mr-12 ${
+        messageHighlighted
+          ? 'rounded-md ring-2 ring-mc-accent shadow-lg shadow-mc-accent/20 transition-shadow'
+          : ''
+      }`}
+    >
+      <ChatContextStrip meta={stripMeta} resolveInitiativeTitle={resolveInitiativeTitle} />
       <div
         ref={(el) => setCardRef?.(proposal.id, el)}
         className={`border border-amber-500/40 bg-amber-500/5 rounded-md overflow-hidden transition-shadow ${
@@ -1253,10 +1637,17 @@ function ChatMessageRow({
         }`}
       >
         <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/30 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-amber-300" />
-          <span className="text-sm font-semibold text-amber-200">
-            Proposal — {proposal.proposed_changes.length} change{proposal.proposed_changes.length === 1 ? '' : 's'}
-          </span>
+          <Link
+            href={`/pm/proposals/${proposal.id}`}
+            className="group flex items-center gap-2 text-amber-200 hover:text-amber-100"
+            title="Open full proposal detail"
+          >
+            <AlertTriangle className="w-4 h-4 text-amber-300" />
+            <span className="text-sm font-semibold group-hover:underline underline-offset-2">
+              Proposal — {proposal.proposed_changes.length} change{proposal.proposed_changes.length === 1 ? '' : 's'}
+            </span>
+            <Maximize2 className="w-3 h-3 opacity-0 group-hover:opacity-70 transition-opacity" />
+          </Link>
           <span
             className={`px-1.5 py-0.5 text-[10px] rounded-sm border uppercase tracking-wide ${trigger.cls}`}
             title={`trigger_kind: ${proposal.trigger_kind}`}
@@ -1488,11 +1879,18 @@ function PinnedStandupCard({
       }`}
     >
       <div className="px-3 py-2 flex items-center gap-2 border-b border-violet-500/30">
-        <Pin className="w-4 h-4 text-violet-300" />
-        <span className="text-sm font-semibold text-violet-200">
-          Latest standup — {proposal.proposed_changes.length} change
-          {proposal.proposed_changes.length === 1 ? '' : 's'}
-        </span>
+        <Link
+          href={`/pm/proposals/${proposal.id}`}
+          className="group flex items-center gap-2 text-violet-200 hover:text-violet-100"
+          title="Open full proposal detail"
+        >
+          <Pin className="w-4 h-4 text-violet-300" />
+          <span className="text-sm font-semibold group-hover:underline underline-offset-2">
+            Latest standup — {proposal.proposed_changes.length} change
+            {proposal.proposed_changes.length === 1 ? '' : 's'}
+          </span>
+          <Maximize2 className="w-3 h-3 opacity-0 group-hover:opacity-70 transition-opacity" />
+        </Link>
         <span
           className="px-1.5 py-0.5 text-[10px] rounded-sm border bg-violet-500/15 text-violet-300 border-violet-500/30 uppercase tracking-wide"
           title="trigger_kind: scheduled_drift_scan"

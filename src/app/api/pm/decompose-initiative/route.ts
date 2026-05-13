@@ -110,6 +110,10 @@ export async function POST(request: NextRequest) {
       // cold sessions.
       timeoutMs: 120_000,
       synth: { impact_md: synth.impact_md, changes: synth.changes },
+      chat_context: {
+        target_initiative_id: parent.id,
+        origin: 'pm_dispatch',
+      },
       agent_prompt:
         `Decompose initiative ${parent.id} ("${parent.title}", kind=${parent.kind}) ` +
         `into 3-7 child initiatives.` +
@@ -125,8 +129,8 @@ export async function POST(request: NextRequest) {
         `Call \`propose_changes\` (trigger_kind='decompose_initiative') with one ` +
         `\`create_child_initiative\` diff per child. Pre-wire each child to depend on the ` +
         `prior sibling using placeholder ids \`$0\`, \`$1\`, etc. See your SOUL.md. ` +
-        `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
-        `no freeform summary (the operator UI discards it).`,
+        `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
+        `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
     });
     const proposal = dispatch.proposal;
 
@@ -134,16 +138,23 @@ export async function POST(request: NextRequest) {
     // analysis isn't overwritten by synth's. On synth fallback the two
     // are identical (proposal was created from synth.impact_md).
     try {
+      const ctx = {
+        trigger_kind: 'decompose_initiative' as const,
+        target_initiative_id: parent.id,
+        origin: 'pm_dispatch' as const,
+      };
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'user',
         content: `Split: "${parent.title}"` + (parsed.data.hint ? ` (hint: ${parsed.data.hint})` : ''),
+        context: ctx,
       });
       postPmChatMessage({
         workspace_id: parent.workspace_id,
         role: 'assistant',
         content: proposal.impact_md,
         proposal_id: proposal.id,
+        context: ctx,
       });
     } catch (err) {
       console.warn('[pm-decompose] chat insert failed:', (err as Error).message);
