@@ -180,3 +180,28 @@ When the operator says "go build this in a structured way, I won't review in bet
 ## MCP Server
 
 The MCP server wrapping this app's API for openclaw workers is named `sc-mission-control`. Use that exact name when referencing it in configs, prompts, or docs.
+
+## Inspecting openclaw sessions directly
+
+When MC logs reference an openclaw session (session_key, session UUID, correlation_id, scope key), read the session straight from disk — no need to ask the operator to download and paste it.
+
+Layout:
+
+```
+~/.openclaw/agents/<gateway-agent-id>/sessions/
+  <session-uuid>.jsonl              # chat messages (user / assistant turns)
+  <session-uuid>.trajectory.jsonl   # full event stream — tool calls, tool results, model changes, timestamps
+  <session-uuid>.trajectory-path.json
+```
+
+Mapping from MC log fields:
+
+- **session_key** like `agent:mc-runner-dev:task-<id>` → `<gateway-agent-id>` is the middle segment (`mc-runner-dev`); session UUID isn't in the key, so grep for a unique substring:
+  ```sh
+  grep -rl '<task_id-or-correlation_id>' ~/.openclaw/agents/<gateway-agent-id>/sessions/
+  ```
+  Returns the matching `.trajectory.jsonl`(s).
+- **Session UUID** logged directly → straight file read at the path above.
+- **Only a task_id / correlation_id / scope key** → same grep, across all agent dirs if you don't know the gateway agent: `grep -rl '<id>' ~/.openclaw/agents/*/sessions/`.
+
+The trajectory file is the right source for tool-call-level reasoning; the bare `.jsonl` is enough for "what did the agent say." Both are append-only newline-delimited JSON, so `head -n 50` / `tail -n 50` is fine for spot-checks.
