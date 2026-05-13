@@ -74,6 +74,18 @@ export interface DispatchPmInput {
    * Defaults to `true` for back-compat with the disruption path.
    */
   allowFallback?: boolean;
+  /**
+   * Optional provenance threaded into every chat post the dispatcher
+   * makes for this run (user trigger, agent reply, synth-only echo,
+   * supersede echo). Lets the /pm renderer show a context strip with
+   * initiative/note/audit-run chips. The dispatcher additionally fills
+   * `trigger_kind`, `target_initiative_id`, `parent_proposal_id` from
+   * its own input — callers only need to pass fields the dispatcher
+   * doesn't already know (`source_note_ids`, `audit_run_group_id`,
+   * `target_initiative_id` when not inferrable, `origin`).
+   * See docs/proposals/pm-chat-context-strip.md.
+   */
+  chat_context?: Omit<PmChatMetadata, 'proposal_id' | 'trigger_kind' | 'parent_proposal_id'>;
 }
 
 export interface DispatchPmResult {
@@ -109,7 +121,7 @@ export class PmDispatchGatewayUnavailableError extends Error {
  * Default time we wait for the named PM agent to respond (i.e. land a
  * row via `propose_changes`) before falling back to the synth path.
  */
-const NAMED_AGENT_TIMEOUT_MS = 60_000;
+const NAMED_AGENT_TIMEOUT_MS = 120_000;
 
 /**
  * In-memory registry of active PM dispatches keyed by workspace_id.
@@ -216,6 +228,10 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
     );
   }
 
+  // Build the chat-provenance object once and reuse it across every
+  // post the dispatcher makes for this run. See `buildChatContext`.
+  const baseChatContext = buildChatContext(input);
+
   // Echo the operator's trigger as a user message so the /pm chat
   // reflects the conversation faithfully.
   try {
@@ -223,6 +239,7 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
       workspace_id: input.workspace_id,
       content: input.trigger_text,
       role: 'user',
+      context: baseChatContext,
     });
   } catch (err) {
     console.warn('[pm-dispatch] user chat insert failed:', (err as Error).message);
@@ -242,6 +259,15 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
     parent_proposal_id: input.parent_proposal_id ?? null,
     dispatch_state: gatewayUp ? 'pending_agent' : 'synth_only',
   });
+  // Backfill target_initiative_id from the resolved placeholder so
+  // every chat row from this run carries the chip even when the caller
+  // didn't pass one explicitly (createProposal infers it from the
+  // diff). Caller-supplied value still wins.
+  if (!baseChatContext.target_initiative_id && placeholder.target_initiative_id) {
+    baseChatContext.target_initiative_id = placeholder.target_initiative_id;
+  }
+  // After this point the dispatcher's gateway-up path returns; the
+  // background runners reconstruct `baseChatContext` via buildChatContext.
   // Echo the synth proposal into chat ONLY when we know the agent
   // can't respond (gateway down). When the gateway is up the synth
   // is a placeholder — posting it as chat now produced a misleading
@@ -256,6 +282,7 @@ export function dispatchPm(input: DispatchPmInput): DispatchPmResult {
         content: synth.impact_md,
         proposal_id: placeholder.id,
         role: 'assistant',
+        context: baseChatContext,
       });
     } catch (err) {
       console.warn('[pm-dispatch] chat insert failed:', (err as Error).message);
@@ -315,6 +342,12 @@ async function runDisruptionDispatchInBackground(
   // the `trigger_body` parameter.
   const correlationId = uuidv4();
   const sinceIso = new Date().toISOString();
+  // Per-run chat-provenance for every chat post the dispatcher makes
+  // on the agent's behalf (agent re-echo, mode-B reply, synth-only
+  // fallback). Mirrors what `dispatchPm` already attached to the
+  // user-trigger row so the /pm context strip is consistent across
+  // the whole exchange.
+  const baseChatContext = buildChatContext(params.input, placeholder);
   // notes_intake still ships the precomputed summary inline because that
   // path is a one-shot bulk-process flow, not interactive chat — context
   // cost matters less and the caller benefits from having every initiative
@@ -332,7 +365,7 @@ async function runDisruptionDispatchInBackground(
       ? buildNotesIntakeMessage({ correlationId, notes: input.trigger_text, summary: buildSnapshotSummary(snapshot) })
       : `**PM dispatch (correlation_id: ${correlationId})**\n\n` +
         `Operator input:\n> ${input.trigger_text}\n\n` +
-        `Pick Mode A (\`propose_changes\` + \`Proposal {id}.\` reply) for roadmap mutations, or Mode B (concise plain-text reply, no \`propose_changes\`) for everything else. Empty reply = bug. ` +
+        `Pick Mode A (call \`propose_changes\`, then a short confirmation sentence — no id echo, no \`{...}\` placeholders) for roadmap mutations, or Mode B (concise plain-text reply, no \`propose_changes\`) for everything else. Empty reply = bug. ` +
         `When you need a tool, **issue the tool call** — don't print the tool's name as prose.`;
   const sessionSuffix = input.trigger_kind === 'notes_intake' ? `notes-${correlationId}` : 'dispatch-main';
 
@@ -497,12 +530,15 @@ async function runDisruptionDispatchInBackground(
     );
   }
 
-  // Gate the reconciler tail on whether the agent actually attempted
-  // propose_changes during the dispatch. If it didn't (Mode B
-  // conversational reply), there's no pm_proposals row to wait for —
-  // skip the wait entirely so MC's chat surfaces the reply at the
-  // same wall-clock moment openclaw's webui shows it.
-  const tailMs = result?.sent && proposeChangesAttempted ? RECONCILER_TAIL_MS : 0;
+  // Always run the tail window when send succeeded. The previous
+  // `proposeChangesAttempted` gate raced with the primary timeout:
+  // under heavy ML-server load the agent's `propose_changes` event can
+  // arrive AFTER the primary timeout fires, leaving the flag false at
+  // this check and orphaning the agent row (placeholder stuck in
+  // synth_only, no supersede broadcast). Mirrors the synthesized path
+  // (line ~965). Polling cost during a true Mode B reply is cheap —
+  // 2s-interval SELECTs that return zero rows.
+  const tailMs = result?.sent ? RECONCILER_TAIL_MS : 0;
   const found = await pollForAgentProposal(input.workspace_id, sinceIso, placeholder.id, tailMs);
 
   if (found) {
@@ -524,6 +560,11 @@ async function runDisruptionDispatchInBackground(
           content: found.impact_md,
           proposal_id: found.id,
           role: 'assistant',
+          context: {
+            ...baseChatContext,
+            target_initiative_id:
+              found.target_initiative_id ?? baseChatContext.target_initiative_id ?? null,
+          },
         });
       } catch (err) {
         console.warn('[pm-dispatch] agent chat re-echo failed:', (err as Error).message);
@@ -572,6 +613,7 @@ async function runDisruptionDispatchInBackground(
           workspace_id: input.workspace_id,
           content: replyTextEarly,
           role: 'assistant',
+          context: baseChatContext,
         });
       } catch (err) {
         console.warn('[pm-dispatch] mode-b chat insert failed:', (err as Error).message);
@@ -606,6 +648,7 @@ async function runDisruptionDispatchInBackground(
         workspace_id: input.workspace_id,
         content: replyText,
         role: 'assistant',
+        context: baseChatContext,
       });
     } catch (err) {
       console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
@@ -617,6 +660,7 @@ async function runDisruptionDispatchInBackground(
         content: placeholder.impact_md,
         proposal_id: placeholder.id,
         role: 'assistant',
+        context: baseChatContext,
       });
     } catch (err) {
       console.warn('[pm-dispatch] synth-only chat insert failed:', (err as Error).message);
@@ -830,6 +874,12 @@ export interface DispatchSynthesizedInput {
    * to `namedAgentTimeoutMs()`.
    */
   timeoutMs?: number;
+  /**
+   * Chat-provenance threaded into every chat post the dispatcher makes
+   * for this run. Same contract as `DispatchPmInput.chat_context`. See
+   * docs/proposals/pm-chat-context-strip.md.
+   */
+  chat_context?: Omit<PmChatMetadata, 'proposal_id' | 'trigger_kind' | 'parent_proposal_id'>;
 }
 
 export interface DispatchSynthesizedResult {
@@ -992,6 +1042,14 @@ async function runNamedAgentDispatchInBackground(
           content: found.impact_md,
           proposal_id: found.id,
           role: 'assistant',
+          context: {
+            ...(input.chat_context ?? {}),
+            trigger_kind: input.trigger_kind,
+            parent_proposal_id: input.parent_proposal_id ?? null,
+            target_initiative_id:
+              found.target_initiative_id ?? input.target_initiative_id ?? null,
+            origin: input.chat_context?.origin ?? 'pm_dispatch',
+          },
         });
       } catch (err) {
         console.warn('[pm-dispatch] agent chat re-echo failed:', (err as Error).message);
@@ -1374,11 +1432,65 @@ export function synthesizeImpactAnalysis(
 
 // ─── PM chat helper ─────────────────────────────────────────────────
 
+/**
+ * Provenance fields written into `agent_chat_messages.metadata` so the
+ * /pm renderer can show a "what is this about" context strip on every
+ * row (trigger-kind badge, initiative chip, note chips, audit-run
+ * chip, links to proposal / parent proposal). Pre-existing rows only
+ * carry `{ proposal_id }`; the renderer derives the rest from the
+ * linked proposal as a graceful fallback. See
+ * `docs/proposals/pm-chat-context-strip.md`.
+ */
+export interface PmChatMetadata {
+  proposal_id?: string;
+  trigger_kind?: PmProposalTriggerKind;
+  target_initiative_id?: string | null;
+  source_note_ids?: string[];
+  audit_run_group_id?: string | null;
+  parent_proposal_id?: string | null;
+  origin?:
+    | 'pm_dispatch'
+    | 'ask_pm_from_notes'
+    | 'standup'
+    | 'accept_result'
+    | 'system';
+}
+
+/**
+ * Build the per-run chat-provenance object from a `DispatchPmInput`,
+ * merging caller-supplied `chat_context` with fields the dispatcher
+ * derives from its own input. Used by both the foreground `dispatchPm`
+ * entry point and the background runners so every chat row from a
+ * single dispatch carries identical metadata.
+ */
+export function buildChatContext(
+  input: DispatchPmInput,
+  placeholder?: { target_initiative_id?: string | null },
+): Omit<PmChatMetadata, 'proposal_id'> {
+  const ctx: Omit<PmChatMetadata, 'proposal_id'> = {
+    ...(input.chat_context ?? {}),
+    trigger_kind: input.trigger_kind ?? 'manual',
+    parent_proposal_id: input.parent_proposal_id ?? null,
+    origin: input.chat_context?.origin ?? 'pm_dispatch',
+  };
+  if (!ctx.target_initiative_id && placeholder?.target_initiative_id) {
+    ctx.target_initiative_id = placeholder.target_initiative_id;
+  }
+  return ctx;
+}
+
 interface PostPmChatMessage {
   workspace_id: string;
   content: string;
   role: 'user' | 'assistant';
   proposal_id?: string;
+  /**
+   * Optional structured provenance. Merged with `proposal_id` (if set)
+   * into the row's `metadata` JSON. Pass everything you have at the
+   * call site — the renderer falls back gracefully when fields are
+   * missing.
+   */
+  context?: Omit<PmChatMetadata, 'proposal_id'>;
 }
 
 /**
@@ -1393,9 +1505,14 @@ export function postPmChatMessage(input: PostPmChatMessage): void {
       `No PM agent for workspace ${input.workspace_id} — migration 045 should have seeded one`,
     );
   }
-  const metadata = input.proposal_id
-    ? JSON.stringify({ proposal_id: input.proposal_id })
-    : null;
+  const meta: PmChatMetadata = { ...(input.context ?? {}) };
+  if (input.proposal_id) meta.proposal_id = input.proposal_id;
+  // Drop empty arrays / null-only fields so the JSON stays compact.
+  if (meta.source_note_ids && meta.source_note_ids.length === 0) {
+    delete meta.source_note_ids;
+  }
+  const metadata =
+    Object.keys(meta).length > 0 ? JSON.stringify(meta) : null;
   run(
     `INSERT INTO agent_chat_messages (id, agent_id, role, content, status, metadata)
      VALUES (?, ?, ?, ?, 'delivered', ?)`,

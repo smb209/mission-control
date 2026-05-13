@@ -176,6 +176,11 @@ export function generateStandup(input: GenerateStandupInput): GenerateStandupRes
       content: impactMd,
       proposal_id: proposal.id,
       role: 'assistant',
+      context: {
+        trigger_kind: 'scheduled_drift_scan',
+        target_initiative_id: proposal.target_initiative_id ?? null,
+        origin: 'standup',
+      },
     });
   } catch (err) {
     console.warn('[pm-standup] chat insert failed:', (err as Error).message);

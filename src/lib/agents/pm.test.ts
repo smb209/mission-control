@@ -254,8 +254,22 @@ test('dispatchPm: persists a draft proposal AND posts to PM chat with metadata',
   const assistant = messages.find(m => m.role === 'assistant');
   assert.ok(assistant);
   assert.ok(assistant!.metadata);
-  const meta = JSON.parse(assistant!.metadata!) as { proposal_id?: string };
+  const meta = JSON.parse(assistant!.metadata!) as {
+    proposal_id?: string;
+    trigger_kind?: string;
+    origin?: string;
+  };
   assert.equal(meta.proposal_id, result.proposal.id);
+  // PR pm-chat-context-strip: the dispatcher always writes the
+  // widened metadata shape so /pm can render the context strip.
+  assert.equal(meta.trigger_kind, 'manual');
+  assert.equal(meta.origin, 'pm_dispatch');
+  // The user trigger row carries the same provenance.
+  const userRow = messages.find(m => m.role === 'user');
+  assert.ok(userRow?.metadata);
+  const userMeta = JSON.parse(userRow!.metadata!) as { trigger_kind?: string; origin?: string };
+  assert.equal(userMeta.trigger_kind, 'manual');
+  assert.equal(userMeta.origin, 'pm_dispatch');
 
   // Generated availability is for Sarah specifically.
   const avail = result.proposal.proposed_changes.find(c => c.kind === 'add_availability');

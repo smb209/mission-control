@@ -112,3 +112,41 @@ test('POST: invalid JSON body → 400', async () => {
   const res = await POST(req, ctx);
   assert.equal(res.status, 400);
 });
+
+test('POST: happy path threads note + audit-run provenance into chat metadata', async () => {
+  const { ensurePmAgent } = await import('@/lib/bootstrap-agents');
+  const { queryAll } = await import('@/lib/db');
+  const ws = freshWorkspace();
+  const init = freshInitiative(ws);
+  ensurePmAgent(ws);
+  const note = makeNote(ws, init);
+
+  const { req, ctx } = postReq(init, { note_ids: [note.id] });
+  const res = await POST(req, ctx);
+  assert.equal(res.status, 200, `expected 200, got ${res.status}`);
+
+  const pm = (await import('@/lib/db')).queryOne<{ id: string }>(
+    `SELECT id FROM agents WHERE workspace_id = ? AND role = 'pm'`,
+    [ws],
+  );
+  assert.ok(pm);
+  const rows = queryAll<{ role: string; metadata: string | null }>(
+    `SELECT role, metadata FROM agent_chat_messages WHERE agent_id = ? ORDER BY created_at`,
+    [pm!.id],
+  );
+  assert.ok(rows.length >= 1);
+  const userRow = rows.find(r => r.role === 'user');
+  assert.ok(userRow?.metadata, 'expected user row to carry widened metadata');
+  const meta = JSON.parse(userRow!.metadata!) as {
+    trigger_kind?: string;
+    target_initiative_id?: string | null;
+    source_note_ids?: string[];
+    audit_run_group_id?: string | null;
+    origin?: string;
+  };
+  assert.equal(meta.trigger_kind, 'notes_intake');
+  assert.equal(meta.target_initiative_id, init);
+  assert.deepEqual(meta.source_note_ids, [note.id]);
+  assert.equal(meta.audit_run_group_id, note.run_group_id);
+  assert.equal(meta.origin, 'ask_pm_from_notes');
+});

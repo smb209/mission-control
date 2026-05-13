@@ -555,6 +555,12 @@ export function registerCoreTools(server: McpServer): void {
               role: 'assistant',
               content:
                 `**🚩 ${note.kind} (from ${note.role})**\n\n${note.body}${filesLine}`,
+              context: {
+                target_initiative_id: note.initiative_id ?? null,
+                source_note_ids: [note.id],
+                audit_run_group_id: note.run_group_id ?? null,
+                origin: 'system',
+              },
             });
           } catch (chatErr) {
             console.warn(

@@ -45,6 +45,6 @@ export function buildNotesIntakeMessage(input: BuildNotesIntakeMessageInput): st
     '- If the notes contain nothing actionable for the roadmap, return an empty `changes` array and explain in `impact_md`.',
     '- Never fabricate agent ids, dates, or initiative titles.',
     '',
-    'Output discipline: call `propose_changes` FIRST. After the tool returns, your reply MUST be a single line: `Proposal {id}.` — no freeform summary. The operator UI renders only `impact_md` + structured fields; anything you say in chat after the tool call is discarded.',
+    'Output discipline: you MUST invoke the `propose_changes` MCP tool. Do not skip the tool call and reply only in chat — the operator UI renders only the structured proposal, so a chat-only reply is invisible and the run is discarded. After the tool call returns successfully, reply with a single short sentence confirming you proposed changes (e.g. "Proposed changes." or "Done — proposal submitted."). Do not echo ids or use `{...}` / `{{...}}` placeholders; the operator already has the id from the tool result.',
   ].join('\n');
 }

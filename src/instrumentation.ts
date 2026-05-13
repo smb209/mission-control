@@ -19,6 +19,23 @@ export async function register() {
     throw err;
   }
 
+  // Heal any pm_proposals orphans left over from a prior process that
+  // crashed mid-dispatch or where the agent's `propose_changes` landed
+  // after the reconciler had already given up. Idempotent — safe to
+  // run every boot. See pm-proposals.ts `sweepOrphanedPlaceholders`.
+  try {
+    const { sweepOrphanedPlaceholders } = await import('@/lib/db/pm-proposals');
+    const linked = sweepOrphanedPlaceholders();
+    if (linked > 0) {
+      console.log(`[Instrumentation] adopted ${linked} orphaned PM placeholder(s) at boot`);
+    }
+  } catch (err) {
+    console.warn(
+      '[Instrumentation] PM orphan sweep failed (non-fatal):',
+      (err as Error).message,
+    );
+  }
+
   // Register the pm_pending_notes drain worker. The drain is cheap when
   // the queue is empty and it's the only path that recovers
   // propose_from_notes requests captured while the gateway was offline.

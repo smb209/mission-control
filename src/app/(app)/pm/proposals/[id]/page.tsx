@@ -3,7 +3,7 @@
 import { useEffect, useState, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Check, X, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Check, X, RefreshCw, AlertTriangle, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -12,6 +12,7 @@ import {
 } from '@/lib/pm/planSuggestionsSidecar';
 import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 interface PmProposal {
   id: string;
@@ -48,11 +49,12 @@ export default function ProposalDetailPage({
   const [proposal, setProposal] = useState<PmProposal | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [acting, setActing] = useState<'accept' | 'reject' | null>(null);
+  const [acting, setActing] = useState<'accept' | 'reject' | 'delete' | null>(null);
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
   const [refineErr, setRefineErr] = useState<string | null>(null);
   const [showRefineInput, setShowRefineInput] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(false);
   // initiative-id → title resolver. Loaded after the proposal lands so
   // we know which workspace to query. Falls back to short-hash UUIDs
   // when missing.
@@ -123,6 +125,27 @@ export default function ProposalDetailPage({
       setErr(e instanceof Error ? e.message : 'Reject failed');
     } finally {
       setActing(null);
+    }
+  };
+
+  const performDelete = async () => {
+    if (!proposal) return;
+    setActing('delete');
+    try {
+      const res = await fetch(`/api/pm/proposals/${proposal.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || 'Delete failed');
+      }
+      // The detail page anchors at the proposal id — once it's gone
+      // there's nothing to render. Send the operator back to /pm so
+      // they can pick up the chat thread from there.
+      router.push('/pm');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setActing(null);
+      setPendingDelete(false);
     }
   };
 
@@ -249,14 +272,13 @@ export default function ProposalDetailPage({
                 />
               )}
 
-              {/* Actions */}
-              {proposal.status !== 'accepted' && (
-                // Refine is allowed on draft, superseded, and rejected —
-                // the DB only blocks accepted (refineProposal in
-                // pm-proposals.ts). Accept/Reject still gated to draft
-                // below since those mutate state that's already moved on.
-                <div className="px-4 py-3 bg-amber-500/5 flex flex-wrap items-center gap-2">
-                  {showRefineInput ? (
+              {/* Actions. Refine is allowed on draft, superseded, and
+                  rejected — the DB only blocks accepted (refineProposal
+                  in pm-proposals.ts). Accept/Reject gated to draft.
+                  Delete is allowed on every status (matches the /pm
+                  recents-list trash affordance). */}
+              <div className="px-4 py-3 bg-amber-500/5 flex flex-wrap items-center gap-2">
+                {proposal.status !== 'accepted' && showRefineInput ? (
                     <>
                       <input
                         type="text"
@@ -292,13 +314,15 @@ export default function ProposalDetailPage({
                     </>
                   ) : (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => setShowRefineInput(true)}
-                        className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 flex items-center gap-1"
-                      >
-                        <RefreshCw className="w-3 h-3" /> Refine
-                      </button>
+                      {proposal.status !== 'accepted' && (
+                        <button
+                          type="button"
+                          onClick={() => setShowRefineInput(true)}
+                          className="text-xs px-2 py-1 border border-mc-border rounded-sm hover:bg-mc-bg/50 flex items-center gap-1"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Refine
+                        </button>
+                      )}
                       {proposal.status === 'draft' && (
                         <>
                           <button
@@ -319,10 +343,18 @@ export default function ProposalDetailPage({
                           </button>
                         </>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => setPendingDelete(true)}
+                        disabled={acting !== null}
+                        className="ml-auto text-xs px-2 py-1 border border-red-500/30 text-red-300/90 rounded-sm hover:bg-red-500/10 hover:text-red-200 flex items-center gap-1 disabled:opacity-50"
+                        title="Permanently remove this proposal"
+                      >
+                        <Trash2 className="w-3 h-3" /> {acting === 'delete' ? 'Deleting…' : 'Delete'}
+                      </button>
                     </>
                   )}
-                </div>
-              )}
+              </div>
             </div>
 
             {/* Metadata */}
@@ -349,6 +381,32 @@ export default function ProposalDetailPage({
                 </div>
               )}
             </div>
+
+            <ConfirmDialog
+              open={pendingDelete}
+              title="Delete proposal?"
+              body={
+                <div className="space-y-2 text-sm">
+                  <p>
+                    This permanently removes the proposal from the recents list
+                    and the database. The action can&apos;t be undone.
+                  </p>
+                  <div className="text-xs text-mc-text-secondary border border-mc-border rounded-sm p-2 bg-mc-bg-secondary/30">
+                    <div className="font-mono mb-1">
+                      {proposal.status} · {proposal.proposed_changes.length}{' '}
+                      change{proposal.proposed_changes.length === 1 ? '' : 's'}
+                    </div>
+                    <div className="line-clamp-3 break-words">
+                      {proposal.trigger_text}
+                    </div>
+                  </div>
+                </div>
+              }
+              confirmLabel="Delete"
+              destructive
+              onCancel={() => setPendingDelete(false)}
+              onConfirm={performDelete}
+            />
           </>
         )}
       </div>

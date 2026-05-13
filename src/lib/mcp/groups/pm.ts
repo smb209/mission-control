@@ -15,11 +15,17 @@ import { previewDerivation } from '@/lib/roadmap/apply-derivation';
 import {
   createProposal,
   refineProposal as refineProposalDb,
+  tryAdoptOrphanedPlaceholder,
   type PmDiff,
 } from '@/lib/db/pm-proposals';
-import { dispatchPm, PmDispatchGatewayUnavailableError } from '@/lib/agents/pm-dispatch';
+import {
+  dispatchPm,
+  PmDispatchGatewayUnavailableError,
+  postPmChatMessage,
+} from '@/lib/agents/pm-dispatch';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { enqueuePendingNote } from '@/lib/db/pm-pending-notes';
+import { broadcast } from '@/lib/events';
 
 import {
   agentIdArg,
@@ -170,7 +176,7 @@ export function registerPmTools(server: McpServer): void {
       annotations: { destructiveHint: false, openWorldHint: false },
     },
     async (args) => safeWrap(() => {
-      return createProposal({
+      const created = createProposal({
         workspace_id: args.workspace_id,
         trigger_text: args.trigger_text,
         trigger_kind: args.trigger_kind,
@@ -179,6 +185,63 @@ export function registerPmTools(server: McpServer): void {
         plan_suggestions: args.plan_suggestions ?? null,
         parent_proposal_id: args.parent_proposal_id ?? null,
       });
+
+      // Retroactive supersede: if a synth placeholder is still
+      // orphaned (in-flight reconciler timed out before the agent's
+      // tool call arrived — happens under heavy ML-server load), adopt
+      // it now. The agent caller didn't pass parent_proposal_id, so
+      // only run this when the row is unlinked.
+      if (!created.parent_proposal_id) {
+        try {
+          const adoptedPlaceholderId = tryAdoptOrphanedPlaceholder(created.id);
+          if (adoptedPlaceholderId) {
+            // Re-echo the agent's (richer) impact_md into chat anchored
+            // to the new agent-row id. Mirrors the in-flight reconciler
+            // path in pm-dispatch.ts.
+            try {
+              postPmChatMessage({
+                workspace_id: created.workspace_id,
+                content: created.impact_md,
+                proposal_id: created.id,
+                role: 'assistant',
+                context: {
+                  trigger_kind: created.trigger_kind,
+                  target_initiative_id: created.target_initiative_id ?? null,
+                  parent_proposal_id: adoptedPlaceholderId,
+                  origin: 'pm_dispatch',
+                },
+              });
+            } catch (err) {
+              console.warn(
+                '[propose_changes] retroactive chat re-echo failed:',
+                (err as Error).message,
+              );
+            }
+            broadcast({
+              type: 'pm_proposal_replaced',
+              payload: {
+                workspace_id: created.workspace_id,
+                old_id: adoptedPlaceholderId,
+                new_id: created.id,
+                target_initiative_id: created.target_initiative_id ?? null,
+                trigger_kind: created.trigger_kind,
+              },
+            });
+            console.log(
+              `[propose_changes] retroactively adopted orphan placeholder ${adoptedPlaceholderId} ` +
+                `← agent row ${created.id} (workspace=${created.workspace_id}, ` +
+                `trigger_kind=${created.trigger_kind})`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            '[propose_changes] orphan-adopt failed (non-fatal):',
+            (err as Error).message,
+          );
+        }
+      }
+
+      return created;
     }),
   );
 

@@ -147,6 +147,10 @@ export async function POST(request: NextRequest) {
       // round trips at ~70s in the wild.
       timeoutMs: 120_000,
       synth: { impact_md: synth.impact_md, changes: synth.changes, plan_suggestions: synth.suggestions as unknown as Record<string, unknown> },
+      chat_context: {
+        target_initiative_id: parsed.data.target_initiative_id ?? null,
+        origin: 'pm_dispatch',
+      },
       agent_prompt:
         `Plan an initiative draft titled "${parsed.data.draft.title}". ` +
         `Operator-provided draft: ${JSON.stringify(parsed.data.draft)}. ` +
@@ -161,8 +165,8 @@ export async function POST(request: NextRequest) {
         `Call \`propose_changes\` (trigger_kind='plan_initiative') with proposed_changes=[] and ` +
         `pass the structured plan_suggestions parameter directly (do NOT embed JSON in impact_md). ` +
         `See your SOUL.md for the plan_suggestions shape. ` +
-        `Output discipline: tool call FIRST, then a single-line \`Proposal {id}.\` reply — ` +
-        `no freeform summary (the operator UI discards it).`,
+        `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
+        `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
     });
     const proposal = dispatch.proposal;
     // Note: the synth placeholder created by `dispatchPmSynthesized` already
@@ -179,16 +183,23 @@ export async function POST(request: NextRequest) {
     // Posting `synth.impact_md` directly (the old behaviour) discarded
     // the named agent's reasoning whenever the gateway path was used.
     try {
+      const ctx = {
+        trigger_kind: 'plan_initiative' as const,
+        target_initiative_id: parsed.data.target_initiative_id ?? null,
+        origin: 'pm_dispatch' as const,
+      };
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,
         role: 'user',
         content: `Enrich: "${parsed.data.draft.title}"`,
+        context: ctx,
       });
       postPmChatMessage({
         workspace_id: parsed.data.workspace_id,
         role: 'assistant',
         content: proposal.impact_md,
         proposal_id: proposal.id,
+        context: ctx,
       });
     } catch (err) {
       console.warn('[pm-plan] chat insert failed:', (err as Error).message);

@@ -75,17 +75,13 @@ after the tool call.** The operator never sees your conversational reply
 Anything you write in the chat after the tool call is wasted tokens and
 latency.
 
-After the tool returns, your reply MUST be a single line of the form:
+After the tool returns successfully, reply with a single short
+confirmation sentence such as `Proposed changes.` or `Done — proposal
+submitted.` Do not echo the proposal id, and do not use `{...}` or
+`{{...}}` placeholder syntax — those are template artefacts, not literal
+output. The operator already has the id from the tool result.
 
-```
-Proposal {proposal_id}.
-```
-
-Examples:
-- `Proposal 8b2f3c10-…`
-- `Proposal 4e9d-… (refined).`
-
-That's it. Put all the substance into `impact_md` and (for plan_initiative)
+Put all the substance into `impact_md` and (for plan_initiative)
 `plan_suggestions`. The `impact_md` is what shows up in the operator's
 chat card; the freeform reply is discarded.
 

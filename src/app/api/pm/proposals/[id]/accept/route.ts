@@ -18,7 +18,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { acceptProposal, PmProposalValidationError } from '@/lib/db/pm-proposals';
+import {
+  acceptProposal,
+  PmProposalValidationError,
+  type PmProposalTriggerKind,
+} from '@/lib/db/pm-proposals';
 import { postPmChatMessage } from '@/lib/agents/pm-dispatch';
 import { queryOne } from '@/lib/db';
 import {
@@ -65,12 +69,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const proposal = queryOne<{
       id: string;
       workspace_id: string;
-      trigger_kind: string;
+      trigger_kind: PmProposalTriggerKind;
       impact_md: string;
       status: string;
       plan_suggestions: string | null;
+      parent_proposal_id: string | null;
     }>(
-      'SELECT id, workspace_id, trigger_kind, impact_md, status, plan_suggestions FROM pm_proposals WHERE id = ?',
+      'SELECT id, workspace_id, trigger_kind, impact_md, status, plan_suggestions, parent_proposal_id FROM pm_proposals WHERE id = ?',
       [id],
     );
     if (!proposal) {
@@ -131,6 +136,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           workspace_id: proposal.workspace_id,
           role: 'assistant',
           content: text,
+          proposal_id: proposal.id,
+          context: {
+            trigger_kind: proposal.trigger_kind,
+            target_initiative_id: targetInitiativeId,
+            parent_proposal_id: proposal.parent_proposal_id ?? null,
+            origin: 'accept_result',
+          },
         });
       } catch (err) {
         console.warn('[pm-accept] chat insert failed:', (err as Error).message);
@@ -176,6 +188,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
             workspace_id: w.workspace_id,
             role: 'assistant',
             content: text,
+            proposal_id: proposal.id,
+            context: {
+              trigger_kind: proposal.trigger_kind,
+              target_initiative_id: proposal.target_initiative_id ?? null,
+              parent_proposal_id: proposal.parent_proposal_id ?? null,
+              origin: 'accept_result',
+            },
           });
         }
       } catch (err) {
