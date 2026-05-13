@@ -228,6 +228,83 @@ async function cancelSubtaskImpl(args: { agent_id: string; subtask_id: string; r
   });
 }
 
+// Peer-resolution helper shared by spawn_subtask + plan_convoy. Returns
+// either the resolved agent row + addressing axis, or a structured error
+// describing why it couldn't resolve. Mirrors the inline resolver in the
+// spawn_subtask handler exactly — kept terse because plan_convoy needs
+// to aggregate errors across many slices rather than short-circuit on
+// the first one. (spawn_subtask still uses its own inline copy because
+// its error text is hand-tuned for the single-slice case.)
+type DelegationPeerRow = {
+  id: string;
+  name: string;
+  role: string | null;
+  gateway_agent_id: string | null;
+};
+type ResolvePeerOk = {
+  ok: true;
+  peer: DelegationPeerRow;
+  resolvedVia: 'role' | 'peer_agent_id' | 'peer_gateway_id';
+};
+type ResolvePeerErr = {
+  ok: false;
+  code: string;
+  message: string;
+  addressing: Record<string, string>;
+};
+function resolveDelegationPeer(
+  axes: { role?: string; peer_agent_id?: string; peer_gateway_id?: string },
+  parentWs: string,
+): ResolvePeerOk | ResolvePeerErr {
+  const provided = [axes.role, axes.peer_agent_id, axes.peer_gateway_id]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0);
+  if (provided.length === 0) {
+    return { ok: false, code: 'peer_addressing_missing', message: 'Specify exactly one of role / peer_agent_id / peer_gateway_id.', addressing: {} };
+  }
+  if (provided.length > 1) {
+    return { ok: false, code: 'peer_addressing_conflict', message: 'role / peer_agent_id / peer_gateway_id are mutually exclusive.', addressing: {} };
+  }
+  if (axes.role) {
+    const peer = queryOne<DelegationPeerRow>(
+      `SELECT id, name, role, gateway_agent_id FROM agents
+        WHERE role = ?
+          AND COALESCE(workspace_id, 'default') = ?
+          AND COALESCE(status, 'standby') != 'offline'
+          AND COALESCE(is_active, 1) = 1
+        ORDER BY updated_at DESC LIMIT 1`,
+      [axes.role, parentWs],
+    );
+    if (!peer) {
+      return { ok: false, code: 'peer_not_found', message: `No active agent with role "${axes.role}" in workspace ${parentWs}.`, addressing: { role: axes.role } };
+    }
+    return { ok: true, peer, resolvedVia: 'role' };
+  }
+  if (axes.peer_agent_id) {
+    const peer = queryOne<DelegationPeerRow & { workspace_id: string | null }>(
+      `SELECT id, name, role, gateway_agent_id, workspace_id FROM agents WHERE id = ? LIMIT 1`,
+      [axes.peer_agent_id],
+    );
+    if (!peer) {
+      return { ok: false, code: 'peer_not_found', message: `No agent with id "${axes.peer_agent_id}".`, addressing: { peer_agent_id: axes.peer_agent_id } };
+    }
+    const isOrgRunner = peer.gateway_agent_id === 'mc-runner' || peer.gateway_agent_id === 'mc-runner-dev';
+    const peerWs = peer.workspace_id ?? 'default';
+    if (peerWs !== parentWs && !isOrgRunner) {
+      return { ok: false, code: 'peer_not_in_workspace', message: `Peer "${peer.name}" is in workspace ${peerWs}, not ${parentWs}.`, addressing: { peer_agent_id: axes.peer_agent_id } };
+    }
+    return { ok: true, peer: { id: peer.id, name: peer.name, role: peer.role, gateway_agent_id: peer.gateway_agent_id }, resolvedVia: 'peer_agent_id' };
+  }
+  const gwId = axes.peer_gateway_id as string;
+  const isOrgRunner = gwId === 'mc-runner' || gwId === 'mc-runner-dev';
+  const peer = isOrgRunner
+    ? queryOne<DelegationPeerRow>(`SELECT id, name, role, gateway_agent_id FROM agents WHERE gateway_agent_id = ? LIMIT 1`, [gwId])
+    : queryOne<DelegationPeerRow>(`SELECT id, name, role, gateway_agent_id FROM agents WHERE gateway_agent_id = ? AND COALESCE(workspace_id, 'default') = ? LIMIT 1`, [gwId, parentWs]);
+  if (!peer) {
+    return { ok: false, code: 'peer_not_found', message: `No agent with gateway_agent_id "${gwId}" in workspace ${parentWs}.`, addressing: { peer_gateway_id: gwId } };
+  }
+  return { ok: true, peer, resolvedVia: 'peer_gateway_id' };
+}
+
 export function registerWorkTools(server: McpServer): void {
   // get_task ──────────────────────────────────────────────────────
   server.registerTool(
@@ -1591,6 +1668,236 @@ export function registerWorkTools(server: McpServer): void {
       return textResult(
         `Spawned subtask ${spawn.subtaskId} to ${peerLabel}. Due at ${spawn.dueAt}; check-in cadence ${checkinInterval}m.`,
         payload,
+      );
+    }),
+  );
+
+  // plan_convoy ───────────────────────────────────────────────────
+  // Coordinator-only. Submits the full DAG for a parent task in a
+  // single tool call. Slices reference each other by symbolic `id`
+  // (string the coordinator picks); the tool validates the topology,
+  // resolves every peer up front, then creates convoy_subtasks rows
+  // in topological order with resolved `depends_on_subtask_ids`. Roots
+  // dispatch immediately; dependent slices stay in `inbox` until their
+  // deps complete (the gate landed in PR #344). Use this for the
+  // initial fan-out — use `spawn_subtask` for follow-ups discovered
+  // mid-flight.
+  server.registerTool(
+    'plan_convoy',
+    {
+      title: 'Submit the full convoy DAG in one call (coordinator-only)',
+      description:
+        "Atomic decomposition: declares every slice + its dependencies as one structured plan. Dependent slices stay queued (no briefing sent) until each prerequisite is accepted. Use this instead of issuing N sequential spawn_subtask calls — it forces topology-first thinking and rejects cycles / orphan refs before any briefing fires. spawn_subtask remains for late additions.",
+      inputSchema: {
+        agent_id: agentIdArg.describe('The calling coordinator agent.'),
+        task_id: taskIdArg.describe("The coordinator's parent task id."),
+        slices: z
+          .array(
+            z.object({
+              id: z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/).describe('Symbolic slice id (e.g. "builder", "test"). Used by depends_on; not stored.'),
+              role: z.string().min(1).optional(),
+              peer_agent_id: z.string().min(1).optional(),
+              peer_gateway_id: z.string().min(1).optional(),
+              slice: z.string().min(10).max(500),
+              message: z.string().min(1).max(10000),
+              expected_deliverables: z
+                .array(z.object({ title: z.string().min(1).max(200), kind: z.enum(['file', 'note', 'report']) }))
+                .min(1),
+              acceptance_criteria: z.array(z.string().min(10).max(500)).min(1),
+              expected_duration_minutes: z.number().int().min(5).max(240),
+              checkin_interval_minutes: z.number().int().min(5).max(60).optional(),
+              depends_on: z.array(z.string().min(1).max(40)).optional().describe('Symbolic ids of other slices in this plan that must complete first.'),
+            }),
+          )
+          .min(1)
+          .max(12)
+          .describe('The full slice list. Max 12 per plan; if you need more, split into multiple plan_convoy calls or use spawn_subtask follow-ups.'),
+      },
+      annotations: { destructiveHint: true, openWorldHint: false },
+    },
+    trace('plan_convoy', async (args) => {
+      const { assertAgentCanActOnTask, AuthzError, setTaskCompletionLock } =
+        await import('@/lib/authz/agent-task');
+      try {
+        assertAgentCanActOnTask(args.agent_id, args.task_id, 'delegate');
+      } catch (err) {
+        if (err instanceof AuthzError && err.code === 'agent_not_coordinator') {
+          setTaskCompletionLock(args.task_id, 'agent_not_coordinator');
+          return {
+            isError: true,
+            content: [{ type: 'text', text: 'You are not the coordinator for this task and cannot delegate. The task is now locked pending escalation: your only valid next call is escalate_to_parent({ task_id, agent_id, reason }).' }],
+            structuredContent: { error: 'agent_not_coordinator', next_action: 'escalate_to_parent' },
+          };
+        }
+        throw err;
+      }
+
+      const parent = queryOne<{ is_subtask: number | null; workspace_id: string | null }>(
+        'SELECT is_subtask, workspace_id FROM tasks WHERE id = ?',
+        [args.task_id],
+      );
+      if (!parent) {
+        return { isError: true, content: [{ type: 'text', text: `Parent task ${args.task_id} not found.` }], structuredContent: { error: 'task_not_found' } };
+      }
+      if (parent.is_subtask === 1) {
+        return { isError: true, content: [{ type: 'text', text: 'Peer sub-delegation is not allowed — your task is itself a subtask.' }], structuredContent: { error: 'peer_sub_delegation_blocked' } };
+      }
+      const parentWs = parent.workspace_id ?? 'default';
+
+      // ── DAG validation ─────────────────────────────────────────
+      const ids = new Set<string>();
+      for (const s of args.slices) {
+        if (ids.has(s.id)) {
+          return { isError: true, content: [{ type: 'text', text: `Duplicate slice id "${s.id}".` }], structuredContent: { error: 'duplicate_slice_id', id: s.id } };
+        }
+        ids.add(s.id);
+      }
+      for (const s of args.slices) {
+        for (const dep of s.depends_on ?? []) {
+          if (!ids.has(dep)) {
+            return { isError: true, content: [{ type: 'text', text: `Slice "${s.id}" depends on unknown id "${dep}".` }], structuredContent: { error: 'unknown_dep', slice_id: s.id, dep } };
+          }
+          if (dep === s.id) {
+            return { isError: true, content: [{ type: 'text', text: `Slice "${s.id}" depends on itself.` }], structuredContent: { error: 'self_dependency', slice_id: s.id } };
+          }
+        }
+      }
+      // Topological sort via Kahn's algorithm. Surfaces cycles before
+      // any row is written.
+      const inDegree = new Map<string, number>();
+      const outEdges = new Map<string, string[]>();
+      for (const s of args.slices) {
+        inDegree.set(s.id, (s.depends_on ?? []).length);
+        for (const dep of s.depends_on ?? []) {
+          const arr = outEdges.get(dep) ?? [];
+          arr.push(s.id);
+          outEdges.set(dep, arr);
+        }
+      }
+      const ready: string[] = [];
+      for (const [id, deg] of inDegree) if (deg === 0) ready.push(id);
+      const topo: string[] = [];
+      while (ready.length > 0) {
+        const id = ready.shift()!;
+        topo.push(id);
+        for (const next of outEdges.get(id) ?? []) {
+          const d = (inDegree.get(next) ?? 0) - 1;
+          inDegree.set(next, d);
+          if (d === 0) ready.push(next);
+        }
+      }
+      if (topo.length !== args.slices.length) {
+        const stuck = args.slices.filter(s => !topo.includes(s.id)).map(s => s.id);
+        return { isError: true, content: [{ type: 'text', text: `Cycle detected: slices ${stuck.join(', ')} form a dependency loop.` }], structuredContent: { error: 'cycle_detected', stuck } };
+      }
+
+      // ── Peer resolution pre-pass (collect ALL errors before writes) ─
+      const resolved = new Map<string, { peer: DelegationPeerRow; resolvedVia: 'role' | 'peer_agent_id' | 'peer_gateway_id' }>();
+      const peerErrors: Array<{ slice_id: string; code: string; message: string }> = [];
+      for (const s of args.slices) {
+        const r = resolveDelegationPeer(
+          { role: s.role, peer_agent_id: s.peer_agent_id, peer_gateway_id: s.peer_gateway_id },
+          parentWs,
+        );
+        if (!r.ok) peerErrors.push({ slice_id: s.id, code: r.code, message: r.message });
+        else resolved.set(s.id, { peer: r.peer, resolvedVia: r.resolvedVia });
+      }
+      if (peerErrors.length > 0) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Could not resolve ${peerErrors.length} peer(s):\n${peerErrors.map(e => `- ${e.slice_id}: ${e.message}`).join('\n')}` }],
+          structuredContent: { error: 'peer_resolution_failed', failures: peerErrors },
+        };
+      }
+
+      // ── Create rows in topological order so depends_on_subtask_ids
+      //    resolves cleanly per slice.
+      const symbolicToSubtaskId = new Map<string, string>();
+      const symbolicToChildTaskId = new Map<string, string>();
+      const slicesById = new Map(args.slices.map(s => [s.id, s] as const));
+      const created: Array<{
+        symbolic_id: string;
+        subtask_id: string;
+        child_task_id: string;
+        peer: { id: string; name: string; role: string; gateway_agent_id: string | null; addressed_via: string };
+        depends_on_subtask_ids: string[];
+        due_at: string;
+        will_dispatch_immediately: boolean;
+      }> = [];
+
+      let convoyId: string | null = null;
+      for (const symId of topo) {
+        const s = slicesById.get(symId)!;
+        const r = resolved.get(symId)!;
+        const checkin = s.checkin_interval_minutes ?? 15;
+        const depSubtaskIds = (s.depends_on ?? []).map(d => symbolicToSubtaskId.get(d)!).filter(Boolean);
+        const peerRoleForLog = r.peer.role ?? s.role ?? 'builder';
+
+        const spawn = spawnDelegationSubtask({
+          parentTaskId: args.task_id,
+          parentAgentId: args.agent_id,
+          peerAgentId: r.peer.id,
+          peerGatewayId: r.peer.gateway_agent_id ?? '',
+          suggestedRole: peerRoleForLog,
+          slice: s.slice,
+          message: s.message,
+          expectedDeliverables: s.expected_deliverables,
+          acceptanceCriteria: s.acceptance_criteria,
+          expectedDurationMinutes: s.expected_duration_minutes,
+          checkinIntervalMinutes: checkin,
+          dependsOnSubtaskIds: depSubtaskIds.length > 0 ? depSubtaskIds : undefined,
+        });
+        convoyId = spawn.convoyId;
+        symbolicToSubtaskId.set(symId, spawn.subtaskId);
+        symbolicToChildTaskId.set(symId, spawn.childTaskId);
+
+        logActivity({
+          taskId: args.task_id,
+          actingAgentId: args.agent_id,
+          activityType: 'updated',
+          message: `[delegation_spawned] (plan_convoy) peer=${r.peer.name} role=${peerRoleForLog} child_task=${spawn.childTaskId} deps=${depSubtaskIds.length} slice="${s.slice.replace(/"/g, "'")}"`,
+        });
+
+        created.push({
+          symbolic_id: symId,
+          subtask_id: spawn.subtaskId,
+          child_task_id: spawn.childTaskId,
+          peer: {
+            id: r.peer.id,
+            name: r.peer.name,
+            role: peerRoleForLog,
+            gateway_agent_id: r.peer.gateway_agent_id,
+            addressed_via: r.resolvedVia,
+          },
+          depends_on_subtask_ids: depSubtaskIds,
+          due_at: spawn.dueAt,
+          will_dispatch_immediately: depSubtaskIds.length === 0,
+        });
+      }
+
+      // ── Fire root slices via the shared dispatcher. The dep gate
+      //    already keeps everything else in `inbox`; this single call
+      //    picks up just the deps-free roots and respects the
+      //    MAX_PARALLEL_CONVOY_SUBTASKS cap.
+      let dispatchSummary: { dispatched: number; total: number; skipped?: string } | null = null;
+      if (convoyId) {
+        try {
+          const r = await dispatchReadyConvoySubtasks(convoyId);
+          dispatchSummary = { dispatched: r.dispatched, total: r.total, skipped: r.skipped };
+        } catch (err) {
+          console.warn('[plan_convoy] dispatchReadyConvoySubtasks failed:', (err as Error).message);
+        }
+      }
+
+      const rootCount = created.filter(c => c.will_dispatch_immediately).length;
+      const depCount = created.length - rootCount;
+      return textResult(
+        `Convoy planned: ${created.length} slice${created.length === 1 ? '' : 's'} (${rootCount} root${rootCount === 1 ? '' : 's'} dispatching now, ${depCount} queued behind deps).`,
+        {
+          convoy_id: convoyId,
+          slices: created,
+          dispatch_summary: dispatchSummary,
+        },
       );
     }),
   );

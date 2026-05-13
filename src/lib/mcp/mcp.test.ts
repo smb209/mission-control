@@ -79,6 +79,7 @@ test('tools/list returns the full sc-mission-control tool surface', async () => 
     // Coordinator delegation surface (replaces the old `delegate` tool).
     // See docs/archive/coordinator-delegation-via-convoy-spec.md §3.
     'spawn_subtask',
+    'plan_convoy',
     'list_my_subtasks',
     'update_subtask',
     // Slice 3 of review-stage-robustness: escape hatch when an agent
@@ -124,7 +125,7 @@ test('PM-scoped server (core+read+pm) excludes worker + crud tools', async () =>
   }
   // Worker absent
   for (const t of ['register_deliverable', 'submit_evidence', 'update_task_status', 'fail_task',
-                   'spawn_subtask', 'update_subtask', 'escalate_to_parent',
+                   'spawn_subtask', 'plan_convoy', 'update_subtask', 'escalate_to_parent',
                    'register_subagent_dispatch', 'update_note']) {
     assert.ok(!names.has(t), `pm mount must not expose worker tool ${t}`);
   }
@@ -153,16 +154,17 @@ test('CRUD-scoped server (core+read+crud) excludes worker + pm tools', async () 
     assert.ok(!names.has(t), `crud mount must not expose pm tool ${t}`);
   }
   // Worker absent
-  for (const t of ['register_deliverable', 'spawn_subtask']) {
+  for (const t of ['register_deliverable', 'spawn_subtask', 'plan_convoy']) {
     assert.ok(!names.has(t), `crud mount must not expose worker tool ${t}`);
   }
 });
 
-test('default server (no groups arg) keeps full union of 45 tools', async () => {
+test('default server (no groups arg) keeps full union of 47 tools', async () => {
   const names = await listToolsForGroups(undefined);
-  // 46 tools after Slice 3 of review-stage-robustness adds escalate_to_parent.
-  // (45 after read_brief; 44 after the update_subtask / update_note collapses.)
-  assert.equal(names.size, 46, `expected 46 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  // 47 tools after plan_convoy. (46 after escalate_to_parent; 45 after
+  // read_brief; 44 after the update_subtask / update_note collapses.)
+  assert.equal(names.size, 47, `expected 47 tools, got ${names.size}: ${[...names].sort().join(', ')}`);
+  assert.ok(names.has('plan_convoy'), 'plan_convoy should be present');
   assert.ok(names.has('read_brief'), 'read_brief should be present');
   // Make absences explicit so a regression has a clear failure.
   for (const removed of ['accept_subtask', 'reject_subtask', 'cancel_subtask', 'mark_note_consumed', 'archive_note']) {
@@ -846,6 +848,103 @@ test('spawn_subtask: agent_not_coordinator sets soft-lock and returns next_actio
 
   // Sanity: peer agent exists so spawn would otherwise validate.
   void peer;
+});
+
+test('plan_convoy: validates DAG, dispatches roots only, queues dependents', async () => {
+  const { client } = await makePair();
+  const coordinator = seedAgent({ role: 'coordinator' });
+  seedAgent({ role: 'builder' });
+  seedAgent({ role: 'tester' });
+  seedAgent({ role: 'reviewer' });
+  const parent = seedTask({ assigned: coordinator, status: 'in_progress' });
+
+  const res = await client.callTool({
+    name: 'plan_convoy',
+    arguments: {
+      agent_id: coordinator,
+      task_id: parent,
+      slices: [
+        {
+          id: 'builder',
+          role: 'builder',
+          slice: 'Build the thing properly',
+          message: 'You are the builder.',
+          expected_deliverables: [{ title: 'PR', kind: 'file' }],
+          acceptance_criteria: ['PR opened and CI green'],
+          expected_duration_minutes: 60,
+        },
+        {
+          id: 'tester',
+          role: 'tester',
+          slice: 'Verify the thing works in a browser',
+          message: 'You are the tester.',
+          expected_deliverables: [{ title: 'Test report', kind: 'report' }],
+          acceptance_criteria: ['Each acceptance criterion covered'],
+          expected_duration_minutes: 30,
+          depends_on: ['builder'],
+        },
+        {
+          id: 'reviewer',
+          role: 'reviewer',
+          slice: 'Review the thing for code quality',
+          message: 'You are the reviewer.',
+          expected_deliverables: [{ title: 'Review report', kind: 'report' }],
+          acceptance_criteria: ['No critical findings'],
+          expected_duration_minutes: 30,
+          depends_on: ['builder'],
+        },
+      ],
+    },
+  });
+  assert.equal(res.isError, undefined);
+  const payload = parseStructured<{
+    convoy_id: string;
+    slices: Array<{ symbolic_id: string; subtask_id: string; child_task_id: string; depends_on_subtask_ids: string[]; will_dispatch_immediately: boolean }>;
+  }>(res);
+  assert.ok(payload?.convoy_id, 'convoy_id should be returned');
+  assert.equal(payload.slices.length, 3);
+  const builder = payload.slices.find(s => s.symbolic_id === 'builder')!;
+  const tester = payload.slices.find(s => s.symbolic_id === 'tester')!;
+  const reviewer = payload.slices.find(s => s.symbolic_id === 'reviewer')!;
+  assert.equal(builder.depends_on_subtask_ids.length, 0);
+  assert.deepEqual(tester.depends_on_subtask_ids, [builder.subtask_id]);
+  assert.deepEqual(reviewer.depends_on_subtask_ids, [builder.subtask_id]);
+  assert.equal(builder.will_dispatch_immediately, true);
+  assert.equal(tester.will_dispatch_immediately, false);
+  assert.equal(reviewer.will_dispatch_immediately, false);
+
+  // Dependent slices must remain in 'inbox' until their dep is accepted.
+  for (const s of [tester, reviewer]) {
+    const row = queryOne<{ status: string }>('SELECT status FROM tasks WHERE id = ?', [s.child_task_id]);
+    assert.equal(row?.status, 'inbox', `${s.symbolic_id} should be queued in inbox, got ${row?.status}`);
+  }
+});
+
+test('plan_convoy: rejects dependency cycles before any row is written', async () => {
+  const { client } = await makePair();
+  const coordinator = seedAgent({ role: 'coordinator' });
+  seedAgent({ role: 'builder' });
+  seedAgent({ role: 'tester' });
+  const parent = seedTask({ assigned: coordinator, status: 'in_progress' });
+
+  const res = await client.callTool({
+    name: 'plan_convoy',
+    arguments: {
+      agent_id: coordinator,
+      task_id: parent,
+      slices: [
+        { id: 'a', role: 'builder', slice: 'Slice A — builder step', message: '.', expected_deliverables: [{ title: 'x', kind: 'file' }], acceptance_criteria: ['everything works end-to-end'], expected_duration_minutes: 30, depends_on: ['b'] },
+        { id: 'b', role: 'tester',  slice: 'Slice B — tester step', message: '.', expected_deliverables: [{ title: 'x', kind: 'file' }], acceptance_criteria: ['everything works end-to-end'], expected_duration_minutes: 30, depends_on: ['a'] },
+      ],
+    },
+  });
+  assert.equal(res.isError, true);
+  const payload = parseStructured<{ error: string; stuck: string[] }>(res);
+  assert.equal(payload.error, 'cycle_detected');
+  assert.deepEqual(payload.stuck.sort(), ['a', 'b']);
+  // No convoy was created.
+  const convoys = queryOne<{ n: number }>('SELECT COUNT(*) as n FROM convoys WHERE parent_task_id = ?', [parent]);
+  assert.equal(convoys?.n, 0);
 });
 
 test('locked task: register_deliverable rejected with task_locked_pending_escalation', async () => {
