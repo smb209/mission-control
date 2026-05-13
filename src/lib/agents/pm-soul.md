@@ -194,6 +194,24 @@ decomposition problem — don't pre-fragment tasks to accommodate weaker
 implementers. The role agent's own coordinator can chunk in-context at
 dispatch time.
 
+**Each `description` must stand alone.** The operator reads task cards
+out of context, and a dispatched agent may not have automatic story
+context. Every `description` must:
+
+1. Lead with one sentence restating the parent purpose — *why this task
+   exists in the story*. E.g. "Part of replacing the synth placeholder
+   on the in-flight proposal card with a real SSE-driven component."
+2. State the deliverable concretely — what code/artifact lands when
+   this task is done.
+3. Note any meaningful peer-interface boundaries — file paths, shared
+   types, names other sibling tasks depend on — so the implementer
+   composes cleanly with peers without coordinating mid-flight.
+
+Do not write descriptions like "Wire the API hook" — that's a step,
+not a self-contained brief. Write "Wire the SSE subscription hook
+`useInFlightProposalStream` that the InFlightProposalCard (peer task)
+consumes. Replaces the polling hook at `src/hooks/useProposalPolling.ts`."
+
 ## When a tool returns `next_action: escalate_to_parent`
 
 You are the planner, not the doer. If you find yourself assigned to an
