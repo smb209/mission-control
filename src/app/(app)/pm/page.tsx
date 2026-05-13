@@ -14,6 +14,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { Send, AlertTriangle, Check, X, RefreshCw, Loader, Inbox, Sunrise, Pin, ArrowDown, MessageSquarePlus, Trash2, RotateCcw, Info, Sparkles, FileText, StickyNote, ArrowRight, GitBranch, ScanSearch, Maximize2 } from 'lucide-react';
+import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   parseSuggestionsFromImpactMd,
@@ -62,6 +63,9 @@ interface PmProposal {
   applied_at: string | null;
   parent_proposal_id: string | null;
   target_initiative_id: string | null;
+  /** Async dispatch state machine: pending_agent → agent_complete | synth_only.
+   *  Used to gate the in-flight card render on /pm and /pm/proposals/[id]. */
+  dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
   created_at: string;
 }
 
@@ -887,7 +891,7 @@ export default function PmChatPage() {
                   <span>
                     <span className="block font-medium text-mc-text">Start fresh chat</span>
                     <span className="block text-[11px] text-mc-text-secondary mt-0.5">
-                      Wipes the thread <strong>and</strong> resets the PM agent's gateway session — agent forgets too.
+                      Wipes the thread <strong>and</strong> resets the PM agent&apos;s gateway session — agent forgets too.
                     </span>
                   </span>
                 </button>
@@ -906,10 +910,10 @@ export default function PmChatPage() {
         <div className="px-4 py-1.5 border-b border-mc-border/60 text-[11px] text-mc-text-secondary flex items-center gap-2 shrink-0">
           <Info className="w-3 h-3" />
           {messages.length === 0 ? (
-            <span>Fresh chat — the PM agent's context window is empty.</span>
+            <span>Fresh chat — the PM agent&apos;s context window is empty.</span>
           ) : (
             <span>
-              <strong className="text-mc-text">{messages.length}</strong> message{messages.length === 1 ? '' : 's'} in the PM agent's context. New messages append; use <em>New chat</em> above to start over.
+              <strong className="text-mc-text">{messages.length}</strong> message{messages.length === 1 ? '' : 's'} in the PM agent&apos;s context. New messages append; use <em>New chat</em> above to start over.
             </span>
           )}
         </div>
@@ -1614,6 +1618,42 @@ function ChatMessageRow({
           </div>
           <ChatMarkdown content={message.content} />
         </div>
+      </div>
+    );
+  }
+
+  // In-flight placeholder: when dispatch_state === 'pending_agent', render
+  // the InFlightProposalCard instead of the synthetic proposal card. The
+  // card subscribes to SSE events and transitions to replaced/synth_only
+  // automatically. This matches the backend's state machine exactly.
+  if (proposal.dispatch_state === 'pending_agent') {
+    return (
+      <div
+        ref={(el) => setMessageRef?.(message.id, el)}
+        className={`mr-12 ${
+          messageHighlighted
+            ? 'rounded-md ring-2 ring-mc-accent shadow-lg shadow-mc-accent/20 transition-shadow'
+            : ''
+        }`}
+      >
+        <ChatContextStrip meta={stripMeta} resolveInitiativeTitle={resolveInitiativeTitle} />
+        <InFlightProposalCard
+          proposalId={proposal.id}
+          workspaceId={proposal.workspace_id}
+          sessionKey={null}
+          sentAt={proposal.created_at}
+          onCancel={() => {
+            // Cancel the placeholder by deleting it (same as dismiss).
+            fetch(`/api/pm/proposals/${proposal.id}`, { method: 'DELETE' }).catch(() => {});
+          }}
+          onUseSynthFallback={() => {
+            // Accept the synth fallback — no-op for now, operator can
+            // refine the synthetic content below.
+          }}
+          onReplaced={() => {
+            // The SSE handler swapped the proposal; parent will re-render.
+          }}
+        />
       </div>
     );
   }

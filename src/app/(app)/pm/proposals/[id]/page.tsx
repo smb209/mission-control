@@ -13,6 +13,7 @@ import {
 import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsList';
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 
 interface PmProposal {
   id: string;
@@ -26,6 +27,9 @@ interface PmProposal {
   applied_at: string | null;
   parent_proposal_id: string | null;
   target_initiative_id: string | null;
+  /** Async dispatch state machine: pending_agent → agent_complete | synth_only.
+   *  Used to gate the in-flight card render on /pm and /pm/proposals/[id]. */
+  dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
   created_at: string;
 }
 
@@ -213,6 +217,28 @@ export default function ProposalDetailPage({
 
         {proposal && (
           <>
+            {/* In-flight placeholder: when dispatch_state === 'pending_agent',
+              render the InFlightProposalCard instead of the synthetic proposal
+              card. The card subscribes to SSE events and transitions to
+              replaced/synth_only automatically. */}
+            {proposal.dispatch_state === 'pending_agent' ? (
+              <InFlightProposalCard
+                proposalId={proposal.id}
+                workspaceId={proposal.workspace_id}
+                sessionKey={null}
+                sentAt={proposal.created_at}
+                onCancel={() => {
+                  // Cancel the placeholder by deleting it.
+                  fetch(`/api/pm/proposals/${proposal.id}`, { method: 'DELETE' }).catch(() => {});
+                  router.push('/pm');
+                }}
+                onUseSynthFallback={() => {
+                  // Accept the synth fallback — no-op; the synth content
+                  // is already visible below once dispatch_state changes.
+                }}
+              />
+            ) : (
+              <>
             {/* Header */}
             <div className="border border-amber-500/40 bg-amber-500/5 rounded-md overflow-hidden mb-4">
               <div className="px-4 py-3 bg-amber-500/10 border-b border-amber-500/30 flex flex-wrap items-center gap-2">
@@ -356,57 +382,63 @@ export default function ProposalDetailPage({
                   )}
               </div>
             </div>
+              </>
+            )}
 
-            {/* Metadata */}
-            <div className="text-xs text-mc-text-secondary space-y-1">
-              <div><span className="font-medium text-mc-text">ID</span> {proposal.id}</div>
-              {proposal.parent_proposal_id && (
-                <div>
-                  <span className="font-medium text-mc-text">Parent</span>{' '}
-                  <Link href={`/pm/proposals/${proposal.parent_proposal_id}`} className="underline hover:text-mc-text">
-                    {proposal.parent_proposal_id.slice(0, 8)}…
-                  </Link>
-                </div>
-              )}
-              {proposal.target_initiative_id && (
-                <div>
-                  <span className="font-medium text-mc-text">Initiative</span>{' '}
-                  {resolveInitiativeTitle(proposal.target_initiative_id) ?? `${proposal.target_initiative_id.slice(0, 8)}…`}
-                </div>
-              )}
-              {proposal.applied_at && (
-                <div>
-                  <span className="font-medium text-mc-text">Applied</span>{' '}
-                  {new Date(proposal.applied_at.endsWith('Z') ? proposal.applied_at : proposal.applied_at + 'Z').toLocaleString()}
-                </div>
-              )}
-            </div>
+            {/* Metadata — only shown when NOT in in-flight state */}
+            {proposal.dispatch_state !== 'pending_agent' && (
+              <>
+              <div className="text-xs text-mc-text-secondary space-y-1">
+                <div><span className="font-medium text-mc-text">ID</span> {proposal.id}</div>
+                {proposal.parent_proposal_id && (
+                  <div>
+                    <span className="font-medium text-mc-text">Parent</span>{' '}
+                    <Link href={`/pm/proposals/${proposal.parent_proposal_id}`} className="underline hover:text-mc-text">
+                      {proposal.parent_proposal_id.slice(0, 8)}…
+                    </Link>
+                  </div>
+                )}
+                {proposal.target_initiative_id && (
+                  <div>
+                    <span className="font-medium text-mc-text">Initiative</span>{' '}
+                    {resolveInitiativeTitle(proposal.target_initiative_id) ?? `${proposal.target_initiative_id.slice(0, 8)}…`}
+                  </div>
+                )}
+                {proposal.applied_at && (
+                  <div>
+                    <span className="font-medium text-mc-text">Applied</span>{' '}
+                    {new Date(proposal.applied_at.endsWith('Z') ? proposal.applied_at : proposal.applied_at + 'Z').toLocaleString()}
+                  </div>
+                )}
+              </div>
 
-            <ConfirmDialog
-              open={pendingDelete}
-              title="Delete proposal?"
-              body={
-                <div className="space-y-2 text-sm">
-                  <p>
-                    This permanently removes the proposal from the recents list
-                    and the database. The action can&apos;t be undone.
-                  </p>
-                  <div className="text-xs text-mc-text-secondary border border-mc-border rounded-sm p-2 bg-mc-bg-secondary/30">
-                    <div className="font-mono mb-1">
-                      {proposal.status} · {proposal.proposed_changes.length}{' '}
-                      change{proposal.proposed_changes.length === 1 ? '' : 's'}
-                    </div>
-                    <div className="line-clamp-3 break-words">
-                      {proposal.trigger_text}
+              <ConfirmDialog
+                open={pendingDelete}
+                title="Delete proposal?"
+                body={
+                  <div className="space-y-2 text-sm">
+                    <p>
+                      This permanently removes the proposal from the recents list
+                      and the database. The action can&apos;t be undone.
+                    </p>
+                    <div className="text-xs text-mc-text-secondary border border-mc-border rounded-sm p-2 bg-mc-bg-secondary/30">
+                      <div className="font-mono mb-1">
+                        {proposal.status} · {proposal.proposed_changes.length}{' '}
+                        change{proposal.proposed_changes.length === 1 ? '' : 's'}
+                      </div>
+                      <div className="line-clamp-3 break-words">
+                        {proposal.trigger_text}
+                      </div>
                     </div>
                   </div>
-                </div>
-              }
-              confirmLabel="Delete"
-              destructive
-              onCancel={() => setPendingDelete(false)}
-              onConfirm={performDelete}
-            />
+                }
+                confirmLabel="Delete"
+                destructive
+                onCancel={() => setPendingDelete(false)}
+                onConfirm={performDelete}
+              />
+              </>
+            )}
           </>
         )}
       </div>
