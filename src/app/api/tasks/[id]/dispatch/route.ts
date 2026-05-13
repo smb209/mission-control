@@ -701,22 +701,52 @@ If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the 
 
 If the answer to all three is "no", spawn one builder subtask and accept it when delivered. If any is "yes", spawn the additional slices explicitly — typically a tester or reviewer subtask gated on the builder's deliverable. Skip ceremony when it isn't earned; add gates when the work needs them.
 
-**Per peer, call once:**
+**For a multi-slice fan-out, use \`plan_convoy\` (single tool call, full DAG):**
+\`\`\`
+plan_convoy({
+  agent_id: "${agentId}",
+  task_id: "${taskIdForMcp}",
+  slices: [
+    {
+      id: "builder",
+      role: "builder",
+      slice: "<what builder owns>",
+      message: "<brief>",
+      expected_deliverables: [ { title: "<...>", kind: "file" } ],
+      acceptance_criteria: [ "<...>" ],
+      expected_duration_minutes: 60
+    },
+    {
+      id: "tester",
+      role: "tester",
+      slice: "<what tester owns>",
+      message: "<brief>",
+      expected_deliverables: [ { title: "<...>", kind: "report" } ],
+      acceptance_criteria: [ "<...>" ],
+      expected_duration_minutes: 30,
+      depends_on: [ "builder" ]    // tester briefing held until builder is accepted
+    }
+  ]
+})
+\`\`\`
+
+\`plan_convoy\` validates the DAG (no cycles, all peers resolvable) BEFORE any briefing fires. Dependent slices stay queued (\`inbox\`, no chat.send) until their prerequisites are \`accept\`ed — the system enforces ordering. Prose like "wait for the builder" in a \`message\` field is NOT enforced; only \`depends_on\` is.
+
+**For a single slice OR a follow-up after monitoring, use \`spawn_subtask\`:**
 \`\`\`
 spawn_subtask({
   agent_id: "${agentId}",
   task_id: "${taskIdForMcp}",
-  peer_gateway_id: "<mc-researcher | mc-writer | …>",
+  role: "<builder | tester | reviewer | …>",
   slice: "<one-line summary of what this peer owns>",
   message: "You are the <role> for this task.\\n\\n<context + why this slice exists>",
   expected_deliverables: [ { title: "<name>", kind: "file" | "note" | "report" } ],
   acceptance_criteria: [ "<criterion 1>", "<criterion 2>" ],
   expected_duration_minutes: 30,
-  checkin_interval_minutes: 15
+  checkin_interval_minutes: 15,
+  depends_on_subtask_ids: [ "<prior subtask_id>" ]  // optional; same hard-gate semantics as plan_convoy
 })
 \`\`\`
-
-\`spawn_subtask\` creates a tracked convoy subtask with the SLO you declare, dispatches the peer through the normal pipeline, and returns a \`subtask_id\`. The peer sees your contract inline in its briefing.
 
 **While peers are working, check on them:**
 \`\`\`
