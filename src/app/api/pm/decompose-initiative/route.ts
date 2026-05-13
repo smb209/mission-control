@@ -22,7 +22,7 @@ import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import { getInitiative } from '@/lib/db/initiatives';
 import { synthesizeDecompose } from '@/lib/agents/pm-agent';
-import { PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { PmProposalValidationError, getProposal } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { queryOne } from '@/lib/db';
 
@@ -75,8 +75,11 @@ export async function POST(request: NextRequest) {
 
     // Dedup: return any identical draft dispatched in the last 2 seconds
     // (guards against React StrictMode double-invoke and rapid re-opens).
-    const recent = queryOne<{ id: string; impact_md: string; proposed_changes: string }>(
-      `SELECT id, impact_md, proposed_changes FROM pm_proposals
+    // Returns the canonical proposal shape via getProposal — a stripped
+    // payload would drop dispatch_state + created_at and break the
+    // modal's in-flight render gate (see decompose-story route note).
+    const recent = queryOne<{ id: string }>(
+      `SELECT id FROM pm_proposals
        WHERE workspace_id = ?
          AND trigger_kind = 'decompose_initiative'
          AND trigger_text = ?
@@ -86,16 +89,10 @@ export async function POST(request: NextRequest) {
       [parent.workspace_id, triggerText],
     );
     if (recent) {
-      return NextResponse.json(
-        {
-          proposal: {
-            ...recent,
-            proposed_changes: JSON.parse(recent.proposed_changes),
-          },
-          deduped: true,
-        },
-        { status: 201 },
-      );
+      const full = getProposal(recent.id);
+      if (full) {
+        return NextResponse.json({ proposal: full, deduped: true }, { status: 201 });
+      }
     }
 
     // Try the named-agent path first (PM gateway agent at

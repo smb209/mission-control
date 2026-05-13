@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 
 interface InitiativeLite {
   id: string;
@@ -44,6 +45,7 @@ interface ProposalRow {
   proposed_changes: TaskDiff[];
   status: string;
   dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
+  created_at: string;
 }
 
 export default function DecomposeStoryToTasksModal({
@@ -66,6 +68,7 @@ export default function DecomposeStoryToTasksModal({
   onAccepted: () => void;
 }) {
   const [proposalId, setProposalId] = useState<string | null>(null);
+  const [proposalCreatedAt, setProposalCreatedAt] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
   const [tasks, setTasks] = useState<TaskDiff[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,6 +92,7 @@ export default function DecomposeStoryToTasksModal({
           if (resumeBody?.proposal) {
             if (cancelled) return;
             setProposalId(resumeBody.proposal.id);
+            setProposalCreatedAt(resumeBody.proposal.created_at);
             setImpactMd(resumeBody.proposal.impact_md);
             setTasks(resumeBody.proposal.proposed_changes);
             setDispatchState(resumeBody.proposal.dispatch_state ?? null);
@@ -109,6 +113,7 @@ export default function DecomposeStoryToTasksModal({
         if (cancelled) return;
         const proposal = body.proposal as ProposalRow;
         setProposalId(proposal.id);
+        setProposalCreatedAt(proposal.created_at);
         setImpactMd(proposal.impact_md);
         setTasks(proposal.proposed_changes);
         setDispatchState(proposal.dispatch_state ?? null);
@@ -138,6 +143,7 @@ export default function DecomposeStoryToTasksModal({
         const body = await res.json() as { proposal?: ProposalRow | null };
         if (cancelled || !body?.proposal) return;
         setProposalId(body.proposal.id);
+        setProposalCreatedAt(body.proposal.created_at);
         setImpactMd(body.proposal.impact_md);
         setTasks(body.proposal.proposed_changes);
         setDispatchState(body.proposal.dispatch_state ?? null);
@@ -194,6 +200,7 @@ export default function DecomposeStoryToTasksModal({
       if (!res.ok) throw new Error(body.error || `Refine failed (${res.status})`);
       const proposal = body.proposal as ProposalRow;
       setProposalId(proposal.id);
+      setProposalCreatedAt(proposal.created_at);
       setImpactMd(proposal.impact_md);
       setTasks(proposal.proposed_changes);
       setRefineText('');
@@ -307,22 +314,27 @@ export default function DecomposeStoryToTasksModal({
             <div className="flex items-center gap-2 text-sm text-mc-text-secondary">
               <RefreshCw className="w-4 h-4 animate-spin" /> Asking {agentLabel ?? 'PM'} to decompose…
             </div>
+          ) : dispatchState === 'pending_agent' && proposalId ? (
+            // While the agent composes, replace the synth-template body
+            // with the in-flight card. Story 2edccd24 ("In-flight
+            // proposal card replaces synth-as-placeholder"). SSE-driven
+            // card swaps to the real proposal when pm_proposal_replaced
+            // fires.
+            <InFlightProposalCard
+              proposalId={proposalId}
+              workspaceId={initiative.workspace_id}
+              sessionKey={null}
+              sentAt={proposalCreatedAt ?? new Date().toISOString()}
+              onCancel={() => {
+                fetch(`/api/pm/proposals/${proposalId}`, { method: 'DELETE' }).catch(() => {});
+                onClose();
+              }}
+              onUseSynthFallback={() => {
+                setDispatchState('synth_only');
+              }}
+            />
           ) : (
             <>
-              {dispatchState === 'pending_agent' && (
-                <div
-                  className="flex items-start gap-2 rounded border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-[11px] text-mc-text-secondary"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 mt-[1px] animate-spin text-mc-accent" />
-                  <div>
-                    {agentLabel ?? 'PM'} agent is still composing — these are draft tasks from the deterministic synth.
-                    The agent&apos;s final breakdown will replace this list automatically when it lands.
-                  </div>
-                </div>
-              )}
-
               {displayMd && (
                 <div className="shrink-0 max-h-32 overflow-y-auto text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
                   {displayMd}

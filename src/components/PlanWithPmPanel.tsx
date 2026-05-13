@@ -24,6 +24,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, X, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { parseSuggestionsFromImpactMd as parseSharedSuggestions } from '@/lib/pm/planSuggestionsSidecar';
+import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 
 export interface PlanInitiativeDraft {
   title: string;
@@ -102,6 +103,7 @@ export default function PlanWithPmPanel({
   ) => void;
 }) {
   const [proposalId, setProposalId] = useState<string | null>(null);
+  const [proposalCreatedAt, setProposalCreatedAt] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
   const [suggestions, setSuggestions] = useState<PlanInitiativeSuggestions | null>(null);
   const [dispatchState, setDispatchState] = useState<'pending_agent' | 'agent_complete' | 'synth_only' | null>(null);
@@ -131,6 +133,7 @@ export default function PlanWithPmPanel({
     if (!open) {
       // Reset on close so the next open re-runs cleanly.
       setProposalId(null);
+      setProposalCreatedAt(null);
       setImpactMd('');
       setSuggestions(null);
       setDispatchState(null);
@@ -157,6 +160,7 @@ export default function PlanWithPmPanel({
             if (resumeBody?.proposal && resumeBody?.suggestions) {
               if (cancelled) return;
               setProposalId(resumeBody.proposal_id);
+              setProposalCreatedAt(resumeBody.proposal.created_at ?? null);
               setImpactMd(resumeBody.proposal.impact_md ?? '');
               setSuggestions(resumeBody.suggestions);
               setDispatchState(resumeBody.proposal.dispatch_state ?? null);
@@ -178,6 +182,7 @@ export default function PlanWithPmPanel({
         if (!res.ok) throw new Error(body.error || `Plan failed (${res.status})`);
         if (cancelled) return;
         setProposalId(body.proposal_id);
+        setProposalCreatedAt(body.proposal?.created_at ?? null);
         setImpactMd(body.proposal?.impact_md ?? '');
         setSuggestions(body.suggestions ?? null);
         setDispatchState(body.proposal?.dispatch_state ?? null);
@@ -214,6 +219,7 @@ export default function PlanWithPmPanel({
         // The server's plan-initiative GET already follows the supersede
         // chain when present, so we get the live (agent-completed) row.
         setProposalId(newProposalId);
+        setProposalCreatedAt(body.proposal?.created_at ?? null);
         setImpactMd(body.proposal?.impact_md ?? '');
         setSuggestions(body.suggestions ?? null);
         setDispatchState(body.proposal?.dispatch_state ?? null);
@@ -343,21 +349,28 @@ export default function PlanWithPmPanel({
         <div className="flex items-center gap-2 text-sm text-mc-text-secondary">
           <RefreshCw className="w-4 h-4 animate-spin" /> Thinking…
         </div>
+      ) : dispatchState === 'pending_agent' && proposalId ? (
+        // While the agent composes, replace the synth-suggestion body
+        // with the in-flight card. Matches the /pm chat thread + detail
+        // page behavior and the original story 2edccd24
+        // ("In-flight proposal card replaces synth-as-placeholder").
+        <InFlightProposalCard
+          proposalId={proposalId}
+          workspaceId={workspaceId}
+          sessionKey={null}
+          sentAt={proposalCreatedAt ?? new Date().toISOString()}
+          onCancel={() => {
+            fetch(`/api/pm/proposals/${proposalId}`, { method: 'DELETE' }).catch(() => {});
+            onClose();
+          }}
+          onUseSynthFallback={() => {
+            // Operator opts to keep the synth body — flip the local
+            // dispatch_state so the suggestions panel below renders.
+            setDispatchState('synth_only');
+          }}
+        />
       ) : suggestions ? (
         <>
-          {dispatchState === 'pending_agent' && (
-            <div
-              className="mb-3 flex items-start gap-2 rounded border border-mc-accent/30 bg-mc-accent/5 px-3 py-2 text-[11px] text-mc-text-secondary"
-              role="status"
-              aria-live="polite"
-            >
-              <RefreshCw className="w-3.5 h-3.5 mt-[1px] animate-spin text-mc-accent" />
-              <div>
-                PM agent is still composing — these are draft suggestions from the deterministic synth.
-                The agent's final answer will replace this content automatically when it lands.
-              </div>
-            </div>
-          )}
           <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3 text-xs space-y-2">
             <div>
               <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">Refined description</div>

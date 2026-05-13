@@ -18,7 +18,7 @@ import { logApiError, serverLog } from '@/lib/debug-log';
 import { z } from 'zod';
 import { getInitiative } from '@/lib/db/initiatives';
 import { synthesizeStoryToTasks } from '@/lib/agents/pm-agent';
-import { PmProposalValidationError } from '@/lib/db/pm-proposals';
+import { PmProposalValidationError, getProposal } from '@/lib/db/pm-proposals';
 import { postPmChatMessage, dispatchPmSynthesized } from '@/lib/agents/pm-dispatch';
 import { getPmAgent } from '@/lib/agents/pm-resolver';
 import { queryOne } from '@/lib/db';
@@ -80,8 +80,13 @@ export async function POST(request: NextRequest) {
     });
 
     // Dedup recent identical drafts (StrictMode + rapid re-opens).
-    const recent = queryOne<{ id: string; impact_md: string; proposed_changes: string }>(
-      `SELECT id, impact_md, proposed_changes FROM pm_proposals
+    // Returns the canonical proposal shape (via getProposal) — earlier
+    // versions returned a stripped { id, impact_md, proposed_changes }
+    // payload that dropped `dispatch_state` + `created_at`, so the
+    // modal's InFlightProposalCard gate (dispatch_state==='pending_agent')
+    // never matched on the second StrictMode call.
+    const recent = queryOne<{ id: string }>(
+      `SELECT id FROM pm_proposals
        WHERE workspace_id = ?
          AND trigger_kind = 'decompose_story'
          AND trigger_text = ?
@@ -91,16 +96,10 @@ export async function POST(request: NextRequest) {
       [parent.workspace_id, triggerText],
     );
     if (recent) {
-      return NextResponse.json(
-        {
-          proposal: {
-            ...recent,
-            proposed_changes: JSON.parse(recent.proposed_changes),
-          },
-          deduped: true,
-        },
-        { status: 201 },
-      );
+      const full = getProposal(recent.id);
+      if (full) {
+        return NextResponse.json({ proposal: full, deduped: true }, { status: 201 });
+      }
     }
 
     const dispatch = dispatchPmSynthesized({
