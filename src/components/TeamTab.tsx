@@ -28,6 +28,7 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [convoyActive, setConvoyActive] = useState(false);
 
   // Load existing roles and workflows
   useEffect(() => {
@@ -57,6 +58,12 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
         if (taskRes.ok) {
           const task = await taskRes.json();
           setSelectedWorkflow(task.workflow_template_id || '');
+          // A coordinator-spawned convoy puts the PARENT task in
+          // `convoy_active` (the per-child `convoy_id` is set on the
+          // children, not the parent — see convoy.ts:spawnDelegationSubtask).
+          // Either signal qualifies: the parent's status or, for a child
+          // task viewed directly, its own convoy_id membership.
+          setConvoyActive(task.status === 'convoy_active' || !!task.convoy_id);
         }
       } catch (err) {
         console.error('Failed to load team data:', err);
@@ -237,8 +244,28 @@ export function TeamTab({ taskId, workspaceId }: TeamTabProps) {
         </div>
       )}
 
+      {/* Live convoy banner — when a coordinator has spawned subtasks
+          ad-hoc, this tab's template-derived roles are stale advisory
+          info, not the source of truth. Point the operator at the
+          Convoy tab and suppress the missing-roles warning. */}
+      {convoyActive && (
+        <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 text-blue-300 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm text-blue-200">
+                Live convoy active — see the Convoy tab for the actual delegations and their status.
+              </p>
+              <p className="text-xs text-blue-300/70 mt-1">
+                The stages + role assignments below describe the workflow template, not the running convoy.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Missing Roles Warning */}
-      {missingRoles.length > 0 && (
+      {!convoyActive && missingRoles.length > 0 && (
         <div className="p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
           <div className="flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-orange-300 mt-0.5 shrink-0" />
