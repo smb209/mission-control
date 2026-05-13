@@ -307,6 +307,7 @@ export default function JobsPage() {
             <thead className="text-[11px] uppercase tracking-wider text-mc-text-secondary">
               <tr className="text-left">
                 <Th>Kind</Th>
+                <Th>Status</Th>
                 <Th>Label</Th>
                 <Th>Agent</Th>
                 <Th>Scope</Th>
@@ -333,6 +334,11 @@ export default function JobsPage() {
                     className={`border-t border-mc-border cursor-pointer hover:bg-mc-bg-tertiary/50 ${amber ? 'bg-amber-500/10' : ''}`}
                   >
                     <Td><KindBadge kind={row.kind} /></Td>
+                    <Td>
+                      <span className={`px-1.5 py-0.5 rounded text-[11px] ${statusChipClass(row.status)}`}>
+                        {row.status}
+                      </span>
+                    </Td>
                     <Td className="text-mc-text">
                       {depth > 0 ? (
                         <span className="text-mc-text-secondary mr-2 font-mono">└─</span>

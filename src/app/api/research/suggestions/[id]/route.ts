@@ -10,6 +10,7 @@ import {
 } from '@/lib/db/research-suggestions';
 import { createTopic } from '@/lib/db/topics';
 import { createBriefWithRun } from '@/lib/db/briefs';
+import { runBrief } from '@/lib/research/run-brief';
 import { logApiError } from '@/lib/debug-log';
 
 export const dynamic = 'force-dynamic';
@@ -95,6 +96,13 @@ export async function POST(
         requested_by: `suggestion:${suggestion.id}`,
       });
       const updated = markAccepted(id, created.brief.id);
+      // Fire-and-forget dispatch so the brief actually progresses
+      // instead of stranding in `queued` forever. runBrief returns as
+      // soon as the orchestrator promise is scheduled; the brief runs
+      // in the background and emits SSE for the UI.
+      runBrief(created.brief.id).catch(err => {
+        console.error(`[suggestions/accept] runBrief failed for brief ${created.brief.id}:`, err);
+      });
       return NextResponse.json(
         { suggestion: updated, created: { kind: 'brief', brief: created.brief, agent_run: created.agent_run } },
         { status: 201 },
