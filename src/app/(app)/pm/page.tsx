@@ -974,6 +974,15 @@ export default function PmChatPage() {
               if (proposal && pinnedStandup && proposal.id === pinnedStandup.id) {
                 return null;
               }
+              // Hide chat entries whose proposal has been superseded. The
+              // child (status='draft', parent_proposal_id set) carries the
+              // real content and gets the chat slot; the parent's
+              // synth-template card was useful only as a placeholder while
+              // the agent composed. The dedicated proposal page surfaces
+              // the "Supersedes → <id>" link if anyone needs to backtrack.
+              if (proposal && proposal.status === 'superseded') {
+                return null;
+              }
               return (
                 <ChatMessageRow
                   key={m.id}
