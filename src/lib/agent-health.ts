@@ -254,6 +254,19 @@ export async function nudgeAgent(agentId: string): Promise<{ success: boolean; e
 
   const now = new Date().toISOString();
 
+  // Convoy subtasks are single-role delegations bound by their
+  // delegation contract — `convoy_subtasks.suggested_role` is the
+  // truth, NOT the workflow stage. Skip the workflow-based role-
+  // mismatch detector for convoy children; a stuck tester must NOT be
+  // "corrected" to the workspace builder just because the parent's
+  // workflow template happens to name a different role at this stage.
+  // (Pre-fix this is exactly how task cda5eaa6 got reassigned from
+  // Kat to Grace mid-stall.)
+  const convoySubtask = queryOne<{ suggested_role: string | null }>(
+    `SELECT suggested_role FROM convoy_subtasks WHERE task_id = ? LIMIT 1`,
+    [activeTask.id],
+  );
+
   // Sanity check: does the task's current status want a different role's
   // agent? If yes, orchestration was skipped somewhere (e.g. MCP-driven
   // status flip that didn't call handleStageTransition). Blindly
@@ -261,7 +274,7 @@ export async function nudgeAgent(agentId: string): Promise<{ success: boolean; e
   // loudly and correct via handleStageTransition instead.
   const workflow = getTaskWorkflow(activeTask.id);
   const currentStage = workflow?.stages.find((s) => s.status === activeTask.status);
-  if (currentStage?.role) {
+  if (!convoySubtask && currentStage?.role) {
     const expected = queryOne<{ agent_id: string; agent_name: string }>(
       `SELECT tr.agent_id, a.name as agent_name
          FROM task_roles tr JOIN agents a ON a.id = tr.agent_id

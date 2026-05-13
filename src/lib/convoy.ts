@@ -579,12 +579,23 @@ export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelega
       [convoy.id]
     )?.max_order ?? 0;
 
-    // Create the child task row. Pre-assigned to the peer; workflow
-    // inheritance mirrors what addSubtasks does for operator flows.
+    // Create the child task row. Pre-assigned to the peer.
+    //
+    // workflow_template_id is deliberately NULL on convoy-spawned
+    // children — the delegation contract (suggested_role, slice,
+    // acceptance_criteria, evidence gate) IS the workflow for these
+    // rows, and the assigned peer owns the slice end-to-end. Inheriting
+    // the parent's multi-stage workflow misled the stall-watcher role-
+    // mismatch detector ([agent-health.ts:262](src/lib/agent-health.ts:262)):
+    // a parent on `tpl-simple` (Build → Done) inherited 'builder' onto
+    // a tester slice, and when the tester stalled the nudge "corrected"
+    // by reassigning the task to the workspace builder. The role-
+    // propagation block below becomes a no-op when childWorkflow is
+    // null, which is the desired behavior for these single-role rows.
     const childTaskId = uuidv4();
     run(
       `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, workspace_id, business_id, workflow_template_id, convoy_id, is_subtask, created_at, updated_at)
-       VALUES (?, ?, ?, 'inbox', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+       VALUES (?, ?, ?, 'inbox', ?, ?, ?, ?, NULL, ?, 1, ?, ?)`,
       [
         childTaskId,
         input.slice.slice(0, 200),
@@ -593,7 +604,6 @@ export function spawnDelegationSubtask(input: SpawnDelegationInput): SpawnDelega
         input.peerAgentId,
         parent.workspace_id,
         parent.business_id,
-        parent.workflow_template_id || null,
         convoy.id,
         now,
         now,
