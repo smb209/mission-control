@@ -76,7 +76,19 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     //     (parsed out of trigger_text).
     //   - everything else → fall back to dispatchPm (the disruption-
     //     analysis synthesizer).
-    const { child } = refineProposal(id, parsed.data.additional_constraint);
+    const { child, created } = refineProposal(id, parsed.data.additional_constraint);
+
+    // Server-side dedupe: an in-flight refine already created this child
+    // slot. Return it without spinning up a second dispatch — the original
+    // dispatch is still racing to fill it in. Without this guard the route
+    // would have stacked a second 60–180s LLM run on the same parent and
+    // left a `_(refining…)_` orphan when the new dispatch lost the cleanup
+    // race (root cause of the d12533ec + 97f93775 split observed on
+    // proposal 397f8db3 — refine fired twice 14s apart, second slot
+    // never settled).
+    if (!created) {
+      return NextResponse.json({ proposal: child }, { status: 200 });
+    }
 
     let newImpactMd: string;
     let newChanges: unknown[];

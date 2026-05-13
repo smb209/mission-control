@@ -362,6 +362,16 @@ test('refineProposal refuses to refine an already-accepted proposal', () => {
   assert.throws(() => refineProposal(p.id, 'x'), PmProposalValidationError);
 });
 
+test('refineProposal dedupes: second call returns existing draft child with created=false', () => {
+  const ws = freshWorkspace();
+  const parent = createProposal({ workspace_id: ws, trigger_text: 'orig', impact_md: '.', proposed_changes: [] });
+  const first = refineProposal(parent.id, 'constraint A');
+  assert.equal(first.created, true);
+  const second = refineProposal(parent.id, 'constraint B');
+  assert.equal(second.created, false);
+  assert.equal(second.child.id, first.child.id);
+});
+
 // ─── Reject + idempotency ──────────────────────────────────────────
 
 test('rejectProposal flips status without applying changes', () => {
