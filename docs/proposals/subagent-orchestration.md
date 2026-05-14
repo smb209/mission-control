@@ -1,6 +1,6 @@
 ---
 status: aspirational
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/agents/dispatch-subagent.ts

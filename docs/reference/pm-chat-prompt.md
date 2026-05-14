@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-13
+last-verified: 2026-05-14
 code-anchors:
   - agent-templates/pm/SOUL.md
   - src/lib/agents/pm-dispatch.ts

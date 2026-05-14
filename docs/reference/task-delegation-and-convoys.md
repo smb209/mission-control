@@ -1,9 +1,10 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/convoy.ts
+  - src/lib/convoy-dag.ts
   - src/lib/workspace-isolation.ts
   - src/lib/mcp/groups/work.ts
   - src/lib/mcp/groups/core.ts
@@ -38,6 +39,7 @@ related-specs:
   - review-stage-robustness-spec.md — role gating, convoy-subtask evidence gate, capability-denial soft-lock, escalate_to_parent
   - agent-health.md — generic stall semantics; convoy SLO clock is the per-subtask layer above it
   - subagent-orchestration.md — different capability (read-only subagents); cross-reference, do not merge
+  - pm-convoy-mandate.md — PM-emit convoy entry point (decompose-flow proposals materialize convoys at accept time)
 ---
 
 # Task Delegation and Convoys
@@ -85,6 +87,37 @@ The legacy `delegate` MCP tool has been removed. The MCP test suite
 asserts this (`src/lib/mcp/mcp.test.ts:90`:
 `assert.ok(!names.has('delegate'), 'delegate tool should be removed')`).
 
+### Two convoy entry points (post-PM-convoy-mandate)
+
+Convoys now have **two distinct entry points** for the same underlying
+machinery:
+
+1. **PM-emit at proposal-accept time.** When the PM produces a
+   decompose-flow proposal (`trigger_kind` ∈ {`decompose_story`,
+   `decompose_initiative`, `plan_initiative`}), it emits one or more
+   `create_convoy_under_initiative` diffs. On accept, the apply pass in
+   [`src/lib/db/pm-proposals.ts`](../../src/lib/db/pm-proposals.ts) calls
+   the shared DAG materializer in
+   [`src/lib/convoy-dag.ts`](../../src/lib/convoy-dag.ts) to create the
+   parent task (status=`convoy_active`), the `convoys` row (with
+   `acceptance_criteria` populated), and per-slice `convoy_subtasks`
+   rows in topological order, then fires
+   `dispatchReadyConvoySubtasks`. See
+   [pm-convoy-mandate.md](pm-convoy-mandate.md).
+2. **Coordinator-emit mid-flight.** A coordinator with an active task
+   calls `spawn_subtask` or `plan_convoy` to append slices to an
+   existing convoy (or lazy-create the first one). Same underlying
+   helpers (`spawnDelegationSubtask`,
+   `dispatchReadyConvoySubtasks`). The coordinator's role has shifted
+   from *decomposer* to *monitor + accept + escalate*: decomposition
+   happens at PM-emit time; `spawn_subtask` / `plan_convoy` remain
+   available for follow-up work discovered mid-flight (e.g. a builder
+   reports a missing slice).
+
+The PM mandate is gated by `MC_PM_CONVOY_MANDATE`. When the flag is on,
+the schema rejects `create_task_under_initiative` from decompose-flow
+proposals.
+
 ---
 
 ## 2. Data model
@@ -106,6 +139,7 @@ migration 037 (`migrations.ts:2075-2167`).
 | `completed_subtasks`     | Recomputed by `updateConvoyProgress` (`convoy.ts:191`)                |
 | `failed_subtasks`        | Same recompute pass                                                   |
 | `created_at`, `updated_at` | ISO timestamps                                                      |
+| `acceptance_criteria`    | JSON array of strings (mig 095). Populated when the convoy is spawned from a PM `create_convoy_under_initiative` diff; NULL for coordinator-spawned convoys. Gates the parent task's `review → done` transition — see [pm-convoy-mandate.md](pm-convoy-mandate.md) + `task_ac_acknowledgements` table. |
 
 Indexes: `idx_convoys_parent_active(parent_task_id, status)` replaces the
 pre-037 `idx_convoys_parent` (see `migrations.ts:2161-2164`).
@@ -328,16 +362,22 @@ that spec for the full rail.
    └────────┘
 ```
 
-- **Creation.** Three entry points all converge on
+- **Creation.** Four entry points all converge on
   `INSERT INTO convoys`:
   1. `createConvoy()` — operator-driven manual / AI / planning flows
      (`convoy.ts:83`). Rejects a second active convoy on the same
      parent (`convoy.ts:97`).
-  2. `spawnDelegationSubtask()` — lazy create from `spawn_subtask`
-     (`convoy.ts:560-574`).
+  2. `spawnDelegationSubtask()` — lazy create from coordinator
+     `spawn_subtask` / `plan_convoy` (`convoy.ts:560-574`).
   3. AI decomposition route at `src/app/api/tasks/[id]/convoy/route.ts`
      (unchanged from the original convoy-mode-spec; preserved for the
      operator path).
+  4. **PM-emit** via `create_convoy_under_initiative` diff — the apply
+     pass in [`src/lib/db/pm-proposals.ts`](../../src/lib/db/pm-proposals.ts)
+     materializes the parent task + convoy + slice DAG through
+     [`src/lib/convoy-dag.ts`](../../src/lib/convoy-dag.ts), populating
+     `convoys.acceptance_criteria`. See
+     [pm-convoy-mandate.md](pm-convoy-mandate.md).
 - **Active.** Parent task sits in `convoy_active`. Each subtask runs
   the normal task lifecycle (`assigned → in_progress → testing → review →
   done`). `dispatchReadyConvoySubtasks` (`convoy.ts:321`) iterates

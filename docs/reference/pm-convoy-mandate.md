@@ -1,6 +1,6 @@
 ---
-status: aspirational
-last-verified: 2026-05-13
+status: current
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/mcp/shared.ts:285-299
@@ -27,7 +27,26 @@ related-specs:
 
 ## Status
 
-Aspirational. The mandate replaces the current `decompose_story` / `decompose_initiative` / `plan_initiative` output shape (an array of `create_task_under_initiative` diffs) with a `create_convoy_under_initiative` diff carrying a slice DAG. The wholistic fix to two locality bugs we keep re-hitting.
+Current. Phases 1 and 2 have shipped across PRs #353–#357 (slices 1–6 of 7). The mandate replaces the previous `decompose_story` / `decompose_initiative` / `plan_initiative` output shape (an array of `create_task_under_initiative` diffs) with a `create_convoy_under_initiative` diff carrying a slice DAG. The wholistic fix to two locality bugs we kept re-hitting.
+
+Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) is queued as slice 7.
+
+## Shipped state (as of 2026-05-14)
+
+- Slice 1 (PR #354) — `create_convoy_under_initiative` zod variant + migration 095 (`convoys.acceptance_criteria`).
+- Slice 2 (PR #355) — apply-pass in [`src/lib/db/pm-proposals.ts`](../../src/lib/db/pm-proposals.ts) materializes the diff via shared [`src/lib/convoy-dag.ts`](../../src/lib/convoy-dag.ts). Parent task auto-created with `status=convoy_active`; topologically-ordered slices dispatched via `dispatchReadyConvoySubtasks`.
+- Slice 3 (PR #353) — PM SOUL + [`docs/reference/pm-chat-prompt.md`](pm-chat-prompt.md) updated with the decompose-flow output contract and DAG smell checklist.
+- Slice 4 (PR #356) — DAG approval UX in [`src/components/ConvoyDiffPreview.tsx`](../../src/components/ConvoyDiffPreview.tsx) and the three decompose modals.
+- Slice 5 — AC gate at parent `review → done` + migration 096 (`task_ac_acknowledgements`) + `AcAckModal`. Endpoint: `GET/POST /api/tasks/[id]/ac-ack`.
+- Slice 6 (this PR) — the `MC_PM_CONVOY_MANDATE=1` flag now causes [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) to REJECT `create_task_under_initiative` diffs from `decompose_story` / `decompose_initiative` / `plan_initiative` proposals, and to require at least one `create_convoy_under_initiative` in those flows. Carve-outs preserved for `notes_intake`, `manual`, and other tactical kinds. Proposal promoted to `docs/reference/`. Reference-spec edits land in the same PR.
+
+### Flag default
+
+`MC_PM_CONVOY_MANDATE` is **off by default** in both dev and prod containers. The mandate is opt-in via env var rather than always-on so operators can verify the PM is reliably emitting convoy-shaped diffs before the schema starts rejecting fallbacks. When the operator is confident enough to flip it on, set `MC_PM_CONVOY_MANDATE=1` in the container env. Slice 7 will revisit defaulting it on.
+
+### Revert semantics — current state
+
+`invertDiff` for `create_convoy_under_initiative` returns the `limited` marker today: revert is not yet implemented for this diff kind ([`src/lib/pm/invertDiff.ts`](../../src/lib/pm/invertDiff.ts) line ~251). Full revert (cancel-convoy-if-no-slice-done + delete unscheduled child tasks; refuse if any slice has reached `done`) is queued as a follow-up — see [`pm-revertable-proposals.md`](pm-revertable-proposals.md) for the planned semantics.
 
 ## Problem
 

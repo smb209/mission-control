@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/agents/pm-agent.ts
@@ -21,6 +21,7 @@ db-tables: [initiatives, initiative_dependencies, pm_proposals, owner_availabili
 > - [audit-action-recommended.md](audit-action-recommended.md) — `audit_verdict` note kind + opt-in auto-spawn (PR #326).
 > - [pm-diff-conventions.md](pm-diff-conventions.md) — canonical contract for adding new PmDiff kinds (sibling reference).
 > - [pm-chat-prompt.md](pm-chat-prompt.md) — PR A SOUL/UI changes layered on top.
+> - [pm-convoy-mandate.md](pm-convoy-mandate.md) — decompose-flow output shape changed to `create_convoy_under_initiative` DAGs (see §9.5 below).
 > - [pm-steer-abort.md](pm-steer-abort.md) — aspirational steer/abort/in-flight visibility.
 > - Archived: [pm-confirm-task-done.md](../docs/archive/pm-confirm-task-done.md), [pm-dispatch-async.md](../docs/archive/pm-dispatch-async.md), [roadmap-navigation-polish.md](../docs/archive/roadmap-navigation-polish.md).
 
@@ -501,6 +502,14 @@ In addition to the reactive disruption flow, the PM has two operator-driven guid
 **New diff kind** — `create_child_initiative`. Only emitted from `decompose_initiative` proposals. Validation rejects `child_kind='theme'` or `'milestone'`.
 
 UI surface: a "Plan with PM" button next to Save in the initiative edit drawer; a "Decompose with PM" entry in the `⋮` action menu (epic/milestone rows) and a button on `/initiatives/[id]` for the same kinds. Both flows use the existing refine endpoint.
+
+#### Decompose-to-task output: `create_convoy_under_initiative` (PM convoy mandate)
+
+Originally `decompose_story` / `decompose_initiative` / `plan_initiative` proposals emitted flat lists of `create_task_under_initiative` diffs. Two locality bugs surfaced from that shape (layer-sliced narrow tasks; no sibling ordering at the PM layer), so the output was upgraded to a slice DAG.
+
+When `MC_PM_CONVOY_MANDATE=1`, decompose-flow proposals MUST emit at least one `create_convoy_under_initiative` diff and MUST NOT emit `create_task_under_initiative` (the schema in [`src/lib/db/pm-proposals.ts`](../../src/lib/db/pm-proposals.ts) `validateProposedChanges` rejects mismatches up front). On accept, the apply pass in [`src/lib/convoy-dag.ts`](../../src/lib/convoy-dag.ts) auto-creates the parent task (`status=convoy_active`, mirroring `promote_initiative_to_task`), the `convoys` row carrying `acceptance_criteria` (parent-level operator-facing criteria), and per-slice `convoy_subtasks` in topological order, then fires root slices.
+
+Carve-outs preserved: `notes_intake`, `manual`, audit-follow-ups, and `create_child_initiative` stub tasks continue to use `create_task_under_initiative`. See [pm-convoy-mandate.md](pm-convoy-mandate.md) for the full contract, including the parent-task `review → done` AC gate (slice 5).
 
 ---
 

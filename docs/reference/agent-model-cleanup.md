@@ -1,5 +1,18 @@
 # Agent model cleanup — drop residual N-gateway assumptions
 
+> **Addendum (2026-05-14, PM convoy mandate slice 6/7).** The
+> coordinator role described below is being narrowed. Under the PM
+> convoy mandate ([pm-convoy-mandate.md](pm-convoy-mandate.md)),
+> decomposition happens at PM-emit time via the
+> `create_convoy_under_initiative` diff — the coordinator no longer
+> "decomposes the parent task". Its job becomes **monitor + accept +
+> escalate**: watch convoy slices via `list_my_subtasks`, accept
+> delivered slices via `update_subtask({action: 'accept'})`, escalate
+> failures via `escalate_to_parent`. `spawn_subtask` and `plan_convoy`
+> remain available for mid-flight slice appends but are no longer the
+> primary decomposition path. Slice 7 of the mandate will land the
+> matching coordinator SOUL shrink.
+
 ## Background
 
 Mission Control's agent topology was collapsed some time ago. The current intended model:
