@@ -38,9 +38,11 @@ export interface InFlightProposalCardProps {
   onCancel: () => void;
   /** Callback when the operator clicks "Use Synth Fallback" in synth_only state. */
   onUseSynthFallback?: () => void;
-  /** Optional: called when the card transitions to replaced so the parent can
-   *  clean up any in-flight state. */
-  onReplaced?: () => void;
+  /** Optional: called when the card transitions to replaced so the parent
+   *  can refetch / clean up. The new proposal id from the
+   *  `pm_proposal_replaced` SSE payload is passed through, so the parent
+   *  can GET the agent's row directly without re-deriving it. */
+  onReplaced?: (newProposalId: string) => void;
   /** Optional: additional metadata row to show in the card body. */
   extraContent?: React.ReactNode;
 }
@@ -113,10 +115,11 @@ export function InFlightProposalCard({
       // pm_proposal_replaced: fade out and hand off.
       if (parsed.type === 'pm_proposal_replaced') {
         const oldId = parsed.payload?.old_id as string | undefined;
+        const newId = parsed.payload?.new_id as string | undefined;
         if (oldId === proposalId && parsed.payload?.workspace_id === workspaceId) {
           setFadeOut(true);
           setState('replaced');
-          onReplaced?.();
+          if (newId) onReplaced?.(newId);
         }
       }
 
