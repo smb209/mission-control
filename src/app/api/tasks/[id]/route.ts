@@ -6,6 +6,7 @@ import { internalDispatch } from '@/lib/internal-dispatch';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { runPostStatusChangeSideEffects } from '@/lib/services/task-status';
 import { hasStageEvidence, checkStageEvidence, canUseBoardOverride, auditBoardOverride, whyCannotBeDone, recordLearnerOnTransition, isTerminalStatus } from '@/lib/task-governance';
+import { missingAcAcknowledgements } from '@/lib/db/task-ac-ack';
 import { syncGatewayAgentsToCatalog } from '@/lib/agent-catalog-sync';
 import { triggerWorkspaceMerge } from '@/lib/workspace-isolation';
 import { UpdateTaskSchema } from '@/lib/validation';
@@ -274,6 +275,23 @@ export async function PATCH(
         });
         if (reason) {
           return NextResponse.json({ error: `Cannot mark done: ${reason}` }, { status: 400 });
+        }
+
+        // PM convoy mandate (slice 5/7): parent task with a done convoy
+        // carrying feature-level acceptance criteria must have every AC
+        // explicitly acknowledged before review → done. board_override
+        // bypasses (handled above by the boardOverrideAllowed branch).
+        const acGate = missingAcAcknowledgements(id);
+        if (acGate && acGate.missing_indices.length > 0) {
+          return NextResponse.json(
+            {
+              error: `Parent task has ${acGate.missing_indices.length} unacknowledged convoy AC(s). Operator must acknowledge each before review → done.`,
+              code: 'parent_ac_check_pending',
+              missing_ac_indices: acGate.missing_indices,
+              acceptance_criteria: acGate.acceptance_criteria,
+            },
+            { status: 400 },
+          );
         }
       }
 
