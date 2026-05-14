@@ -1,5 +1,7 @@
 'use client';
 
+import { formatApiError } from '@/lib/format-api-error';
+
 /**
  * Plan-with-PM side panel.
  *
@@ -189,7 +191,7 @@ export default function PlanWithPmPanel({
           }),
         });
         const body = await res.json();
-        if (!res.ok) throw new Error(body.error || `Plan failed (${res.status})`);
+        if (!res.ok) throw new Error(formatApiError(body, `Plan failed (${res.status})`));
         if (cancelled) return;
         setProposalId(body.proposal_id);
         setProposalCreatedAt(body.proposal?.created_at ?? null);
@@ -282,7 +284,7 @@ export default function PlanWithPmPanel({
         body: JSON.stringify({ additional_constraint: refineText.trim() }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `Refine failed (${res.status})`);
+      if (!res.ok) throw new Error(formatApiError(body, `Refine failed (${res.status})`));
       const newProposal = body.proposal;
       setProposalId(newProposal.id);
       setImpactMd(newProposal.impact_md);
@@ -359,7 +361,7 @@ export default function PlanWithPmPanel({
       )}
 
       {err && (
-        <div className="p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs mb-3">
+        <div className="p-2 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-xs mb-3 whitespace-pre-wrap">
           {err}
         </div>
       )}

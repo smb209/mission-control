@@ -114,26 +114,32 @@ export async function POST(request: NextRequest) {
         origin: 'pm_dispatch',
       },
       agent_prompt:
-        `Decompose story ${parent.id} ("${parent.title}") into a small set of ` +
-        `draft TASKS (not initiatives) that an implementer can pick up directly.` +
+        `Decompose story ${parent.id} ("${parent.title}") into a convoy: a ` +
+        `slice DAG that an implementer team can execute under dep + AC gates.` +
         (parent.description ? ` Story description: ${parent.description}` : '') +
         (parsed.data.hint ? ` Operator hint: ${parsed.data.hint}.` : '') +
         ` Before composing, call read_notes({ initiative_id: "${parent.id}", audience: 'pm', min_importance: 2, limit: 5 }) ` +
         `to ingest any recent audit findings; if any are returned, reference one or two explicitly in impact_md ` +
-        `(e.g. \`Per audit on YYYY-MM-DD: "<short quoted finding>"\`) and let them inform task scope. ` +
+        `(e.g. \`Per audit on YYYY-MM-DD: "<short quoted finding>"\`) and let them inform slice scope. ` +
         `See SOUL.md "Ingest recent audit findings".\n\n` +
-        `Call \`propose_changes\` with trigger_kind='decompose_story' and one ` +
-        `\`create_task_under_initiative\` diff per task, all targeting initiative_id='${parent.id}'. ` +
-        `Each task = one PR by one role, independently reviewable. ` +
-        `Bias toward FEWER, FATTER tasks — if two candidate tasks would naturally ` +
-        `ride in the same PR by the same role, fuse them. Do not emit ` +
-        `"task 2 and 3 can be done together by the same implementer" — that is the ` +
-        `decomposer confessing it over-fragmented; collapse them instead. ` +
-        `Each task's \`description\` must stand alone: lead with one sentence ` +
-        `restating the parent purpose, then state the concrete deliverable, then ` +
-        `flag peer-interface boundaries (shared file paths, types, names) so the ` +
-        `implementer composes cleanly with siblings without coordinating mid-flight. ` +
-        `See SOUL.md "Decompose a story into tasks" for the full granularity contract. ` +
+        `Call \`propose_changes\` with trigger_kind='decompose_story' and a SINGLE ` +
+        `\`create_convoy_under_initiative\` diff targeting initiative_id='${parent.id}'. ` +
+        `Do NOT emit \`create_task_under_initiative\` — that path is reserved for ` +
+        `notes-intake / manual / audit follow-ups; the schema rejects flat-task ` +
+        `diffs from decompose-flow proposals (see docs/reference/pm-convoy-mandate.md).\n\n` +
+        `Convoy shape (see your SOUL.md "Decomposition output contract"):\n` +
+        `  - \`parent_acceptance_criteria\`: 1-3 FEATURE-shaped criteria the operator ` +
+        `validates before parent task transitions to done. NOT contract-shaped (no ` +
+        `"endpoint returns 200" at the parent level). Example good: "Operator clicks ` +
+        `X and Y happens." Example bad: "Endpoint returns 200."\n` +
+        `  - \`slices\`: each = one PR by one role, independently reviewable. Bias ` +
+        `toward FEWER, FATTER slices — if two candidate slices would ride in the ` +
+        `same PR by the same role, fuse them. Do not emit a 1-slice convoy that ` +
+        `lacks observable operator-facing behavior on its own.\n` +
+        `  - Per-slice \`depends_on\`: cite slice ids that must complete first. ` +
+        `Linear chains are common; fan-out is allowed when slices are independent.\n` +
+        `  - Per-slice \`acceptance_criteria\`: contract-shaped is fine here (the ` +
+        `slice is the unit-of-work contract).\n\n` +
         `Output discipline: tool call FIRST, then a short confirmation sentence — ` +
         `do NOT echo the id or use \`{...}\` placeholder syntax (the operator UI discards freeform replies).`,
     });

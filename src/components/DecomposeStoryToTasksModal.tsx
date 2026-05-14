@@ -1,5 +1,7 @@
 'use client';
 
+import { formatApiError } from '@/lib/format-api-error';
+
 /**
  * Decompose-story-to-tasks modal.
  *
@@ -120,7 +122,7 @@ export default function DecomposeStoryToTasksModal({
           }),
         });
         const body = await res.json();
-        if (!res.ok) throw new Error((body as { error?: string }).error || `Decompose failed (${res.status})`);
+        if (!res.ok) throw new Error(formatApiError(body, `Decompose failed (${res.status})`));
         if (cancelled) return;
         const proposal = body.proposal as ProposalRow;
         setProposalId(proposal.id);
@@ -208,7 +210,7 @@ export default function DecomposeStoryToTasksModal({
         body: JSON.stringify({ additional_constraint: refineText.trim() }),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `Refine failed (${res.status})`);
+      if (!res.ok) throw new Error(formatApiError(body, `Refine failed (${res.status})`));
       const proposal = body.proposal as ProposalRow;
       setProposalId(proposal.id);
       setProposalCreatedAt(proposal.created_at);
@@ -238,7 +240,7 @@ export default function DecomposeStoryToTasksModal({
       });
       if (!persist.ok) {
         const body = await persist.json().catch(() => ({}));
-        throw new Error(body.error || `Could not persist edits (${persist.status})`);
+        throw new Error(formatApiError(body, `Could not persist edits (${persist.status})`));
       }
       const res = await fetch(`/api/pm/proposals/${proposalId}/accept`, {
         method: 'POST',
@@ -246,7 +248,7 @@ export default function DecomposeStoryToTasksModal({
         body: JSON.stringify({}),
       });
       const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `Accept failed (${res.status})`);
+      if (!res.ok) throw new Error(formatApiError(body, `Accept failed (${res.status})`));
       // Convoy mandate (slice 4): on a successful apply the backend
       // mutates each create_convoy_under_initiative diff in place with
       // `created_convoy_id` + `created_parent_task_id`. We expose that to
@@ -327,7 +329,7 @@ export default function DecomposeStoryToTasksModal({
 
         <div className="flex-1 min-h-0 flex flex-col px-5 py-4 gap-4">
           {err && (
-            <div className="p-3 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+            <div className="p-3 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-sm whitespace-pre-wrap">
               {err}
             </div>
           )}
