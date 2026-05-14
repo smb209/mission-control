@@ -31,6 +31,8 @@ import { getDb, queryAll, queryOne, run } from '@/lib/db';
 import { createTaskFromInitiative } from './promotion';
 import { transitionTaskStatus } from '@/lib/services/task-status';
 import { broadcast } from '@/lib/events';
+import { validateConvoyDag } from '@/lib/convoy-dag';
+import { spawnDelegationSubtask } from '@/lib/convoy';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -82,6 +84,13 @@ export interface PmDiffCapture {
   created_initiative_id?: string;
   /** Set by the create_task_under_initiative apply pass — id of the new task. */
   created_task_id?: string;
+  /** Set by the create_convoy_under_initiative apply pass — id of the convoy row. */
+  created_convoy_id?: string;
+  /** Set by the create_convoy_under_initiative apply pass — id of the parent task
+   *  the convoy was attached to (existing or auto-created from a story initiative). */
+  created_parent_task_id?: string;
+  /** Set by the create_convoy_under_initiative apply pass — symbolic→real subtask map. */
+  created_subtasks?: Array<{ symbolic_id: string; subtask_id: string; child_task_id: string }>;
   /** Set by `applyDiff` for `add_availability` — id of the inserted row. */
   created_availability_id?: string;
   /** Set by `applyDiff` for `set_task_status` AND by the
@@ -162,6 +171,36 @@ export type PmDiff =
       status_check_md?: string | null;
       assigned_agent_id?: string | null;
       priority?: 'low' | 'normal' | 'high';
+    } & PmDiffCapture)
+  | ({
+      // PM convoy mandate (slice 2). Decompose-flow proposals emit a
+      // single convoy DAG instead of a flat task list. Apply pass:
+      //   1. resolve `initiative_id` against placeholders or workspace,
+      //   2. find-or-create the parent task for that initiative,
+      //   3. validate the DAG (Kahn + peer resolution) atomically,
+      //   4. INSERT convoys + convoy_subtasks via spawnDelegationSubtask,
+      //   5. fire-and-forget dispatchReadyConvoySubtasks for roots.
+      // No flag gates the apply itself — the diff materializes wherever
+      // it appears. Flag MC_PM_CONVOY_MANDATE gates the schema-level
+      // REJECTION of create_task_under_initiative in decompose flows
+      // (slice 6).
+      kind: 'create_convoy_under_initiative';
+      initiative_id: string;
+      parent_acceptance_criteria: string[];
+      slices: Array<{
+        id: string;
+        role?: string;
+        peer_agent_id?: string;
+        peer_gateway_id?: string;
+        slice: string;
+        message: string;
+        expected_deliverables: Array<{ title: string; kind: 'file' | 'note' | 'report' }>;
+        acceptance_criteria: string[];
+        expected_duration_minutes: number;
+        checkin_interval_minutes?: number;
+        depends_on?: string[];
+        required_evidence_gates?: string[];
+      }>;
     } & PmDiffCapture)
   | ({
       // Slice 2 of revertable PM proposals. Used as the inverse of
@@ -462,6 +501,102 @@ export function validateProposedChanges(
         }
         break;
       }
+      case 'create_convoy_under_initiative': {
+        if (!c.initiative_id) {
+          errors.push(`changes[${i}]: initiative_id required`);
+          break;
+        }
+        // Same placeholder semantics as create_task_under_initiative.
+        if (validPlaceholders.has(c.initiative_id)) {
+          // Resolved at apply time.
+        } else if (c.initiative_id.startsWith('$')) {
+          errors.push(
+            `changes[${i}]: placeholder ${c.initiative_id} does not match any create_child_initiative diff`,
+          );
+        } else {
+          assertInitiativeInWorkspace(workspaceId, c.initiative_id, errors, initiativeCache);
+        }
+        if (!Array.isArray(c.parent_acceptance_criteria) || c.parent_acceptance_criteria.length === 0) {
+          errors.push(`changes[${i}]: parent_acceptance_criteria must be a non-empty array`);
+        } else {
+          for (const ac of c.parent_acceptance_criteria) {
+            if (typeof ac !== 'string' || ac.length < 10 || ac.length > 500) {
+              errors.push(
+                `changes[${i}]: each parent_acceptance_criteria entry must be a string of 10..500 chars`,
+              );
+              break;
+            }
+          }
+        }
+        if (!Array.isArray(c.slices) || c.slices.length === 0 || c.slices.length > 12) {
+          errors.push(`changes[${i}]: slices must be a non-empty array (max 12)`);
+        } else {
+          // Cheap structural checks; full DAG (cycle / peer) validation
+          // happens in the apply pass against live workspace state.
+          const sliceIds = new Set<string>();
+          for (let j = 0; j < c.slices.length; j++) {
+            const s = c.slices[j];
+            if (!s || typeof s !== 'object') {
+              errors.push(`changes[${i}].slices[${j}]: must be an object`);
+              continue;
+            }
+            if (!s.id || typeof s.id !== 'string' || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id)) {
+              errors.push(`changes[${i}].slices[${j}]: id required (alphanum/_/-, 1..40 chars)`);
+            } else if (sliceIds.has(s.id)) {
+              errors.push(`changes[${i}].slices[${j}]: duplicate slice id "${s.id}"`);
+            } else {
+              sliceIds.add(s.id);
+            }
+            const addressing = [s.role, s.peer_agent_id, s.peer_gateway_id].filter(
+              (v) => typeof v === 'string' && v.length > 0,
+            );
+            if (addressing.length === 0) {
+              errors.push(
+                `changes[${i}].slices[${j}]: specify exactly one of role / peer_agent_id / peer_gateway_id`,
+              );
+            } else if (addressing.length > 1) {
+              errors.push(
+                `changes[${i}].slices[${j}]: role / peer_agent_id / peer_gateway_id are mutually exclusive`,
+              );
+            }
+            if (typeof s.slice !== 'string' || s.slice.length < 10 || s.slice.length > 500) {
+              errors.push(`changes[${i}].slices[${j}]: slice required (10..500 chars)`);
+            }
+            if (typeof s.message !== 'string' || s.message.length < 1 || s.message.length > 10000) {
+              errors.push(`changes[${i}].slices[${j}]: message required (1..10000 chars)`);
+            }
+            if (!Array.isArray(s.expected_deliverables) || s.expected_deliverables.length === 0) {
+              errors.push(`changes[${i}].slices[${j}]: expected_deliverables required`);
+            }
+            if (!Array.isArray(s.acceptance_criteria) || s.acceptance_criteria.length === 0) {
+              errors.push(`changes[${i}].slices[${j}]: acceptance_criteria required`);
+            }
+            if (
+              typeof s.expected_duration_minutes !== 'number' ||
+              s.expected_duration_minutes < 5 ||
+              s.expected_duration_minutes > 240
+            ) {
+              errors.push(`changes[${i}].slices[${j}]: expected_duration_minutes required (5..240)`);
+            }
+          }
+          // depends_on refs must point at sibling slice ids.
+          for (let j = 0; j < c.slices.length; j++) {
+            const s = c.slices[j];
+            if (!Array.isArray(s?.depends_on)) continue;
+            for (const dep of s.depends_on) {
+              if (!sliceIds.has(dep)) {
+                errors.push(
+                  `changes[${i}].slices[${j}]: depends_on "${dep}" is not a sibling slice id`,
+                );
+              }
+              if (dep === s.id) {
+                errors.push(`changes[${i}].slices[${j}]: slice cannot depend on itself`);
+              }
+            }
+          }
+        }
+        break;
+      }
       case 'create_child_initiative': {
         if (!c.parent_initiative_id) {
           errors.push(`changes[${i}]: parent_initiative_id required`);
@@ -677,6 +812,7 @@ export function inferTargetInitiativeId(changes: PmDiff[]): string | null {
       case 'add_dependency':
       case 'update_status_check':
       case 'create_task_under_initiative':
+      case 'create_convoy_under_initiative':
         id = c.initiative_id;
         break;
       case 'create_child_initiative':
@@ -1176,11 +1312,11 @@ export function acceptProposal(
     for (let idx = 0; idx < existing.proposed_changes.length; idx++) {
       if (!filter.has(idx)) continue;
       const c = existing.proposed_changes[idx];
-      if (c.kind !== 'create_task_under_initiative') continue;
+      if (c.kind !== 'create_task_under_initiative' && c.kind !== 'create_convoy_under_initiative') continue;
       const refIdx = placeholderToOwner.get(c.initiative_id);
       if (refIdx !== undefined && !filter.has(refIdx)) {
         throw new PmProposalValidationError(
-          `changes[${idx}]: create_task_under_initiative refers to placeholder "${c.initiative_id}" but the create_child_initiative at index ${refIdx} is not in the accepted set. Either accept both or neither.`,
+          `changes[${idx}]: ${c.kind} refers to placeholder "${c.initiative_id}" but the create_child_initiative at index ${refIdx} is not in the accepted set. Either accept both or neither.`,
         );
       }
     }
@@ -1226,6 +1362,12 @@ export function acceptProposal(
   // client-side by populating the create-initiative form. Keeps the
   // refine + audit chain intact without touching real state.
   const isAdvisory = existing.trigger_kind === 'plan_initiative';
+
+  // Convoy ids whose root slices should be fired AFTER the apply
+  // transaction commits. dispatch fires HTTP loopback through
+  // internalDispatch — we don't want it racing with the outer tx, and
+  // a dispatch failure must not roll back the materialized convoy.
+  const convoysToDispatch: string[] = [];
 
   db.transaction(() => {
     if (!isAdvisory) {
@@ -1309,6 +1451,33 @@ export function acceptProposal(
           });
           // Capture the new task id so revert can cancel that exact row.
           change.created_task_id = created.id;
+          changesApplied++;
+          continue;
+        }
+        if (change.kind === 'create_convoy_under_initiative') {
+          // PM convoy mandate slice 2: materialize the DAG atomically.
+          // We're already inside `db.transaction(...)`, so any throw
+          // from this branch rolls back ALL pass-1 / pass-2 writes,
+          // honoring the all-or-nothing apply invariant.
+          const mapped = placeholderMap.get(change.initiative_id);
+          const realInit = mapped ?? (change.initiative_id.startsWith('$')
+            ? undefined
+            : change.initiative_id);
+          if (!realInit) {
+            throw new PmProposalValidationError(
+              `create_convoy_under_initiative: unresolved placeholder "${change.initiative_id}"`,
+            );
+          }
+          const parentTaskId = applyCreateConvoyUnderInitiative({
+            workspaceId: existing.workspace_id,
+            initiativeId: realInit,
+            diff: change,
+            now,
+            appliedByAgentId: applied_by_agent_id,
+            proposalId: id,
+          });
+          convoysToDispatch.push(change.created_convoy_id!);
+          change.created_parent_task_id = parentTaskId;
           changesApplied++;
           continue;
         }
@@ -1397,6 +1566,30 @@ export function acceptProposal(
       now,
     );
   })();
+
+  // After-commit: fire root slices for every freshly-materialized
+  // convoy. Lazy-imported so this module stays decoupled from the
+  // dispatch / fetch surface — keeps test setup light and avoids a
+  // circular import between pm-proposals and convoy.
+  if (convoysToDispatch.length > 0) {
+    import('@/lib/convoy')
+      .then(({ dispatchReadyConvoySubtasks }) => {
+        for (const convoyId of convoysToDispatch) {
+          dispatchReadyConvoySubtasks(convoyId).catch((err) => {
+            console.warn(
+              '[acceptProposal] dispatchReadyConvoySubtasks failed:',
+              (err as Error).message,
+            );
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          '[acceptProposal] failed to load convoy dispatcher:',
+          (err as Error).message,
+        );
+      });
+  }
 
   const updated = getProposal(id)!;
   const rejected_indexes = filter
@@ -1566,6 +1759,11 @@ function applyDiff(diff: PmDiff, now: string): void {
       // initiative_id placeholders can resolve from the same proposal.
       throw new Error('create_task_under_initiative must be applied via acceptProposal pass-2');
     }
+    case 'create_convoy_under_initiative': {
+      // Out-of-band: needs the placeholder map AND fires DAG validation
+      // + spawnDelegationSubtask via applyCreateConvoyUnderInitiative.
+      throw new Error('create_convoy_under_initiative must be applied via acceptProposal pass-2');
+    }
     case 'set_task_status': {
       const prev = queryOne<{ status: string }>(
         `SELECT status FROM tasks WHERE id = ?`,
@@ -1640,6 +1838,188 @@ function applyCreateChildInitiative(
     ],
   );
   return childId;
+}
+
+/**
+ * Apply one `create_convoy_under_initiative` diff.
+ *
+ *   1. Validate the DAG (Kahn topo sort + peer resolution) against the
+ *      live workspace. Atomic: any error throws and the outer
+ *      transaction rolls back.
+ *   2. Find-or-create the parent task for the initiative. Story-kind
+ *      initiatives without an existing task get one in 'inbox' via
+ *      `createTaskFromInitiative` + an immediate `inbox` flip so the
+ *      convoy can attach.
+ *   3. INSERT the `convoys` row (via spawnDelegationSubtask's lazy
+ *      create-on-first-spawn path) populated with the parent ACs as a
+ *      JSON-encoded array.
+ *   4. INSERT per-slice tasks + convoy_subtasks in topological order
+ *      with resolved `depends_on_subtask_ids`. Reuses
+ *      `spawnDelegationSubtask` so the SLO contract fields
+ *      (acceptance_criteria, expected_deliverables, evidence gates)
+ *      land on the row identically to coordinator-spawned subtasks.
+ *
+ * The caller wires up dispatch fire-and-forget AFTER the outer tx
+ * commits — see `convoysToDispatch` in `acceptProposal`.
+ *
+ * Mutates the diff in place to record `created_convoy_id` and
+ * `created_subtasks` for revert.
+ *
+ * @returns the parent task id the convoy was attached to.
+ */
+function applyCreateConvoyUnderInitiative(input: {
+  workspaceId: string;
+  initiativeId: string;
+  diff: Extract<PmDiff, { kind: 'create_convoy_under_initiative' }>;
+  now: string;
+  appliedByAgentId: string | null;
+  proposalId: string;
+}): string {
+  const { workspaceId, initiativeId, diff, now, appliedByAgentId, proposalId } = input;
+
+  // ── DAG validation pre-pass (atomic — first failure throws) ──────
+  const dag = validateConvoyDag(diff.slices, workspaceId);
+  if (!dag.ok) {
+    throw new PmProposalValidationError(
+      `create_convoy_under_initiative: ${dag.message}`,
+    );
+  }
+
+  // ── Find-or-create the parent task ──────────────────────────────
+  // Reuses `promote_initiative_to_task` semantics: story-kind
+  // initiatives without a task row get one created here. We prefer
+  // the most-recent non-terminal task on the initiative so a convoy
+  // re-decompose attaches to live work rather than spawning a second
+  // parent. Terminal-state rows (done / cancelled) are skipped so a
+  // re-plan after completion creates a fresh parent.
+  const initiative = queryOne<{ id: string; kind: string; title: string; description: string | null }>(
+    'SELECT id, kind, title, description FROM initiatives WHERE id = ?',
+    [initiativeId],
+  );
+  if (!initiative) {
+    throw new PmProposalValidationError(
+      `create_convoy_under_initiative: initiative ${initiativeId} not found`,
+    );
+  }
+  const existingTask = queryOne<{ id: string; status: string }>(
+    `SELECT id, status FROM tasks
+       WHERE initiative_id = ? AND COALESCE(is_subtask, 0) = 0
+         AND status NOT IN ('done', 'cancelled')
+       ORDER BY datetime(created_at) DESC LIMIT 1`,
+    [initiativeId],
+  );
+
+  let parentTaskId: string;
+  if (existingTask) {
+    parentTaskId = existingTask.id;
+    // If the parent is in 'draft', flip to 'inbox' so spawnDelegationSubtask
+    // and convoy_active transitions are valid.
+    if (existingTask.status === 'draft') {
+      run(
+        `UPDATE tasks SET status = 'inbox', updated_at = ? WHERE id = ?`,
+        [now, parentTaskId],
+      );
+    }
+  } else {
+    // Auto-create. Requires the initiative to be story-kind per the
+    // promote_initiative_to_task contract; the PM SOUL is responsible
+    // for not emitting decompose-flow convoys against theme / milestone
+    // / epic initiatives, but we keep the guard so a buggy emit
+    // surfaces an actionable error rather than orphaned rows.
+    if (initiative.kind !== 'story') {
+      throw new PmProposalValidationError(
+        `create_convoy_under_initiative: initiative ${initiativeId} is kind='${initiative.kind}' — only story-kind initiatives can auto-create a parent task. Promote the initiative first.`,
+      );
+    }
+    const created = createTaskFromInitiative({
+      initiative_id: initiativeId,
+      workspace_id: workspaceId,
+      title: initiative.title,
+      description: initiative.description ?? null,
+      created_by_agent_id: appliedByAgentId,
+      reason: `parent task auto-created for convoy from PM proposal #${proposalId}`,
+    });
+    parentTaskId = created.id;
+    // createTaskFromInitiative inserts 'draft'; flip to 'inbox' so the
+    // convoy can attach (spawnDelegationSubtask transitions parent to
+    // 'convoy_active' on first spawn, which expects a non-draft state).
+    run(
+      `UPDATE tasks SET status = 'inbox', updated_at = ? WHERE id = ?`,
+      [now, parentTaskId],
+    );
+  }
+
+  // ── Spawn each slice in topological order ───────────────────────
+  // spawnDelegationSubtask lazy-creates the convoy on the first call
+  // and appends to it on subsequent calls — exactly the shape we need.
+  const slicesById = new Map(diff.slices.map((s) => [s.id, s] as const));
+  const symbolicToSubtaskId = new Map<string, string>();
+  const symbolicToChildTaskId = new Map<string, string>();
+  const created: Array<{ symbolic_id: string; subtask_id: string; child_task_id: string }> = [];
+  let convoyId: string | null = null;
+
+  for (const symId of dag.topo) {
+    const s = slicesById.get(symId)!;
+    const r = dag.resolved.get(symId)!;
+    const checkin = s.checkin_interval_minutes ?? 15;
+    const depSubtaskIds = (s.depends_on ?? [])
+      .map((d) => symbolicToSubtaskId.get(d)!)
+      .filter(Boolean);
+    const peerRoleForLog = r.peer.role ?? s.role ?? 'builder';
+
+    const spawn = spawnDelegationSubtask({
+      parentTaskId,
+      parentAgentId: appliedByAgentId ?? r.peer.id,
+      peerAgentId: r.peer.id,
+      peerGatewayId: r.peer.gateway_agent_id ?? '',
+      suggestedRole: peerRoleForLog,
+      slice: s.slice,
+      message: s.message,
+      expectedDeliverables: s.expected_deliverables,
+      acceptanceCriteria: s.acceptance_criteria,
+      expectedDurationMinutes: s.expected_duration_minutes,
+      checkinIntervalMinutes: checkin,
+      dependsOnSubtaskIds: depSubtaskIds.length > 0 ? depSubtaskIds : undefined,
+    });
+    convoyId = spawn.convoyId;
+    symbolicToSubtaskId.set(symId, spawn.subtaskId);
+    symbolicToChildTaskId.set(symId, spawn.childTaskId);
+    created.push({
+      symbolic_id: symId,
+      subtask_id: spawn.subtaskId,
+      child_task_id: spawn.childTaskId,
+    });
+
+    // Per-slice required_evidence_gates override (spawnDelegationSubtask
+    // defaults to ['test_full']; the diff can override). Only fire the
+    // UPDATE when the diff explicitly sets it — otherwise the default
+    // stays.
+    if (Array.isArray(s.required_evidence_gates)) {
+      run(
+        `UPDATE convoy_subtasks SET required_evidence_gates = ? WHERE id = ?`,
+        [JSON.stringify(s.required_evidence_gates), spawn.subtaskId],
+      );
+    }
+  }
+
+  if (!convoyId) {
+    // Unreachable — validateConvoyDag would have rejected an empty
+    // slice list — but guard for safety.
+    throw new PmProposalValidationError(
+      'create_convoy_under_initiative: no convoy materialized',
+    );
+  }
+
+  // Populate convoys.acceptance_criteria with the parent ACs. Column
+  // was added by migration 095; we JSON-encode the string[].
+  run(
+    `UPDATE convoys SET acceptance_criteria = ?, updated_at = ? WHERE id = ?`,
+    [JSON.stringify(diff.parent_acceptance_criteria), now, convoyId],
+  );
+
+  diff.created_convoy_id = convoyId;
+  diff.created_subtasks = created;
+  return parentTaskId;
 }
 
 // ─── Reject / refine ────────────────────────────────────────────────

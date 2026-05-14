@@ -248,6 +248,19 @@ function invertOne(diff: PmDiff, index: number): InvertedDiff {
       };
     }
 
+    case 'create_convoy_under_initiative': {
+      // PM convoy mandate slice 2: revert semantics for this diff kind
+      // are out of scope here — they land in slice 7 alongside the
+      // updated pm-revertable-proposals spec ("cancel the convoy +
+      // delete unscheduled child tasks; refuse revert if any slice has
+      // reached done"). Surface a limited marker so the chain renders
+      // without claiming a false inverse.
+      return limited(
+        index,
+        'create_convoy_under_initiative revert not yet implemented (slice 7 of pm-convoy-mandate)',
+      );
+    }
+
     default: {
       const exhaustive: never = diff;
       return {
