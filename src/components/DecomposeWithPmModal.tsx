@@ -166,18 +166,24 @@ export default function DecomposeWithPmModal({
     if (dispatchState !== 'pending_agent') return;
     const es = new EventSource('/api/events/stream');
     let cancelled = false;
-    const refetch = async () => {
+    /**
+     * Fetch a specific proposal by id and hydrate modal state. Prefer
+     * this over a resume-by-initiative lookup which has filter logic
+     * (status='draft', json_extract on trigger_text) that can race
+     * with the supersede transaction's commit. The SSE payload
+     * carries new_id directly, so address it directly.
+     */
+    const fetchById = async (newId: string) => {
       try {
-        const url = `/api/pm/decompose-initiative?workspace_id=${encodeURIComponent(initiative.workspace_id)}&initiative_id=${encodeURIComponent(initiative.id)}`;
-        const res = await fetch(url);
+        const res = await fetch(`/api/pm/proposals/${encodeURIComponent(newId)}`);
         if (!res.ok) return;
-        const body = await res.json() as { proposal?: ProposalRow | null };
-        if (cancelled || !body?.proposal) return;
-        setProposalId(body.proposal.id);
-        setProposalCreatedAt(body.proposal.created_at);
-        setImpactMd(body.proposal.impact_md);
-        setChildren(body.proposal.proposed_changes);
-        setDispatchState(body.proposal.dispatch_state ?? null);
+        const proposal = await res.json() as ProposalRow | null;
+        if (cancelled || !proposal || !proposal.id) return;
+        setProposalId(proposal.id);
+        setProposalCreatedAt(proposal.created_at);
+        setImpactMd(proposal.impact_md);
+        setChildren(proposal.proposed_changes);
+        setDispatchState(proposal.dispatch_state ?? null);
       } catch {
         // Best-effort — operator can refresh manually.
       }
@@ -189,7 +195,8 @@ export default function DecomposeWithPmModal({
       if (!parsed || !parsed.type) return;
       if (parsed.type === 'pm_proposal_replaced') {
         const oldId = parsed.payload?.old_id as string | undefined;
-        if (oldId === proposalId) void refetch();
+        const newId = parsed.payload?.new_id as string | undefined;
+        if (oldId === proposalId && newId) void fetchById(newId);
       } else if (parsed.type === 'pm_proposal_dispatch_state_changed') {
         const id = parsed.payload?.proposal_id as string | undefined;
         const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
