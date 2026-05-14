@@ -31,7 +31,7 @@ import { formatApiError } from '@/lib/format-api-error';
  * superseded chain — the modal swaps in the new proposal's diffs.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Sparkles, Send, RefreshCw, RotateCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
@@ -156,48 +156,47 @@ export default function DecomposeWithPmModal({
     };
   }, [initiative.id, initiative.workspace_id, initialHint]);
 
-  // Tier 3 of pm-dispatch-async. While the synth placeholder is pending the
-  // named-agent reply, listen for `pm_proposal_replaced` SSE events. When
-  // the agent's row supersedes the placeholder, swap to the new id and
-  // refetch its content (now resolvable because supersede also copies
-  // trigger_text). Mirrors the PlanWithPmPanel hookup.
+  /**
+   * Fetch a specific proposal by id and hydrate modal state. Called by
+   * the InFlightProposalCard's `onReplaced(newId)` callback once the
+   * named-agent's row supersedes the synth placeholder.
+   *
+   * Prefer this over a resume-by-initiative lookup — that endpoint
+   * filters by `status='draft' AND json_extract(trigger_text, ...)`
+   * which has raced with the supersede transaction's commit in
+   * practice. The per-proposal GET has no filter, no race.
+   */
+  const fetchById = useCallback(async (newId: string) => {
+    try {
+      const res = await fetch(`/api/pm/proposals/${encodeURIComponent(newId)}`);
+      if (!res.ok) return;
+      const proposal = await res.json() as ProposalRow | null;
+      if (!proposal || !proposal.id) return;
+      setProposalId(proposal.id);
+      setProposalCreatedAt(proposal.created_at);
+      setImpactMd(proposal.impact_md);
+      setChildren(proposal.proposed_changes);
+      setDispatchState(proposal.dispatch_state ?? null);
+    } catch {
+      // Best-effort — operator can refresh manually.
+    }
+  }, []);
+
+  // SSE: listen for `pm_proposal_dispatch_state_changed` so the named-
+  // agent timeout (synth_only fallback) flips the modal out of the
+  // in-flight render path. Replacement events arrive through
+  // InFlightProposalCard's onReplaced callback — single source of
+  // truth for the agent-finished signal.
   useEffect(() => {
     if (!proposalId) return;
-    if (dispatchState !== 'pending_agent') return;
     const es = new EventSource('/api/events/stream');
     let cancelled = false;
-    /**
-     * Fetch a specific proposal by id and hydrate modal state. Prefer
-     * this over a resume-by-initiative lookup which has filter logic
-     * (status='draft', json_extract on trigger_text) that can race
-     * with the supersede transaction's commit. The SSE payload
-     * carries new_id directly, so address it directly.
-     */
-    const fetchById = async (newId: string) => {
-      try {
-        const res = await fetch(`/api/pm/proposals/${encodeURIComponent(newId)}`);
-        if (!res.ok) return;
-        const proposal = await res.json() as ProposalRow | null;
-        if (cancelled || !proposal || !proposal.id) return;
-        setProposalId(proposal.id);
-        setProposalCreatedAt(proposal.created_at);
-        setImpactMd(proposal.impact_md);
-        setChildren(proposal.proposed_changes);
-        setDispatchState(proposal.dispatch_state ?? null);
-      } catch {
-        // Best-effort — operator can refresh manually.
-      }
-    };
     es.onmessage = (ev) => {
       if (cancelled) return;
       let parsed: { type?: string; payload?: Record<string, unknown> } | null = null;
       try { parsed = JSON.parse(ev.data); } catch { return; }
       if (!parsed || !parsed.type) return;
-      if (parsed.type === 'pm_proposal_replaced') {
-        const oldId = parsed.payload?.old_id as string | undefined;
-        const newId = parsed.payload?.new_id as string | undefined;
-        if (oldId === proposalId && newId) void fetchById(newId);
-      } else if (parsed.type === 'pm_proposal_dispatch_state_changed') {
+      if (parsed.type === 'pm_proposal_dispatch_state_changed') {
         const id = parsed.payload?.proposal_id as string | undefined;
         const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
         if (id === proposalId && next) setDispatchState(next);
@@ -207,7 +206,7 @@ export default function DecomposeWithPmModal({
       cancelled = true;
       es.close();
     };
-  }, [proposalId, dispatchState, initiative.id, initiative.workspace_id]);
+  }, [proposalId]);
 
   // Esc to close. Stash onClose in a ref so the keydown subscription
   // doesn't churn on every parent render (caller-supplied onClose is
@@ -443,6 +442,7 @@ export default function DecomposeWithPmModal({
                 // appears with the synth template populated.
                 setDispatchState('synth_only');
               }}
+              onReplaced={(newId) => { void fetchById(newId); }}
             />
           ) : (() => {
             // Convoy mandate (slice 4): split convoy DAGs from
