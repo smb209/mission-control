@@ -210,6 +210,12 @@ const KIND_CHIP: Record<
     tooltip:
       "Updates an existing task's status. PM uses this only as the inverse of NEW TASK — task creation is the operator-driven path.",
   },
+  cancel_convoy: {
+    label: 'CANCEL CONVOY',
+    cls: 'border-rose-500/30 bg-rose-500/15 text-rose-200',
+    tooltip:
+      'Revert-only: cancels a convoy spawned by a create_convoy_under_initiative diff. Inbox subtasks are deleted, in-flight subtasks are cancelled, the parent task is left in place for operator cleanup. Refused if any subtask has reached done.',
+  },
 };
 
 function KindChip({ kind }: { kind: string }) {

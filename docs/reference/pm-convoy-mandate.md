@@ -50,9 +50,17 @@ Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) has s
 
 The mandate is **always on** as of 2026-05-14. The original `MC_PM_CONVOY_MANDATE` feature flag was removed once slices 1–7 shipped and verified end-to-end — there is no kill switch. To roll back, an operator would need to revert the gating code in [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts).
 
-### Revert semantics
+### Revert semantics — shipped
 
-`invertDiff` for `create_convoy_under_initiative` is fully implemented — see [`pm-revertable-proposals.md`](pm-revertable-proposals.md) for the contract. Behavior: refuses revert if any slice has reached `done`; otherwise cancels the convoy, deletes unscheduled (inbox) child tasks, transitions in-flight children to `cancelled`, and clears `task_ac_acknowledgements` for the parent. Parent task itself is preserved for operator cleanup rather than auto-deleted.
+Full `invertDiff` for `create_convoy_under_initiative` has landed.
+The inverse is a synthesized `cancel_convoy` diff (revert-only kind)
+applied atomically inside the outer `acceptProposal` transaction:
+refuse if any subtask has reached `done`, otherwise mark the convoy
+`failed`, delete inbox children, cancel non-done in-flight children,
+and delete the parent-AC acknowledgements. The parent task is left
+in place for operator cleanup — see
+[`pm-revertable-proposals.md § create_convoy_under_initiative → cancel_convoy`](pm-revertable-proposals.md#create_convoy_under_initiative--cancel_convoy)
+for the full behavior table and the parent-preservation rationale.
 
 ## Problem
 
@@ -297,7 +305,7 @@ These help today's decompositions without touching the schema. Buy time.
 | [`docs/reference/pm-diff-conventions.md`](../docs/reference/pm-diff-conventions.md) | Add `create_convoy_under_initiative` row to the diff-kind table; add "decompose-flow-only / non-decompose-flow-only" column or note; document the new shape. | Material |
 | [`docs/reference/task-delegation-and-convoys.md`](../docs/reference/task-delegation-and-convoys.md) | Note that convoys now have two entry points (PM-emit at proposal-accept time AND coordinator `spawn_subtask`/`plan_convoy` for mid-flight); shrink the coordinator's described scope; document `convoys.acceptance_criteria`. | Material |
 | [`docs/reference/roadmap-and-pm-spec.md`](../docs/reference/roadmap-and-pm-spec.md) | Section ~line 499 describes today's flat-list decompose output. Replace with the convoy mandate; describe the parent-task auto-create-on-accept; describe `parent_acceptance_criteria`. | Material |
-| [`docs/reference/pm-revertable-proposals.md`](../docs/reference/pm-revertable-proposals.md) | Define `invertDiff` for `create_convoy_under_initiative`: cancel the convoy + delete unscheduled child tasks; refuse revert if any slice has reached `done`. Material edit to [`src/lib/pm/invertDiff.ts`](../src/lib/pm/invertDiff.ts) needed alongside the spec. | Material |
+| [`docs/reference/pm-revertable-proposals.md`](../docs/reference/pm-revertable-proposals.md) | **Shipped.** Defines the `cancel_convoy` inverse for `create_convoy_under_initiative`: refuse on any `done` subtask, otherwise mark the convoy `failed`, delete inbox children, cancel in-flight children, delete parent-AC acks. Parent task is preserved. Implementation in [`src/lib/pm/invertDiff.ts`](../src/lib/pm/invertDiff.ts) + apply branch in [`src/lib/db/pm-proposals.ts`](../src/lib/db/pm-proposals.ts). | Material — shipped |
 | [`docs/reference/review-stage-robustness-spec.md`](../docs/reference/review-stage-robustness-spec.md) | Document the parent `review → done` AC gate; how it composes with evidence gate; how `board_override` bypasses. | Material |
 | `docs/reference/pm-chat-prompt.md` (and any pm SOUL file under `agent-templates/pm/`) | Add the decompose-flow output contract, the DAG smell checklist, and the parent-AC instruction. | Material |
 | [`docs/reference/agent-model-cleanup.md`](../docs/reference/agent-model-cleanup.md) | Coordinator described as decomposer; needs the role-shift (monitor + accept + escalate). | Light |
