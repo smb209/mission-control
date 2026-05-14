@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/authz/agent-task.ts
@@ -20,6 +20,7 @@ related-specs:
   - ../docs/archive/coordinator-delegation-via-convoy-spec.md — defines spawn_subtask path being tightened
   - agent-health.md — heartbeat/stall infrastructure extended here
   - ../docs/archive/convoy-mode-spec.md — convoy-subtask gate behavior modified
+  - pm-convoy-mandate.md — parent-task review→done AC gate (composes with the evidence gate below)
 ---
 
 # Review-Stage Robustness
@@ -128,6 +129,46 @@ Extend `scanStalledTasks` (and the per-stage timer in `agent-health.ts`) with:
 PM and builder soul-prompts get a one-paragraph addition: when you receive `agent_not_coordinator` (or any `next_action: escalate_to_parent`), your only valid next call is `escalate_to_parent`. Doing the work yourself is a protocol violation.
 
 This is a belt-and-braces redundant rail — A.2's soft-lock makes it impossible at the system level — but worth keeping aligned.
+
+### G. Parent-task `review → done` AC gate (PM convoy mandate, slice 5)
+
+Layered on top of the evidence gate above. When the PM emits a
+`create_convoy_under_initiative` diff (decompose-flow output — see
+[pm-convoy-mandate.md](pm-convoy-mandate.md)), the resulting convoy
+carries operator-facing parent acceptance criteria in
+`convoys.acceptance_criteria` (JSON array; mig 095). The parent task
+sits in `convoy_active` while slices run, gets auto-promoted to
+`review` by `checkConvoyCompletion` once all subtasks are `done`, and
+then must clear the AC gate before transitioning to `done`.
+
+**Composition order in `transitionTaskStatus`:**
+
+1. **Evidence gate first** — `STAGE_REQUIRED_EVIDENCE[review]` (today's
+   rail). If evidence is missing, return the existing
+   `evidence_required` error. No AC check runs.
+2. **AC gate second** — if the parent has a convoy with
+   `acceptance_criteria` populated and is being transitioned to
+   `done`, the service looks up `task_ac_acknowledgements` (mig 096).
+   Each AC must have an `acknowledged_at` row keyed by the operator
+   before the transition is allowed; otherwise return
+   `parent_ac_check_pending`.
+3. **`board_override: true` bypasses both gates** — operator escape
+   hatch, mirroring the existing evidence-gate bypass.
+
+**UI:** the parent task's detail page surfaces an `AcAckModal` when
+the task is in `review` and the convoy has uncherished ACs. The
+endpoint `GET/POST /api/tasks/[id]/ac-ack` writes the ack rows
+operator-by-operator. See
+[`src/components/AcAckModal.tsx`](../../src/components/AcAckModal.tsx)
+and the convoy-mandate spec for the wiring.
+
+**Why it composes cleanly:** the evidence gate is per-slice; the AC
+gate is per-feature. A parent that genuinely shipped will satisfy
+both (each subtask has its `test_full` evidence + operator has
+acked the parent ACs). A parent whose subtasks gamed evidence but
+whose feature isn't really done will fail the AC gate, surfacing the
+"locally green, globally wrong" failure mode the mandate was designed
+to catch.
 
 ## Decisions (formerly open questions)
 

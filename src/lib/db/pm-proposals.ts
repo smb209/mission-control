@@ -337,6 +337,44 @@ export function validateProposedChanges(
     return ['proposed_changes must be an array'];
   }
 
+  // PM convoy mandate (slice 6/7): when MC_PM_CONVOY_MANDATE=1, decompose-flow
+  // proposals (decompose_story / decompose_initiative / plan_initiative) MUST
+  // emit at least one create_convoy_under_initiative diff and MUST NOT emit
+  // any create_task_under_initiative diffs. Carve-outs for notes_intake,
+  // manual, and other tactical kinds are preserved (the mandate only applies
+  // to strategic decomposition output). See docs/reference/pm-convoy-mandate.md.
+  const mandateOn = process.env.MC_PM_CONVOY_MANDATE === '1';
+  const decomposeFlowKinds = new Set<PmProposalTriggerKind>([
+    'decompose_story',
+    'decompose_initiative',
+    'plan_initiative',
+  ]);
+  if (
+    mandateOn &&
+    options.trigger_kind &&
+    decomposeFlowKinds.has(options.trigger_kind)
+  ) {
+    const flatTaskDiffs = changes.filter(
+      (d) => d && typeof d === 'object' && (d as { kind?: string }).kind === 'create_task_under_initiative',
+    );
+    const convoyDiffs = changes.filter(
+      (d) => d && typeof d === 'object' && (d as { kind?: string }).kind === 'create_convoy_under_initiative',
+    );
+    if (flatTaskDiffs.length > 0) {
+      errors.push(
+        `[MC_PM_CONVOY_MANDATE] Decompose-flow proposals (trigger_kind=${options.trigger_kind}) MUST use create_convoy_under_initiative, not create_task_under_initiative. Got ${flatTaskDiffs.length} flat-task diff(s). See docs/reference/pm-convoy-mandate.md.`,
+      );
+    }
+    if (convoyDiffs.length === 0) {
+      errors.push(
+        `[MC_PM_CONVOY_MANDATE] Decompose-flow proposals (trigger_kind=${options.trigger_kind}) MUST emit at least one create_convoy_under_initiative diff. None found. See docs/reference/pm-convoy-mandate.md.`,
+      );
+    }
+    if (errors.length > 0) {
+      return errors;
+    }
+  }
+
   // Build a placeholder set so create_task_under_initiative diffs can
   // reference initiatives created earlier in the SAME proposal. Both
   // ordinal `$N` (where N is the position of a create_child_initiative)

@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/agents/audit-prompt.ts
@@ -42,9 +42,21 @@ related-specs:
   - research-area.md — research notes also flow through agent_notes and feed audit briefings
   - jobs-in-progress.md — agent_runs spine the InitiativeRunsStrip filters
   - subagent-orchestration.md — convoy substrate explicitly NOT used by this pipeline
+  - pm-convoy-mandate.md — audit follow-ups bypass the convoy mandate (carve-out)
 ---
 
 # Audit Pipeline
+
+> **PM convoy mandate carve-out.** Audit follow-ups bypass the
+> decompose-flow convoy mandate documented in
+> [pm-convoy-mandate.md](pm-convoy-mandate.md). Audit-spawned proposals
+> use `trigger_kind = 'notes_intake'` (via `propose_from_notes`) and
+> emit `create_task_under_initiative` diffs for tactical follow-ups —
+> the mandate's required convoy shape only applies to strategic
+> decomposition (`decompose_story` / `decompose_initiative` /
+> `plan_initiative`). Future readers should not infer the mandate
+> applies universally.
+
 
 Canonical reference for the **initiative-audit** capability in Mission
 Control. Supersedes `subtree-audit-proposals-spec.md`,

@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-14
 audience: ai-subagents-primary, operator-secondary
 code-anchors:
   - src/lib/db/pm-proposals.ts
@@ -14,6 +14,7 @@ mcp-tools: [propose_changes]
 db-tables: [pm_proposals]
 related-specs:
   - roadmap-and-pm-spec.md — original PM design (Phase 5)
+  - pm-convoy-mandate.md — create_convoy_under_initiative diff + decompose-flow mandate
   - pm-revertable-proposals.md — revert pipeline + capture pattern
   - audit-action-recommended.md — audit_verdict bridge (note kind, not diff kind)
   - autonomous-flow-tightening-spec.md — async dispatch overlay
@@ -67,7 +68,17 @@ Each variant is an intersection of a literal-`kind`-tagged shape with
 the `PmDiffCapture` interface ([:58-90](../src/lib/db/pm-proposals.ts))
 so capture fields are uniformly optional across all kinds.
 
-**Current `kind` values (10 total):**
+**Current `kind` values (11 total):**
+
+> **Decompose-flow restriction (PM convoy mandate).** When
+> `MC_PM_CONVOY_MANDATE=1`, proposals with `trigger_kind` ∈
+> {`decompose_story`, `decompose_initiative`, `plan_initiative`} MUST
+> emit at least one `create_convoy_under_initiative` diff and MUST NOT
+> emit `create_task_under_initiative`. The `notes_intake`, `manual`,
+> and audit-follow-up paths are unaffected. See
+> [pm-convoy-mandate.md](pm-convoy-mandate.md) and the enforcement at
+> [src/lib/db/pm-proposals.ts](../../src/lib/db/pm-proposals.ts)
+> (`validateProposedChanges`, mandate block near the top).
 
 | kind | line | mutable target | revert support |
 |---|---|---|---|
@@ -80,6 +91,7 @@ so capture fields are uniformly optional across all kinds.
 | `update_status_check` | [:128-132](../src/lib/db/pm-proposals.ts) | `initiatives.status_check_md` | full |
 | `create_child_initiative` | [:133-151](../src/lib/db/pm-proposals.ts) | `initiatives` (INSERT) | tombstone (status=cancelled) |
 | `create_task_under_initiative` | [:152-164](../src/lib/db/pm-proposals.ts) | `tasks` (INSERT) | tombstone (status=cancelled) |
+| `create_convoy_under_initiative` | [:187-204](../src/lib/db/pm-proposals.ts) | `tasks` (parent) + `convoys` + `convoy_subtasks` (INSERT) — decompose-flow only | **limited** (full revert deferred — see [pm-convoy-mandate.md](pm-convoy-mandate.md)) |
 | `set_task_status` | [:165-188](../src/lib/db/pm-proposals.ts) | `tasks.status` | full (revert proposals only on the forward path) |
 | `confirm_task_done` | [:189-201](../src/lib/db/pm-proposals.ts) | `tasks.status` (via `transitionTaskStatus`) | full |
 
@@ -575,7 +587,8 @@ proposal row may be created with `dispatch_state: 'synth_only'` or
 | `reorder_initiatives` | manual, decompose_initiative | UPDATE initiatives.sort_order | yes (`prev_child_ids_in_order`) | yes | original Phase 5 |
 | `update_status_check` | status_check_investigation, notes_intake | UPDATE initiatives.status_check_md | yes (`prev_status_check_md`) | yes | original Phase 5 |
 | `create_child_initiative` | decompose_initiative | INSERT initiatives | yes (`created_initiative_id`) | tombstone via set_initiative_status='cancelled' | Polish B (migration 047) |
-| `create_task_under_initiative` | notes_intake, decompose_story | INSERT tasks | yes (`created_task_id`) | tombstone via set_task_status='cancelled' | migration 054 / 063 |
+| `create_task_under_initiative` | notes_intake, manual, audit follow-ups, child-initiative stubs (NOT decompose flows when MC_PM_CONVOY_MANDATE=1) | INSERT tasks | yes (`created_task_id`) | tombstone via set_task_status='cancelled' | migration 054 / 063 |
+| `create_convoy_under_initiative` | decompose_story, decompose_initiative, plan_initiative | INSERT tasks (parent) + convoys + convoy_subtasks | yes (`convoy_id`, `parent_task_id`, `subtask_id_map`) | **limited** — full revert deferred (slice 7) | migration 095 / pm-convoy-mandate.md |
 | `set_task_status` | revert only on forward path (`'cancelled'` allowed on forward; arbitrary on revert) | UPDATE tasks.status | yes (`prev_task_status`) | yes | revert pipeline (migration 062) |
 | `confirm_task_done` | notes_intake, disruption_event | UPDATE tasks.status via `transitionTaskStatus` + emit event | yes (`prev_task_status`) | yes (→ set_task_status with prev) | PR #325 |
 
