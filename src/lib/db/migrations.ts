@@ -4882,6 +4882,30 @@ const migrations: Migration[] = [
       console.log('[Migration 094] pm_proposals.dispatch_state CHECK updated to include cancelled.');
     },
   },
+  {
+    id: '095',
+    name: 'pm_convoy_mandate_convoys_acceptance_criteria',
+    up: (db) => {
+      // PM convoy mandate (slice 1/7): adds convoys.acceptance_criteria
+      // as a nullable JSON-encoded string[] column.
+      //
+      // NULL  = coordinator-spawned convoy (back-compat).
+      // Set   = PM-emitted convoy via create_convoy_under_initiative;
+      //         feature-level parent ACs that gate parent review → done.
+      //
+      // No reader consumes this yet — that lands in slice 2 behind
+      // MC_PM_CONVOY_MANDATE. See docs/proposals/pm-convoy-mandate.md.
+      //
+      // Idempotent — re-runs against partially-applied DBs must skip cleanly.
+      const cols = db.prepare(`PRAGMA table_info(convoys)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'acceptance_criteria')) {
+        db.exec(`ALTER TABLE convoys ADD COLUMN acceptance_criteria TEXT`);
+        console.log('[Migration 095] convoys.acceptance_criteria added.');
+      } else {
+        console.log('[Migration 095] convoys.acceptance_criteria already present; skipping.');
+      }
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
