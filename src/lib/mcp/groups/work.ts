@@ -25,6 +25,11 @@ import { saveKnowledge, searchKnowledge } from '@/lib/services/knowledge';
 import { getUnreadMail } from '@/lib/mailbox';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { spawnDelegationSubtask, dispatchReadyConvoySubtasks } from '@/lib/convoy';
+import {
+  validateConvoyDag,
+  resolveDelegationPeer as resolveDelegationPeerShared,
+  type DelegationPeerRow as SharedDelegationPeerRow,
+} from '@/lib/convoy-dag';
 import { internalDispatch } from '@/lib/internal-dispatch';
 import { upsertSession, type ScopeType } from '@/lib/db/mc-sessions';
 import {
@@ -228,82 +233,14 @@ async function cancelSubtaskImpl(args: { agent_id: string; subtask_id: string; r
   });
 }
 
-// Peer-resolution helper shared by spawn_subtask + plan_convoy. Returns
-// either the resolved agent row + addressing axis, or a structured error
-// describing why it couldn't resolve. Mirrors the inline resolver in the
-// spawn_subtask handler exactly — kept terse because plan_convoy needs
-// to aggregate errors across many slices rather than short-circuit on
-// the first one. (spawn_subtask still uses its own inline copy because
-// its error text is hand-tuned for the single-slice case.)
-type DelegationPeerRow = {
-  id: string;
-  name: string;
-  role: string | null;
-  gateway_agent_id: string | null;
-};
-type ResolvePeerOk = {
-  ok: true;
-  peer: DelegationPeerRow;
-  resolvedVia: 'role' | 'peer_agent_id' | 'peer_gateway_id';
-};
-type ResolvePeerErr = {
-  ok: false;
-  code: string;
-  message: string;
-  addressing: Record<string, string>;
-};
-function resolveDelegationPeer(
-  axes: { role?: string; peer_agent_id?: string; peer_gateway_id?: string },
-  parentWs: string,
-): ResolvePeerOk | ResolvePeerErr {
-  const provided = [axes.role, axes.peer_agent_id, axes.peer_gateway_id]
-    .filter((v): v is string => typeof v === 'string' && v.length > 0);
-  if (provided.length === 0) {
-    return { ok: false, code: 'peer_addressing_missing', message: 'Specify exactly one of role / peer_agent_id / peer_gateway_id.', addressing: {} };
-  }
-  if (provided.length > 1) {
-    return { ok: false, code: 'peer_addressing_conflict', message: 'role / peer_agent_id / peer_gateway_id are mutually exclusive.', addressing: {} };
-  }
-  if (axes.role) {
-    const peer = queryOne<DelegationPeerRow>(
-      `SELECT id, name, role, gateway_agent_id FROM agents
-        WHERE role = ?
-          AND COALESCE(workspace_id, 'default') = ?
-          AND COALESCE(status, 'standby') != 'offline'
-          AND COALESCE(is_active, 1) = 1
-        ORDER BY updated_at DESC LIMIT 1`,
-      [axes.role, parentWs],
-    );
-    if (!peer) {
-      return { ok: false, code: 'peer_not_found', message: `No active agent with role "${axes.role}" in workspace ${parentWs}.`, addressing: { role: axes.role } };
-    }
-    return { ok: true, peer, resolvedVia: 'role' };
-  }
-  if (axes.peer_agent_id) {
-    const peer = queryOne<DelegationPeerRow & { workspace_id: string | null }>(
-      `SELECT id, name, role, gateway_agent_id, workspace_id FROM agents WHERE id = ? LIMIT 1`,
-      [axes.peer_agent_id],
-    );
-    if (!peer) {
-      return { ok: false, code: 'peer_not_found', message: `No agent with id "${axes.peer_agent_id}".`, addressing: { peer_agent_id: axes.peer_agent_id } };
-    }
-    const isOrgRunner = peer.gateway_agent_id === 'mc-runner' || peer.gateway_agent_id === 'mc-runner-dev';
-    const peerWs = peer.workspace_id ?? 'default';
-    if (peerWs !== parentWs && !isOrgRunner) {
-      return { ok: false, code: 'peer_not_in_workspace', message: `Peer "${peer.name}" is in workspace ${peerWs}, not ${parentWs}.`, addressing: { peer_agent_id: axes.peer_agent_id } };
-    }
-    return { ok: true, peer: { id: peer.id, name: peer.name, role: peer.role, gateway_agent_id: peer.gateway_agent_id }, resolvedVia: 'peer_agent_id' };
-  }
-  const gwId = axes.peer_gateway_id as string;
-  const isOrgRunner = gwId === 'mc-runner' || gwId === 'mc-runner-dev';
-  const peer = isOrgRunner
-    ? queryOne<DelegationPeerRow>(`SELECT id, name, role, gateway_agent_id FROM agents WHERE gateway_agent_id = ? LIMIT 1`, [gwId])
-    : queryOne<DelegationPeerRow>(`SELECT id, name, role, gateway_agent_id FROM agents WHERE gateway_agent_id = ? AND COALESCE(workspace_id, 'default') = ? LIMIT 1`, [gwId, parentWs]);
-  if (!peer) {
-    return { ok: false, code: 'peer_not_found', message: `No agent with gateway_agent_id "${gwId}" in workspace ${parentWs}.`, addressing: { peer_gateway_id: gwId } };
-  }
-  return { ok: true, peer, resolvedVia: 'peer_gateway_id' };
-}
+// Peer-resolution helper shared by spawn_subtask + plan_convoy. The
+// implementation lives in `@/lib/convoy-dag` so the PM-driven apply
+// pass for `create_convoy_under_initiative` diffs can reuse the same
+// rules (extracted in slice 2 of the PM convoy mandate). Local
+// aliases below preserve the existing call-site names so the handler
+// bodies didn't need to be rewritten.
+type DelegationPeerRow = SharedDelegationPeerRow;
+const resolveDelegationPeer = resolveDelegationPeerShared;
 
 export function registerWorkTools(server: McpServer): void {
   // get_task ──────────────────────────────────────────────────────
@@ -1744,71 +1681,21 @@ export function registerWorkTools(server: McpServer): void {
       }
       const parentWs = parent.workspace_id ?? 'default';
 
-      // ── DAG validation ─────────────────────────────────────────
-      const ids = new Set<string>();
-      for (const s of args.slices) {
-        if (ids.has(s.id)) {
-          return { isError: true, content: [{ type: 'text', text: `Duplicate slice id "${s.id}".` }], structuredContent: { error: 'duplicate_slice_id', id: s.id } };
-        }
-        ids.add(s.id);
-      }
-      for (const s of args.slices) {
-        for (const dep of s.depends_on ?? []) {
-          if (!ids.has(dep)) {
-            return { isError: true, content: [{ type: 'text', text: `Slice "${s.id}" depends on unknown id "${dep}".` }], structuredContent: { error: 'unknown_dep', slice_id: s.id, dep } };
-          }
-          if (dep === s.id) {
-            return { isError: true, content: [{ type: 'text', text: `Slice "${s.id}" depends on itself.` }], structuredContent: { error: 'self_dependency', slice_id: s.id } };
-          }
-        }
-      }
-      // Topological sort via Kahn's algorithm. Surfaces cycles before
-      // any row is written.
-      const inDegree = new Map<string, number>();
-      const outEdges = new Map<string, string[]>();
-      for (const s of args.slices) {
-        inDegree.set(s.id, (s.depends_on ?? []).length);
-        for (const dep of s.depends_on ?? []) {
-          const arr = outEdges.get(dep) ?? [];
-          arr.push(s.id);
-          outEdges.set(dep, arr);
-        }
-      }
-      const ready: string[] = [];
-      for (const [id, deg] of inDegree) if (deg === 0) ready.push(id);
-      const topo: string[] = [];
-      while (ready.length > 0) {
-        const id = ready.shift()!;
-        topo.push(id);
-        for (const next of outEdges.get(id) ?? []) {
-          const d = (inDegree.get(next) ?? 0) - 1;
-          inDegree.set(next, d);
-          if (d === 0) ready.push(next);
-        }
-      }
-      if (topo.length !== args.slices.length) {
-        const stuck = args.slices.filter(s => !topo.includes(s.id)).map(s => s.id);
-        return { isError: true, content: [{ type: 'text', text: `Cycle detected: slices ${stuck.join(', ')} form a dependency loop.` }], structuredContent: { error: 'cycle_detected', stuck } };
-      }
-
-      // ── Peer resolution pre-pass (collect ALL errors before writes) ─
-      const resolved = new Map<string, { peer: DelegationPeerRow; resolvedVia: 'role' | 'peer_agent_id' | 'peer_gateway_id' }>();
-      const peerErrors: Array<{ slice_id: string; code: string; message: string }> = [];
-      for (const s of args.slices) {
-        const r = resolveDelegationPeer(
-          { role: s.role, peer_agent_id: s.peer_agent_id, peer_gateway_id: s.peer_gateway_id },
-          parentWs,
-        );
-        if (!r.ok) peerErrors.push({ slice_id: s.id, code: r.code, message: r.message });
-        else resolved.set(s.id, { peer: r.peer, resolvedVia: r.resolvedVia });
-      }
-      if (peerErrors.length > 0) {
+      // ── DAG validation (shared with the PM convoy-mandate apply pass) ─
+      //    Slice 2 of pm-convoy-mandate: the Kahn topo sort + peer
+      //    resolution moved to `@/lib/convoy-dag`. Same rules, single
+      //    source of truth. The structured `error` codes returned to
+      //    the MCP client are preserved for back-compat — only the
+      //    code path changed.
+      const dag = validateConvoyDag(args.slices, parentWs);
+      if (!dag.ok) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Could not resolve ${peerErrors.length} peer(s):\n${peerErrors.map(e => `- ${e.slice_id}: ${e.message}`).join('\n')}` }],
-          structuredContent: { error: 'peer_resolution_failed', failures: peerErrors },
+          content: [{ type: 'text', text: dag.message }],
+          structuredContent: { error: dag.code, ...dag.details },
         };
       }
+      const { topo, resolved } = dag;
 
       // ── Create rows in topological order so depends_on_subtask_ids
       //    resolves cleanly per slice.
