@@ -113,18 +113,51 @@ function peerLabel(s: ConvoySliceInput): string {
   return '∅';
 }
 
+/**
+ * Workspace's canonical agent roster. Slices' `role` field must match
+ * one of these for peer resolution to succeed at apply time. The PM
+ * agent is instructed (in pm/SOUL.md + decompose-story prompt) to pick
+ * from this list; the inline editor below offers it as a dropdown so
+ * the operator can fix ad-hoc inventions without going through Refine.
+ */
+const CANONICAL_ROLES = [
+  'builder',
+  'tester',
+  'reviewer',
+  'coordinator',
+  'researcher',
+  'auditor',
+  'runner',
+] as const;
+
 function SliceRow({
   slice,
   index,
   defaultExpanded,
+  onEdit,
 }: {
   slice: ConvoySliceInput;
   index: number;
   defaultExpanded: boolean;
+  /** When provided, the role pill becomes an inline dropdown editor. */
+  onEdit?: (sliceId: string, patch: Partial<ConvoySliceInput>) => void;
 }) {
   const [expanded, setExpanded] = React.useState(defaultExpanded);
   const deps = slice.depends_on ?? [];
   const evidenceGates = slice.required_evidence_gates ?? [];
+  // If the slice's current role is non-canonical (e.g. agent emitted
+  // "frontend"), surface it in the dropdown alongside the canonical
+  // roles so the operator can see what was inferred and pick a
+  // resolvable value.
+  const currentRole = slice.role ?? '';
+  const roleOptions = React.useMemo(() => {
+    const base = [...CANONICAL_ROLES];
+    if (currentRole && !base.includes(currentRole as typeof CANONICAL_ROLES[number])) {
+      return [currentRole, ...base];
+    }
+    return base;
+  }, [currentRole]);
+  const isCanonical = (CANONICAL_ROLES as readonly string[]).includes(currentRole);
   return (
     <li className="rounded border border-mc-border bg-mc-bg p-3 space-y-1.5">
       <div className="flex items-center gap-2 flex-wrap">
@@ -134,9 +167,33 @@ function SliceRow({
         <span className="font-mono text-xs text-mc-text shrink-0" title="Slice symbolic id">
           {slice.id}
         </span>
-        <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-sm border border-violet-500/30 bg-violet-500/15 text-violet-200 shrink-0">
-          {peerLabel(slice)}
-        </span>
+        {onEdit ? (
+          <select
+            value={currentRole}
+            onChange={(e) => onEdit(slice.id, { role: e.target.value })}
+            title={
+              isCanonical
+                ? 'Reassign to a different canonical role'
+                : `"${currentRole}" is not in the workspace roster — pick a canonical role so the convoy can dispatch.`
+            }
+            className={
+              'text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-sm border shrink-0 cursor-pointer bg-mc-bg ' +
+              (isCanonical
+                ? 'border-violet-500/30 bg-violet-500/15 text-violet-200 hover:border-violet-500/60'
+                : 'border-red-500/40 bg-red-500/15 text-red-200 hover:border-red-500/60')
+            }
+          >
+            {roleOptions.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded-sm border border-violet-500/30 bg-violet-500/15 text-violet-200 shrink-0">
+            {peerLabel(slice)}
+          </span>
+        )}
         <span className="text-[11px] text-mc-text-secondary shrink-0">
           ~{slice.expected_duration_minutes}min
         </span>
@@ -239,10 +296,25 @@ export interface ConvoyDiffPreviewProps {
    * operator clicks "More" per row (modal mode).
    */
   expanded?: boolean;
+  /**
+   * When provided, the role pill on each slice becomes an inline
+   * dropdown editor. The callback receives the slice id and a partial
+   * patch — currently only `{ role }` — for the parent modal to apply
+   * to its local diff state. The modal's existing PUT /diffs flow on
+   * accept persists the change.
+   *
+   * Pass `undefined` to keep the preview read-only (detail page).
+   */
+  onSliceEdit?: (sliceId: string, patch: Partial<ConvoySliceInput>) => void;
   className?: string;
 }
 
-export function ConvoyDiffPreview({ diff, expanded = false, className }: ConvoyDiffPreviewProps) {
+export function ConvoyDiffPreview({
+  diff,
+  expanded = false,
+  onSliceEdit,
+  className,
+}: ConvoyDiffPreviewProps) {
   const ordered = React.useMemo(() => topoOrderSlices(diff.slices), [diff.slices]);
   return (
     <div className={className ?? 'space-y-4'}>
@@ -271,6 +343,7 @@ export function ConvoyDiffPreview({ diff, expanded = false, className }: ConvoyD
               slice={slice}
               index={i}
               defaultExpanded={expanded}
+              onEdit={onSliceEdit}
             />
           ))}
         </ul>
