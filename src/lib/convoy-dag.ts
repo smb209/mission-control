@@ -10,7 +10,7 @@
  * See docs/reference/pm-convoy-mandate.md "Apply pass" for the contract.
  */
 
-import { queryOne } from '@/lib/db';
+import { queryOne, queryAll } from '@/lib/db';
 
 // ─── Public types ──────────────────────────────────────────────────
 
@@ -125,10 +125,25 @@ export function resolveDelegationPeer(
       [axes.role, parentWs],
     );
     if (!peer) {
+      // Help the operator (and the PM agent reading the error) recover:
+      // list the roles that DO exist in this workspace so the next refine
+      // can pick a valid one instead of inventing more synonyms.
+      const available = queryAll<{ role: string }>(
+        `SELECT DISTINCT role FROM agents
+          WHERE COALESCE(workspace_id, 'default') = ?
+            AND COALESCE(status, 'standby') != 'offline'
+            AND COALESCE(is_active, 1) = 1
+          ORDER BY role`,
+        [parentWs],
+      ).map((r) => r.role);
+      const hint =
+        available.length > 0
+          ? ` Available roles in this workspace: ${available.join(', ')}.`
+          : '';
       return {
         ok: false,
         code: 'peer_not_found',
-        message: `No active agent with role "${axes.role}" in workspace ${parentWs}.`,
+        message: `No active agent with role "${axes.role}" in workspace ${parentWs}.${hint}`,
         addressing: { role: axes.role },
       };
     }

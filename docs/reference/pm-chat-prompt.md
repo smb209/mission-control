@@ -183,6 +183,10 @@ Each `create_convoy_under_initiative` diff must include `parent_acceptance_crite
 - Good: "Operator clicks Cancel on any in-flight proposal card → card disappears and a late agent reply doesn't resurrect it."
 - Bad: "POST /api/pm/proposals/[id]/cancel returns 200 on valid input." (That's a slice-level contract AC.)
 
+### Per-slice `role` (canonical roster)
+
+Each slice's `role` field must be one of the workspace's known agent roles. The standard roster is `builder` / `tester` / `reviewer` / `coordinator` / `researcher` / `auditor` / `runner`. Ad-hoc roles (`frontend`, `backend`, `qa`, `infra`, `devops`, `designer`, etc.) fail peer resolution at apply time with `peer_not_found` and reject the entire diff. Multi-discipline work goes to `builder`; verification goes to `tester`. If you're tempted to split into `frontend` + `backend`, fuse into one `builder` slice instead.
+
 ## Out of scope
 
 - Changing how `propose_changes` itself works.

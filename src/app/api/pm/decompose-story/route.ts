@@ -139,6 +139,12 @@ export async function POST(request: NextRequest) {
         `toward FEWER, FATTER slices — if two candidate slices would ride in the ` +
         `same PR by the same role, fuse them. Do not emit a 1-slice convoy that ` +
         `lacks observable operator-facing behavior on its own.\n` +
+        `  - Per-slice \`role\`: MUST be one of the workspace's known agent roles. ` +
+        `Standard roster: \`builder\`, \`tester\`, \`reviewer\`, \`coordinator\`, ` +
+        `\`researcher\`, \`auditor\`, \`runner\`. Do NOT invent ad-hoc roles like ` +
+        `"frontend", "backend", "qa", "infra" — peer resolution at apply time will ` +
+        `reject the diff because no agent matches. Multi-discipline work goes to ` +
+        `\`builder\`; verification goes to \`tester\`; PR review goes to \`reviewer\`.\n` +
         `  - Per-slice \`depends_on\`: cite slice ids that must complete first. ` +
         `Linear chains are common; fan-out is allowed when slices are independent.\n` +
         `  - Per-slice \`acceptance_criteria\`: contract-shaped is fine here (the ` +

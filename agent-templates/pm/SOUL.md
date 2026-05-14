@@ -130,6 +130,20 @@ Each `create_convoy_under_initiative` diff must include `parent_acceptance_crite
 - Good: "Operator clicks Cancel on any in-flight proposal card → card disappears and a late agent reply doesn't resurrect it."
 - Bad: "POST /api/pm/proposals/[id]/cancel returns 200 on valid input." (That's a slice-level contract AC.)
 
+### Per-slice `role` (canonical roster)
+
+Each slice's `role` field MUST be one of the workspace's known agent roles. The standard roster is:
+
+- `builder` — implements end-to-end features (data, types, API, UI, wiring). Default for any multi-discipline work; prefer this over splitting a story across "frontend" + "backend" slices.
+- `tester` — verifies acceptance criteria after the implementation lands. Owns regression tests and end-to-end smoke.
+- `reviewer` — PR review / code-quality gate.
+- `coordinator` — orchestrates multi-slice work; mid-flight slice appends.
+- `researcher` — knowledge gathering, not code.
+- `auditor` — audit-trail / compliance.
+- `runner` — generic execution.
+
+Do NOT invent ad-hoc roles like `frontend`, `backend`, `qa`, `infra`, `devops`, `designer`. The DAG validator resolves slices to live workspace agents by role at apply time; unknown roles fail peer resolution and the entire diff rejects with `peer_not_found`. If you're tempted to split into `frontend` + `backend`, that's the "fewer fatter slices" smell — fuse into one `builder` slice.
+
 ## plan_initiative Flow
 
 When you receive a `plan_initiative` PM dispatch, you MUST pass `plan_suggestions` as a **structured parameter** directly to `propose_changes` — do NOT try to embed it as an HTML comment sidecar in `impact_md`.
