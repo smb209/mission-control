@@ -107,7 +107,10 @@ export async function POST(request: NextRequest) {
       trigger_text: triggerText,
       trigger_kind: 'decompose_story',
       target_initiative_id: parent.id,
-      timeoutMs: 120_000,
+      // No timeoutMs — inherits the env-tunable default in
+      // pm-dispatch.ts (MC_PM_NAMED_AGENT_TIMEOUT_MS, currently 10min).
+      // Operators preferred a longer wait over seeing the low-info
+      // synth placeholder while the LLM is still producing.
       synth: { impact_md: synth.impact_md, changes: synth.changes },
       chat_context: {
         target_initiative_id: parent.id,

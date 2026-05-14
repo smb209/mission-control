@@ -137,9 +137,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         trigger_text: child.trigger_text,
         trigger_kind: 'plan_initiative',
         planSessionKey,
-        // Match the initial plan dispatch's longer wait — refines hit the
-        // same large-prompt cold-session profile.
-        timeoutMs: 120_000,
+        // No timeoutMs — inherits the env-tunable default in
+        // pm-dispatch.ts (MC_PM_NAMED_AGENT_TIMEOUT_MS, currently 10min).
         synth: { impact_md: synth.impact_md, changes: synth.changes },
         chat_context: {
           target_initiative_id: parent.target_initiative_id ?? null,
@@ -251,7 +250,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         trigger_text: child.trigger_text,
         trigger_kind: 'decompose_story',
         target_initiative_id: story.id,
-        timeoutMs: 120_000,
+        // No timeoutMs — inherits the env-tunable default in
+        // pm-dispatch.ts (MC_PM_NAMED_AGENT_TIMEOUT_MS, currently 10min).
         synth: { impact_md: synth.impact_md, changes: synth.changes },
         chat_context: {
           target_initiative_id: story.id,
