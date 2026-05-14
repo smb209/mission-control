@@ -298,6 +298,48 @@ export const DiffSchema = z.discriminatedUnion('kind', [
     priority: z.enum(['low', 'normal', 'high']).optional(),
   }),
   z.object({
+    // PM convoy mandate (slice 1/7): decompose-flow proposals emit a
+    // single create_convoy_under_initiative diff carrying the slice DAG
+    // rather than a flat list of create_task_under_initiative diffs.
+    // Schema only here — apply-pass, trigger_kind gating, and UX land in
+    // later slices behind MC_PM_CONVOY_MANDATE. See
+    // docs/proposals/pm-convoy-mandate.md.
+    kind: z.literal('create_convoy_under_initiative'),
+    initiative_id: z.string().min(1),
+    // Symbolic-ref placeholders ($0..$N) for create_child_initiative in
+    // the same proposal still resolve here, mirroring the current pattern.
+
+    // Parent-level acceptance criteria the convoy must satisfy before the
+    // parent task can transition from `review` to `done`. These are
+    // operator-facing, feature-level — NOT the per-slice contract criteria.
+    // Example: "Operator clicks Cancel on any InFlightProposalCard surface
+    // → card disappears + late agent reply doesn't resurrect."
+    parent_acceptance_criteria: z.array(z.string().min(10).max(500)).min(1),
+
+    // The DAG. Mirrors plan_convoy's slice schema (same fields the
+    // coordinator-driven path uses today) so a single apply-pass helper
+    // serves both entry points.
+    slices: z.array(z.object({
+      id: z.string().min(1).max(40).regex(/^[a-zA-Z0-9_-]+$/),
+      role: z.string().min(1).optional(),
+      peer_agent_id: z.string().min(1).optional(),
+      peer_gateway_id: z.string().min(1).optional(),
+      slice: z.string().min(10).max(500),
+      message: z.string().min(1).max(10000),
+      expected_deliverables: z.array(z.object({
+        title: z.string().min(1).max(200),
+        kind: z.enum(['file', 'note', 'report']),
+      })).min(1),
+      acceptance_criteria: z.array(z.string().min(10).max(500)).min(1),
+      expected_duration_minutes: z.number().int().min(5).max(240),
+      checkin_interval_minutes: z.number().int().min(5).max(60).optional(),
+      depends_on: z.array(z.string().min(1).max(40)).optional(),
+      // Per-slice evidence gate override; default ['test_full'] for tester
+      // slices, none for others. Inherits today's convoy_subtasks behavior.
+      required_evidence_gates: z.array(z.string()).optional(),
+    })).min(1).max(12),
+  }),
+  z.object({
     // PM may close out a task that's already in a late workflow state
     // when concrete evidence (audit proposal, commit, PR) confirms it
     // shipped. The apply pass routes through `transitionTaskStatus` so
