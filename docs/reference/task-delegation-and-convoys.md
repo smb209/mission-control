@@ -114,9 +114,10 @@ machinery:
    available for follow-up work discovered mid-flight (e.g. a builder
    reports a missing slice).
 
-The PM mandate is gated by `MC_PM_CONVOY_MANDATE`. When the flag is on,
-the schema rejects `create_task_under_initiative` from decompose-flow
-proposals.
+The PM mandate is unconditional — the schema rejects
+`create_task_under_initiative` from decompose-flow proposals at intake.
+The original `MC_PM_CONVOY_MANDATE` env flag was removed after the
+mandate stabilized.
 
 ---
 

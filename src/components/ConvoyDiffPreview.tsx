@@ -6,7 +6,7 @@
  * DecomposeStoryToTasksModal, PlanWithPmPanel) and the proposal detail
  * page so the operator-approves-the-DAG UX is consistent everywhere.
  *
- * V1 rendering per docs/proposals/pm-convoy-mandate.md "UX surface":
+ * V1 rendering per docs/reference/pm-convoy-mandate.md "UX surface":
  *
  *   Parent acceptance criteria
  *     · <AC 1>

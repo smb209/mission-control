@@ -298,12 +298,12 @@ export const DiffSchema = z.discriminatedUnion('kind', [
     priority: z.enum(['low', 'normal', 'high']).optional(),
   }),
   z.object({
-    // PM convoy mandate (slice 1/7): decompose-flow proposals emit a
-    // single create_convoy_under_initiative diff carrying the slice DAG
-    // rather than a flat list of create_task_under_initiative diffs.
-    // Schema only here — apply-pass, trigger_kind gating, and UX land in
-    // later slices behind MC_PM_CONVOY_MANDATE. See
-    // docs/proposals/pm-convoy-mandate.md.
+    // PM convoy mandate: decompose-flow proposals emit a single
+    // create_convoy_under_initiative diff carrying the slice DAG rather
+    // than a flat list of create_task_under_initiative diffs. Schema
+    // here; trigger_kind gating lives in validateProposedChanges
+    // (src/lib/db/pm-proposals.ts). See
+    // docs/reference/pm-convoy-mandate.md.
     kind: z.literal('create_convoy_under_initiative'),
     initiative_id: z.string().min(1),
     // Symbolic-ref placeholders ($0..$N) for create_child_initiative in

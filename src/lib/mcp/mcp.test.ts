@@ -511,6 +511,10 @@ test('request_knowledge scores title/tag/content hits and filters unrelated entr
 // ─── propose_changes (PM) ───────────────────────────────────────────
 
 test('propose_changes accepts decompose_initiative trigger + create_child_initiative diffs', async () => {
+  // PM convoy mandate (docs/reference/pm-convoy-mandate.md): decompose-flow
+  // proposals MUST NOT include `create_task_under_initiative` diffs (must
+  // use convoys instead). Purely structural decompositions —
+  // `create_child_initiative` only — are unaffected.
   const { client } = await makePair();
   const ws = `ws-${crypto.randomUUID().slice(0, 8)}`;
   run(

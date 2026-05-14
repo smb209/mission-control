@@ -1,9 +1,12 @@
 /**
- * PM convoy mandate (slice 6/7) — schema-level rejection of
- * `create_task_under_initiative` in decompose-flow proposals when
- * `MC_PM_CONVOY_MANDATE=1`.
+ * PM convoy mandate — schema-level rejection of
+ * `create_task_under_initiative` in decompose-flow proposals.
  *
- * Asserts only the trigger_kind ↔ allowed-diff-kinds matrix from
+ * The mandate is unconditional as of 2026-05-14 (the
+ * `MC_PM_CONVOY_MANDATE` feature flag was removed once slices 1–7
+ * shipped and verified end-to-end).
+ *
+ * Asserts the trigger_kind ↔ allowed-diff-kinds matrix from
  * docs/reference/pm-convoy-mandate.md (the "Carve-outs" table). DAG
  * structural validity is covered by diff-schema.test.ts.
  */
@@ -26,18 +29,6 @@ function freshWorkspace(): string {
     [id, id, id],
   );
   return id;
-}
-
-function withMandate<T>(on: boolean, fn: () => T): T {
-  const prev = process.env.MC_PM_CONVOY_MANDATE;
-  if (on) process.env.MC_PM_CONVOY_MANDATE = '1';
-  else delete process.env.MC_PM_CONVOY_MANDATE;
-  try {
-    return fn();
-  } finally {
-    if (prev === undefined) delete process.env.MC_PM_CONVOY_MANDATE;
-    else process.env.MC_PM_CONVOY_MANDATE = prev;
-  }
 }
 
 function makeFlatTaskDiff(initiativeId: string): PmDiff {
@@ -69,134 +60,132 @@ function makeConvoyDiff(initiativeId: string): PmDiff {
   } as PmDiff;
 }
 
-// ─── mandate OFF: back-compat baseline ─────────────────────────────
+// ─── decompose flows: flat-task diffs rejected ─────────────────────
 
-test('mandate OFF: flat-task diff under decompose_story is allowed', () => {
+test('flat-task diff under decompose_story is REJECTED', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Cancel feature' });
-  const errors = withMandate(false, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'decompose_story',
-    }),
-  );
-  assert.deepEqual(errors, [], 'back-compat: mandate OFF must permit flat-task decompose output');
-});
-
-// ─── mandate ON: decompose flows rejected ──────────────────────────
-
-test('mandate ON: flat-task diff under decompose_story is REJECTED', () => {
-  const ws = freshWorkspace();
-  const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Cancel feature' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'decompose_story',
-    }),
-  );
+  const errors = validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
+    trigger_kind: 'decompose_story',
+  });
   assert.ok(errors.length > 0, 'expected at least one error');
   assert.ok(
-    errors.some((e) => e.includes('MC_PM_CONVOY_MANDATE') && e.includes('create_task_under_initiative')),
+    errors.some((e) => e.includes('pm-convoy-mandate') && e.includes('create_task_under_initiative')),
     `expected mandate violation, got: ${errors.join(' | ')}`,
   );
 });
 
-test('mandate ON: flat-task diff under decompose_initiative is REJECTED', () => {
+test('flat-task diff under decompose_initiative is REJECTED', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'decompose_initiative',
-    }),
-  );
-  assert.ok(errors.some((e) => e.includes('MC_PM_CONVOY_MANDATE')));
+  const errors = validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
+    trigger_kind: 'decompose_initiative',
+  });
+  assert.ok(errors.some((e) => e.includes('pm-convoy-mandate')));
 });
 
-test('mandate ON: flat-task diff under plan_initiative is REJECTED', () => {
+test('flat-task diff under plan_initiative is REJECTED', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'plan_initiative',
-    }),
-  );
-  assert.ok(errors.some((e) => e.includes('MC_PM_CONVOY_MANDATE')));
+  const errors = validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
+    trigger_kind: 'plan_initiative',
+  });
+  assert.ok(errors.some((e) => e.includes('pm-convoy-mandate')));
 });
 
-// ─── mandate ON: carve-outs preserved ──────────────────────────────
+// ─── carve-outs preserved ──────────────────────────────────────────
 
-test('mandate ON: flat-task diff under notes_intake is ALLOWED (carve-out)', () => {
+test('flat-task diff under notes_intake is ALLOWED (carve-out)', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'notes_intake',
-    }),
-  );
+  const errors = validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
+    trigger_kind: 'notes_intake',
+  });
   assert.deepEqual(errors, []);
 });
 
-test('mandate ON: flat-task diff under manual is ALLOWED (carve-out)', () => {
+test('flat-task diff under manual is ALLOWED (carve-out)', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
-      trigger_kind: 'manual',
-    }),
-  );
+  const errors = validateProposedChanges(ws, [makeFlatTaskDiff(init.id)], {
+    trigger_kind: 'manual',
+  });
   assert.deepEqual(errors, []);
 });
 
-// ─── mandate ON: convoy diffs accepted ─────────────────────────────
+// ─── convoy diffs accepted ─────────────────────────────────────────
 
-test('mandate ON: decompose_story with only convoy diffs is ALLOWED', () => {
+test('decompose_story with only convoy diffs is ALLOWED', () => {
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Cancel feature' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(ws, [makeConvoyDiff(init.id)], {
-      trigger_kind: 'decompose_story',
-    }),
-  );
+  const errors = validateProposedChanges(ws, [makeConvoyDiff(init.id)], {
+    trigger_kind: 'decompose_story',
+  });
   assert.deepEqual(errors, [], `expected no errors, got: ${errors.join(' | ')}`);
 });
 
-test('mandate ON: decompose_story with convoy + child-initiative is ALLOWED', () => {
+test('decompose_story with convoy + child-initiative is ALLOWED', () => {
   const ws = freshWorkspace();
   const parent = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Parent' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(
-      ws,
-      [
-        {
-          kind: 'create_child_initiative',
-          parent_initiative_id: parent.id,
-          title: 'Child story',
-          child_kind: 'story',
-        } as PmDiff,
-        makeConvoyDiff('$0'),
-      ],
-      { trigger_kind: 'decompose_story' },
-    ),
+  const errors = validateProposedChanges(
+    ws,
+    [
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'Child story',
+        child_kind: 'story',
+      } as PmDiff,
+      makeConvoyDiff('$0'),
+    ],
+    { trigger_kind: 'decompose_story' },
   );
   assert.deepEqual(errors, [], `expected no errors, got: ${errors.join(' | ')}`);
 });
 
-test('mandate ON: decompose_story with ZERO convoy diffs is REJECTED', () => {
+test('decompose_story with ZERO task-creating diffs is ALLOWED (no task → no convoy required)', () => {
+  // Purely structural decompositions (status-only, child-initiative-only)
+  // bypass the convoy requirement. The mandate only fires when a flat
+  // create_task_under_initiative diff is present.
   const ws = freshWorkspace();
   const init = createInitiative({ workspace_id: ws, kind: 'epic', title: 'X' });
-  const errors = withMandate(true, () =>
-    validateProposedChanges(
-      ws,
-      [
-        {
-          kind: 'set_initiative_status',
-          initiative_id: init.id,
-          status: 'at_risk',
-        } as PmDiff,
-      ],
-      { trigger_kind: 'decompose_story' },
-    ),
+  const errors = validateProposedChanges(
+    ws,
+    [
+      {
+        kind: 'set_initiative_status',
+        initiative_id: init.id,
+        status: 'at_risk',
+      } as PmDiff,
+    ],
+    { trigger_kind: 'decompose_story' },
   );
-  assert.ok(
-    errors.some((e) => e.includes('MC_PM_CONVOY_MANDATE') && e.includes('at least one')),
-    `expected missing-convoy error, got: ${errors.join(' | ')}`,
+  assert.deepEqual(errors, [], `expected no errors for non-task-creating decompose, got: ${errors.join(' | ')}`);
+});
+
+test('decompose_initiative with only create_child_initiative diffs is ALLOWED (initiative-tree decomposition)', () => {
+  // Mirrors the synthesizeDecompose fallback path: PM (or synth) emits
+  // child-initiative stubs to structure the roadmap. No tasks → no convoy
+  // required. The mandate is about task-level work granularity.
+  const ws = freshWorkspace();
+  const parent = createInitiative({ workspace_id: ws, kind: 'epic', title: 'Parent epic' });
+  const errors = validateProposedChanges(
+    ws,
+    [
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'Foundation',
+        child_kind: 'story',
+      } as PmDiff,
+      {
+        kind: 'create_child_initiative',
+        parent_initiative_id: parent.id,
+        title: 'Build on top',
+        child_kind: 'story',
+      } as PmDiff,
+    ],
+    { trigger_kind: 'decompose_initiative' },
   );
+  assert.deepEqual(errors, [], `expected no errors for child-initiative-only decompose, got: ${errors.join(' | ')}`);
 });

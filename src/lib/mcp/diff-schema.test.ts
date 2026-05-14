@@ -62,7 +62,7 @@ test('DiffSchema: set_initiative_status REJECTS unknown status', () => {
 // -----------------------------------------------------------------------------
 // PM convoy mandate (slice 1/7): create_convoy_under_initiative shape checks.
 // Schema-only. DAG cycle / unknown-ref validation lives at apply time and is
-// out of scope here. See docs/proposals/pm-convoy-mandate.md.
+// out of scope here. See docs/reference/pm-convoy-mandate.md.
 // -----------------------------------------------------------------------------
 
 function makeSlice(overrides: Record<string, unknown> = {}): Record<string, unknown> {

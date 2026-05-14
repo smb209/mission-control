@@ -181,9 +181,10 @@ export type PmDiff =
       //   4. INSERT convoys + convoy_subtasks via spawnDelegationSubtask,
       //   5. fire-and-forget dispatchReadyConvoySubtasks for roots.
       // No flag gates the apply itself — the diff materializes wherever
-      // it appears. Flag MC_PM_CONVOY_MANDATE gates the schema-level
-      // REJECTION of create_task_under_initiative in decompose flows
-      // (slice 6).
+      // it appears. validateProposedChanges (below) rejects
+      // create_task_under_initiative in decompose-flow proposals
+      // unconditionally; the original MC_PM_CONVOY_MANDATE env flag was
+      // removed after the mandate stabilized.
       kind: 'create_convoy_under_initiative';
       initiative_id: string;
       parent_acceptance_criteria: string[];
@@ -337,40 +338,36 @@ export function validateProposedChanges(
     return ['proposed_changes must be an array'];
   }
 
-  // PM convoy mandate (slice 6/7): when MC_PM_CONVOY_MANDATE=1, decompose-flow
-  // proposals (decompose_story / decompose_initiative / plan_initiative) MUST
-  // emit at least one create_convoy_under_initiative diff and MUST NOT emit
-  // any create_task_under_initiative diffs. Carve-outs for notes_intake,
-  // manual, and other tactical kinds are preserved (the mandate only applies
-  // to strategic decomposition output). See docs/reference/pm-convoy-mandate.md.
-  const mandateOn = process.env.MC_PM_CONVOY_MANDATE === '1';
+  // PM convoy mandate (unconditional as of 2026-05-14): decompose-flow
+  // proposals (decompose_story / decompose_initiative / plan_initiative)
+  // MUST NOT emit `create_task_under_initiative` diffs — if work is being
+  // created in a decompose flow, it goes through
+  // `create_convoy_under_initiative` so dep + AC gates apply.
+  //
+  // Purely structural decompositions (only `create_child_initiative` /
+  // status diffs / etc., no task creation) bypass the convoy requirement —
+  // synth fallbacks and initiative-tree decompositions don't need convoys
+  // when they aren't creating tasks. The rejection only fires when
+  // `create_task_under_initiative` is present in a decompose flow.
+  //
+  // Carve-outs for notes_intake, manual, and other tactical trigger_kinds
+  // are preserved at this layer too. See docs/reference/pm-convoy-mandate.md.
+  //
+  // The previous MC_PM_CONVOY_MANDATE feature flag was removed once the
+  // mandate stabilized — slices 1–7 shipped and verified end-to-end.
   const decomposeFlowKinds = new Set<PmProposalTriggerKind>([
     'decompose_story',
     'decompose_initiative',
     'plan_initiative',
   ]);
-  if (
-    mandateOn &&
-    options.trigger_kind &&
-    decomposeFlowKinds.has(options.trigger_kind)
-  ) {
+  if (options.trigger_kind && decomposeFlowKinds.has(options.trigger_kind)) {
     const flatTaskDiffs = changes.filter(
       (d) => d && typeof d === 'object' && (d as { kind?: string }).kind === 'create_task_under_initiative',
     );
-    const convoyDiffs = changes.filter(
-      (d) => d && typeof d === 'object' && (d as { kind?: string }).kind === 'create_convoy_under_initiative',
-    );
     if (flatTaskDiffs.length > 0) {
       errors.push(
-        `[MC_PM_CONVOY_MANDATE] Decompose-flow proposals (trigger_kind=${options.trigger_kind}) MUST use create_convoy_under_initiative, not create_task_under_initiative. Got ${flatTaskDiffs.length} flat-task diff(s). See docs/reference/pm-convoy-mandate.md.`,
+        `[pm-convoy-mandate] Decompose-flow proposals (trigger_kind=${options.trigger_kind}) MUST use create_convoy_under_initiative, not create_task_under_initiative. Got ${flatTaskDiffs.length} flat-task diff(s). See docs/reference/pm-convoy-mandate.md.`,
       );
-    }
-    if (convoyDiffs.length === 0) {
-      errors.push(
-        `[MC_PM_CONVOY_MANDATE] Decompose-flow proposals (trigger_kind=${options.trigger_kind}) MUST emit at least one create_convoy_under_initiative diff. None found. See docs/reference/pm-convoy-mandate.md.`,
-      );
-    }
-    if (errors.length > 0) {
       return errors;
     }
   }

@@ -164,9 +164,9 @@ Decision needed from operator before any further work here.
 
 ## Decomposition output contract
 
-(Available once `MC_PM_CONVOY_MANDATE=1` is enabled. Mirrors `agent-templates/pm/SOUL.md`; keep in lockstep. Full spec at [docs/proposals/pm-convoy-mandate.md](../proposals/pm-convoy-mandate.md).)
+(Unconditional as of 2026-05-14. Mirrors `agent-templates/pm/SOUL.md`; keep in lockstep. Full spec at [pm-convoy-mandate.md](pm-convoy-mandate.md).)
 
-**When the PM decomposes a story or initiative** (`trigger_kind ∈ {decompose_story, decompose_initiative, plan_initiative}`), it emits a single `create_convoy_under_initiative` diff carrying the full slice DAG. The PM does NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups. The schema rejects `create_task_under_initiative` from a decompose-flow proposal once the flag ships.
+**When the PM decomposes a story or initiative** (`trigger_kind ∈ {decompose_story, decompose_initiative, plan_initiative}`), it emits a single `create_convoy_under_initiative` diff carrying the full slice DAG. The PM does NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups. The schema rejects `create_task_under_initiative` from a decompose-flow proposal at intake time.
 
 ### DAG smell checklist
 

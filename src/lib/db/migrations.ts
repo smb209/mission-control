@@ -4893,8 +4893,9 @@ const migrations: Migration[] = [
       // Set   = PM-emitted convoy via create_convoy_under_initiative;
       //         feature-level parent ACs that gate parent review → done.
       //
-      // No reader consumes this yet — that lands in slice 2 behind
-      // MC_PM_CONVOY_MANDATE. See docs/proposals/pm-convoy-mandate.md.
+      // Consumed by the create_convoy_under_initiative apply-pass
+      // (slice 2) and the parent review→done AC gate (slice 5). See
+      // docs/reference/pm-convoy-mandate.md.
       //
       // Idempotent — re-runs against partially-applied DBs must skip cleanly.
       const cols = db.prepare(`PRAGMA table_info(convoys)`).all() as Array<{ name: string }>;
@@ -4920,7 +4921,7 @@ const migrations: Migration[] = [
       // bypass paths that record an ack instead of skipping the table).
       //
       // Idempotent (IF NOT EXISTS) so re-runs against partially-applied
-      // DBs skip cleanly. See docs/proposals/pm-convoy-mandate.md.
+      // DBs skip cleanly. See docs/reference/pm-convoy-mandate.md.
       db.exec(`
         CREATE TABLE IF NOT EXISTS task_ac_acknowledgements (
           id INTEGER PRIMARY KEY AUTOINCREMENT,

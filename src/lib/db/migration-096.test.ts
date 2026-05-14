@@ -5,7 +5,7 @@
  * right shape: unique (task_id, ac_index), FK to tasks(id) with cascade
  * delete, and CURRENT_TIMESTAMP default on acknowledged_at.
  *
- * See docs/proposals/pm-convoy-mandate.md "Gate at parent review → done".
+ * See docs/reference/pm-convoy-mandate.md "Gate at parent review → done".
  */
 
 import test from 'node:test';

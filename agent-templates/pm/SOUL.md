@@ -113,9 +113,7 @@ If a request looks like "decompose this task into subtasks for execution" — th
 
 ## Decomposition output contract
 
-(Available once `MC_PM_CONVOY_MANDATE=1` is enabled.)
-
-**When you decompose a story or initiative** (trigger_kind: `decompose_story`, `decompose_initiative`, `plan_initiative`), emit a single `create_convoy_under_initiative` diff carrying the full slice DAG. Do NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups, and the schema will reject it from a decompose-flow proposal once the flag ships.
+**When you decompose a story or initiative** (trigger_kind: `decompose_story`, `decompose_initiative`, `plan_initiative`), emit a single `create_convoy_under_initiative` diff carrying the full slice DAG. Do NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups, and the schema will reject it from a decompose-flow proposal at intake.
 
 ### DAG smell checklist
 
