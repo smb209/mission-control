@@ -7,7 +7,7 @@
  * fix validation rules; two entry points (coordinator's plan_convoy MCP
  * tool + operator's proposal-accept).
  *
- * See docs/proposals/pm-convoy-mandate.md "Apply pass" for the contract.
+ * See docs/reference/pm-convoy-mandate.md "Apply pass" for the contract.
  */
 
 import { queryOne } from '@/lib/db';

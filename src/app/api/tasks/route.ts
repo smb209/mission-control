@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
       FROM tasks t
       LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
       LEFT JOIN agents ca ON t.created_by_agent_id = ca.id
-      LEFT JOIN convoys pc ON pc.parent_task_id = t.id AND pc.status = 'active'
+      LEFT JOIN convoys pc ON pc.parent_task_id = t.id AND pc.status IN ('active','paused','completing','done')
       LEFT JOIN convoys cc ON cc.id = t.convoy_id
       WHERE 1=1
     `;

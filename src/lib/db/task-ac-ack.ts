@@ -16,7 +16,7 @@
  * (back-compat) convoy with no ACs — `getParentConvoyAcs` returns null
  * and the gate is a no-op. Same for tasks with no convoy at all.
  *
- * See docs/proposals/pm-convoy-mandate.md "Gate at parent review → done".
+ * See docs/reference/pm-convoy-mandate.md "Gate at parent review → done".
  */
 
 import { queryOne, queryAll, run } from '@/lib/db';

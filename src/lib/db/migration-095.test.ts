@@ -3,8 +3,9 @@
  *
  * Schema-only check: after the shared test DB applies all migrations on
  * boot, the `convoys` table must expose an `acceptance_criteria` column.
- * No reader consumes the column yet — that lands in slice 2 behind
- * MC_PM_CONVOY_MANDATE. See docs/proposals/pm-convoy-mandate.md.
+ * Populated by the create_convoy_under_initiative apply-pass (slice 2);
+ * read at parent review→done by the AC gate (slice 5). See
+ * docs/reference/pm-convoy-mandate.md.
  */
 
 import test from 'node:test';

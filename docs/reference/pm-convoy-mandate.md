@@ -43,16 +43,16 @@ Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) has s
 - Slice 3 (PR #353) — PM SOUL + [`docs/reference/pm-chat-prompt.md`](pm-chat-prompt.md) updated with the decompose-flow output contract and DAG smell checklist.
 - Slice 4 (PR #356) — DAG approval UX in [`src/components/ConvoyDiffPreview.tsx`](../../src/components/ConvoyDiffPreview.tsx) and the three decompose modals.
 - Slice 5 — AC gate at parent `review → done` + migration 096 (`task_ac_acknowledgements`) + `AcAckModal`. Endpoint: `GET/POST /api/tasks/[id]/ac-ack`.
-- Slice 6 — the `MC_PM_CONVOY_MANDATE=1` flag now causes [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) to REJECT `create_task_under_initiative` diffs from `decompose_story` / `decompose_initiative` / `plan_initiative` proposals, and to require at least one `create_convoy_under_initiative` in those flows. Carve-outs preserved for `notes_intake`, `manual`, and other tactical kinds. Proposal promoted to `docs/reference/`. Reference-spec edits land in the same PR.
-- Slice 7 (this PR) — Task Board ([`MissionQueue.tsx`](../../src/components/MissionQueue.tsx)) collapses 1-slice convoys via [`filterTasksForBoard`](../../src/lib/convoy-board-render.ts) so single-slice decompositions present as a plain parent task. Multi-slice convoy parents pick up a "Convoy · N slices · M done" badge. GET /api/tasks now joins `convoys` so the per-card aggregates land without a second fetch. Coordinator [`SOUL.md`](../../agent-templates/coordinator/SOUL.md) + [`AGENTS.md`](../../agent-templates/coordinator/AGENTS.md) shrink to monitor + accept + escalate; `spawn_subtask` / `plan_convoy` remain as fallback for mid-flight slice appends.
+- Slice 6 (PR #358) — [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) REJECTS `create_task_under_initiative` diffs from `decompose_story` / `decompose_initiative` / `plan_initiative` proposals, and requires at least one `create_convoy_under_initiative` in those flows. Carve-outs preserved for `notes_intake`, `manual`, and other tactical kinds. Proposal promoted to `docs/reference/`. Initially shipped behind the `MC_PM_CONVOY_MANDATE` env flag; flag removed in the follow-up sweep so the mandate is unconditional.
+- Slice 7 (PR #359) — Task Board ([`MissionQueue.tsx`](../../src/components/MissionQueue.tsx)) collapses 1-slice convoys via [`filterTasksForBoard`](../../src/lib/convoy-board-render.ts) so single-slice decompositions present as a plain parent task. Multi-slice convoy parents pick up a "Convoy · N slices · M done" badge that persists through `review` and `done` states. GET /api/tasks joins `convoys` so the per-card aggregates land without a second fetch. Coordinator [`SOUL.md`](../../agent-templates/coordinator/SOUL.md) + [`AGENTS.md`](../../agent-templates/coordinator/AGENTS.md) shrink to monitor + accept + escalate; `spawn_subtask` / `plan_convoy` remain as fallback for mid-flight slice appends.
 
-### Flag default
+### Mandate is unconditional
 
-`MC_PM_CONVOY_MANDATE` is **off by default** in both dev and prod containers. The mandate is opt-in via env var rather than always-on so operators can verify the PM is reliably emitting convoy-shaped diffs before the schema starts rejecting fallbacks. When the operator is confident enough to flip it on, set `MC_PM_CONVOY_MANDATE=1` in the container env. Slice 7 will revisit defaulting it on.
+The mandate is **always on** as of 2026-05-14. The original `MC_PM_CONVOY_MANDATE` feature flag was removed once slices 1–7 shipped and verified end-to-end — there is no kill switch. To roll back, an operator would need to revert the gating code in [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts).
 
-### Revert semantics — current state
+### Revert semantics
 
-`invertDiff` for `create_convoy_under_initiative` returns the `limited` marker today: revert is not yet implemented for this diff kind ([`src/lib/pm/invertDiff.ts`](../../src/lib/pm/invertDiff.ts) line ~251). Full revert (cancel-convoy-if-no-slice-done + delete unscheduled child tasks; refuse if any slice has reached `done`) is queued as a follow-up — see [`pm-revertable-proposals.md`](pm-revertable-proposals.md) for the planned semantics.
+`invertDiff` for `create_convoy_under_initiative` is fully implemented — see [`pm-revertable-proposals.md`](pm-revertable-proposals.md) for the contract. Behavior: refuses revert if any slice has reached `done`; otherwise cancels the convoy, deletes unscheduled (inbox) child tasks, transitions in-flight children to `cancelled`, and clears `task_ac_acknowledgements` for the parent. Parent task itself is preserved for operator cleanup rather than auto-deleted.
 
 ## Problem
 
@@ -76,9 +76,11 @@ The bug class is structural, not a one-off. SOUL-prompt nudges to "be a better d
 
 ## The mandate
 
-When the PM emits a `propose_changes` call with `trigger_kind ∈ {decompose_story, decompose_initiative, plan_initiative}`, it MUST emit at least one `create_convoy_under_initiative` diff and MUST NOT emit `create_task_under_initiative` diffs. The zod refinement on [`shared.ts`](../src/lib/mcp/shared.ts) enforces this server-side.
+When the PM emits a `propose_changes` call with `trigger_kind ∈ {decompose_story, decompose_initiative, plan_initiative}`, it **MUST NOT** emit `create_task_under_initiative` diffs — if work is being created in a decompose flow, it goes through `create_convoy_under_initiative` so dependency and AC gates apply. [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) enforces this server-side.
 
-Every multi-step work output from PM decomposition is now a DAG with explicit deps, per-slice acceptance criteria, and parent-level acceptance criteria the convoy must satisfy before auto-promoting the parent task to `done`.
+Purely structural decompositions are unaffected: a decompose-flow proposal that only emits `create_child_initiative` stubs, status diffs, etc. (no task creation) is fine — the synth fallback in [`synthesizeDecompose`](../../src/lib/agents/pm-agent.ts) and initiative-tree decompositions don't need convoys when they aren't creating tasks. The mandate is about task-level work granularity, not about every decompose-flow emission needing a convoy.
+
+When work IS created, every multi-step work output from PM decomposition is now a DAG with explicit deps, per-slice acceptance criteria, and parent-level acceptance criteria the convoy must satisfy before auto-promoting the parent task to `done`.
 
 ### Carve-outs
 
@@ -307,13 +309,11 @@ When this proposal is promoted to `reference/` (Phase 2 ships), file gets rename
 
 ## Acceptance for "this proposal itself ships"
 
-- [ ] Phase 1 (SOUL nudges + advisory ACs) merged.
-- [ ] Phase 2 schema + apply-pass + UX merged behind a feature flag (`MC_PM_CONVOY_MANDATE=1`).
-- [ ] Schema validator rejects `create_task_under_initiative` in decompose-flow proposals when the flag is on.
-- [ ] AC gate enforces parent `review → done`.
-- [ ] DAG approval UX renders and accepts; refine semantics tested for both pre- and post-dispatch.
-- [ ] One real-world dogfood: the PM uses this flow to decompose a follow-up to this proposal itself.
-- [ ] Spec edits per the table above land in the same PR as Phase 2.
-- [ ] Phase 3 cleanup (Task Board, coordinator SOUL) merged.
-
-Then this file moves to `docs/reference/`.
+- [x] Phase 1 (SOUL nudges + advisory ACs) merged — folded into slice 3.
+- [x] Phase 2 schema + apply-pass + UX merged (slices 1, 2, 4) — originally behind `MC_PM_CONVOY_MANDATE=1`; flag removed in the follow-up sweep.
+- [x] Schema validator rejects `create_task_under_initiative` in decompose-flow proposals (unconditional).
+- [x] AC gate enforces parent `review → done` (slice 5).
+- [x] DAG approval UX renders and accepts; refine semantics inherit existing per-proposal refine dedupe.
+- [x] Spec edits per the table above land in the same PR as Phase 2 (slice 6).
+- [x] Phase 3 cleanup (Task Board, coordinator SOUL) merged (slice 7).
+- [x] File moved to `docs/reference/`, `status: current`.

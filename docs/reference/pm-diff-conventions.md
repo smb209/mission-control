@@ -70,13 +70,15 @@ so capture fields are uniformly optional across all kinds.
 
 **Current `kind` values (11 total):**
 
-> **Decompose-flow restriction (PM convoy mandate).** When
-> `MC_PM_CONVOY_MANDATE=1`, proposals with `trigger_kind` ∈
-> {`decompose_story`, `decompose_initiative`, `plan_initiative`} MUST
-> emit at least one `create_convoy_under_initiative` diff and MUST NOT
-> emit `create_task_under_initiative`. The `notes_intake`, `manual`,
-> and audit-follow-up paths are unaffected. See
-> [pm-convoy-mandate.md](pm-convoy-mandate.md) and the enforcement at
+> **Decompose-flow restriction (PM convoy mandate).** Proposals with
+> `trigger_kind` ∈ {`decompose_story`, `decompose_initiative`,
+> `plan_initiative`} MUST emit at least one
+> `create_convoy_under_initiative` diff and MUST NOT emit
+> `create_task_under_initiative`. The `notes_intake`, `manual`, and
+> audit-follow-up paths are unaffected. The mandate is unconditional
+> (the original `MC_PM_CONVOY_MANDATE` env flag was removed after the
+> mandate stabilized). See [pm-convoy-mandate.md](pm-convoy-mandate.md)
+> and the enforcement at
 > [src/lib/db/pm-proposals.ts](../../src/lib/db/pm-proposals.ts)
 > (`validateProposedChanges`, mandate block near the top).
 
@@ -587,7 +589,7 @@ proposal row may be created with `dispatch_state: 'synth_only'` or
 | `reorder_initiatives` | manual, decompose_initiative | UPDATE initiatives.sort_order | yes (`prev_child_ids_in_order`) | yes | original Phase 5 |
 | `update_status_check` | status_check_investigation, notes_intake | UPDATE initiatives.status_check_md | yes (`prev_status_check_md`) | yes | original Phase 5 |
 | `create_child_initiative` | decompose_initiative | INSERT initiatives | yes (`created_initiative_id`) | tombstone via set_initiative_status='cancelled' | Polish B (migration 047) |
-| `create_task_under_initiative` | notes_intake, manual, audit follow-ups, child-initiative stubs (NOT decompose flows when MC_PM_CONVOY_MANDATE=1) | INSERT tasks | yes (`created_task_id`) | tombstone via set_task_status='cancelled' | migration 054 / 063 |
+| `create_task_under_initiative` | notes_intake, manual, audit follow-ups, child-initiative stubs (NOT decompose flows — see pm-convoy-mandate.md) | INSERT tasks | yes (`created_task_id`) | tombstone via set_task_status='cancelled' | migration 054 / 063 |
 | `create_convoy_under_initiative` | decompose_story, decompose_initiative, plan_initiative | INSERT tasks (parent) + convoys + convoy_subtasks | yes (`convoy_id`, `parent_task_id`, `subtask_id_map`) | **limited** — full revert deferred (slice 7) | migration 095 / pm-convoy-mandate.md |
 | `set_task_status` | revert only on forward path (`'cancelled'` allowed on forward; arbitrary on revert) | UPDATE tasks.status | yes (`prev_task_status`) | yes | revert pipeline (migration 062) |
 | `confirm_task_done` | notes_intake, disruption_event | UPDATE tasks.status via `transitionTaskStatus` + emit event | yes (`prev_task_status`) | yes (→ set_task_status with prev) | PR #325 |
