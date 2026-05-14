@@ -4906,6 +4906,38 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '096',
+    name: 'pm_convoy_mandate_task_ac_acknowledgements',
+    up: (db) => {
+      // PM convoy mandate (slice 5/7): records operator acknowledgement of
+      // each parent-convoy acceptance criterion before the parent task may
+      // transition review → done.
+      //
+      // Snapshot the AC text at ack time so post-hoc edits to the convoy
+      // row don't silently rewrite history. `acknowledged_by` is free-form
+      // (operator id / 'operator' default / 'system' for board_override
+      // bypass paths that record an ack instead of skipping the table).
+      //
+      // Idempotent (IF NOT EXISTS) so re-runs against partially-applied
+      // DBs skip cleanly. See docs/proposals/pm-convoy-mandate.md.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_ac_acknowledgements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL,
+          ac_index INTEGER NOT NULL,
+          ac_text TEXT NOT NULL,
+          rationale TEXT,
+          acknowledged_by TEXT,
+          acknowledged_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(task_id, ac_index),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_ac_ack_task ON task_ac_acknowledgements(task_id);`);
+      console.log('[Migration 096] task_ac_acknowledgements ready.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */

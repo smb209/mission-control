@@ -35,6 +35,7 @@ import {
   pickReviewerForTask,
 } from '@/lib/task-governance';
 import { assertAgentCanActOnTask } from '@/lib/authz/agent-task';
+import { missingAcAcknowledgements } from '@/lib/db/task-ac-ack';
 import type { Task, TaskStatus } from '@/lib/types';
 
 /** Slice 1 strict gating is opt-in for one cycle while operators backfill. */
@@ -70,9 +71,12 @@ export type TransitionTaskStatusResult =
         | 'status_reason_required'
         | 'cannot_mark_done'
         | 'self_review_blocked'
-        | 'reviewer_required';
+        | 'reviewer_required'
+        | 'parent_ac_check_pending';
       error: string;
       missingDeliverableIds?: string[];
+      missingAcIndices?: number[];
+      acceptanceCriteria?: string[];
     };
 
 const QUALITY_STAGES = new Set(['testing', 'review', 'verification', 'done']);
@@ -226,6 +230,23 @@ export function transitionTaskStatus(
         ok: false,
         code: 'cannot_mark_done',
         error: `Cannot mark done: ${reason}`,
+      };
+    }
+
+    // PM convoy mandate (slice 5/7): parent task with a done convoy that
+    // carries feature-level acceptance criteria must have every AC
+    // explicitly acknowledged before review → done. `board_override`
+    // bypasses (same pattern as the evidence gate). Tasks without a
+    // convoy / convoys without ACs (coordinator-spawned back-compat) are
+    // skipped via the null return from missingAcAcknowledgements.
+    const acGate = missingAcAcknowledgements(taskId);
+    if (acGate && acGate.missing_indices.length > 0) {
+      return {
+        ok: false,
+        code: 'parent_ac_check_pending',
+        error: `Parent task has ${acGate.missing_indices.length} unacknowledged convoy AC(s). Operator must acknowledge each before review → done.`,
+        missingAcIndices: acGate.missing_indices,
+        acceptanceCriteria: acGate.acceptance_criteria,
       };
     }
   }

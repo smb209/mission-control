@@ -10,6 +10,7 @@ import type { Task, TaskStatus } from '@/lib/types';
 import { TaskModal } from './TaskModal';
 import { BlockedBadge } from './BlockedBadge';
 import { Time } from '@/components/Time';
+import { AcAckModal, type AcStatus } from './AcAckModal';
 
 interface MissionQueueProps {
   workspaceId?: string;
@@ -108,6 +109,11 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   const [mobileStatus, setMobileStatus] = useState<TaskStatus>('planning');
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
   const [pendingMove, setPendingMove] = useState<{ task: Task; targetStatus: TaskStatus } | null>(null);
+  // PM convoy mandate slice 5/7: when a PATCH to status=done returns the
+  // parent_ac_check_pending gate, open the AC ack modal. The initialAcs
+  // snapshot from the 400 body bootstraps the modal so it renders
+  // synchronously while the modal also revalidates on open.
+  const [acGate, setAcGate] = useState<{ task: Task; acs: AcStatus[] } | null>(null);
 
   const getTasksByStatus = (status: TaskStatus) =>
     tasks.filter(
@@ -161,17 +167,46 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
     await updateTaskStatusWithPersist(task, targetStatus);
   };
 
-  const updateTaskStatusWithPersist = async (task: Task, targetStatus: TaskStatus) => {
+  const updateTaskStatusWithPersist = async (
+    task: Task,
+    targetStatus: TaskStatus,
+    opts: { boardOverride?: boolean; overrideReason?: string } = {},
+  ) => {
     if (task.status === targetStatus) return;
 
     updateTaskStatus(task.id, targetStatus);
 
     try {
+      const body: Record<string, unknown> = { status: targetStatus };
+      if (opts.boardOverride) {
+        body.board_override = true;
+        if (opts.overrideReason) body.override_reason = opts.overrideReason;
+      }
       const res = await fetch(`/api/tasks/${task.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: targetStatus }),
+        body: JSON.stringify(body),
       });
+
+      // PM convoy mandate slice 5/7: surface the AC gate by opening the modal.
+      // The 400 body carries the AC snapshot so the modal can render
+      // without a second fetch.
+      if (res.status === 400 && targetStatus === 'done' && !opts.boardOverride) {
+        const data = await res.json().catch(() => null) as
+          | { code?: string; acceptance_criteria?: string[]; missing_ac_indices?: number[] }
+          | null;
+        if (data && data.code === 'parent_ac_check_pending' && Array.isArray(data.acceptance_criteria)) {
+          updateTaskStatus(task.id, task.status); // revert optimistic
+          const missing = new Set(data.missing_ac_indices ?? []);
+          const acs: AcStatus[] = data.acceptance_criteria.map((text, i) => ({
+            ac_index: i,
+            ac_text: text,
+            acknowledged: !missing.has(i),
+          }));
+          setAcGate({ task, acs });
+          return;
+        }
+      }
 
       if (res.ok) {
         addEvent({
@@ -458,6 +493,31 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
             </div>
           </div>
         </div>
+      )}
+
+      {/* PM convoy mandate slice 5/7: AC acknowledgement gate. */}
+      {acGate && (
+        <AcAckModal
+          open
+          taskId={acGate.task.id}
+          initialAcs={acGate.acs}
+          onClose={() => {
+            const t = acGate.task;
+            setAcGate(null);
+            // Optimistic update was reverted at gate-detection time.
+            updateTaskStatus(t.id, t.status);
+          }}
+          onComplete={async () => {
+            const t = acGate.task;
+            setAcGate(null);
+            await updateTaskStatusWithPersist(t, 'done');
+          }}
+          onBoardOverride={async (reason) => {
+            const t = acGate.task;
+            setAcGate(null);
+            await updateTaskStatusWithPersist(t, 'done', { boardOverride: true, overrideReason: reason });
+          }}
+        />
       )}
     </div>
   );
