@@ -14,6 +14,7 @@ import { ProposalDiffsList, type PmDiff } from '@/components/pm/ProposalDiffsLis
 import { triggerBadgeFor } from '@/components/pm/triggerBadge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
+import { ConvoyDiffPreview, pickConvoyDiffs } from '@/components/ConvoyDiffPreview';
 
 interface PmProposal {
   id: string;
@@ -110,6 +111,20 @@ export default function ProposalDetailPage({
       const body = await res.json();
       if (!res.ok) throw new Error((body as { error?: string }).error || 'Accept failed');
       setProposal(prev => prev ? { ...prev, status: 'accepted' } : prev);
+      // Convoy mandate (slice 4): when the accepted proposal materialized
+      // one or more convoys, navigate to the parent initiative page so
+      // the operator can monitor dispatch (tasks render inside the
+      // initiative view in this codebase — no standalone /tasks/[id]
+      // route). The apply-pass annotates each convoy diff with the
+      // initiative_id it materialized under.
+      const accepted = (body as { proposal?: { proposed_changes?: PmDiff[] } }).proposal;
+      const acceptedConvoys = accepted?.proposed_changes
+        ? pickConvoyDiffs(accepted.proposed_changes)
+        : [];
+      const firstInitiativeId = acceptedConvoys[0]?.initiative_id;
+      if (acceptedConvoys.length > 0 && firstInitiativeId && !firstInitiativeId.startsWith('$')) {
+        router.push(`/initiatives/${firstInitiativeId}`);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Accept failed');
     } finally {
@@ -303,17 +318,43 @@ export default function ProposalDetailPage({
                 </div>
               )}
 
+              {/* Convoy-mandate preview (slice 4): when one or more diffs
+                  are create_convoy_under_initiative, render the DAG +
+                  parent ACs above the generic diff list. Detail page mode:
+                  every slice fully expanded. */}
+              {(() => {
+                const convoyDiffs = pickConvoyDiffs(
+                  proposal.proposed_changes,
+                );
+                if (convoyDiffs.length === 0) return null;
+                return (
+                  <div className="px-4 py-3 border-b border-amber-500/20 space-y-4">
+                    {convoyDiffs.map((d, i) => (
+                      <ConvoyDiffPreview key={i} diff={d} expanded />
+                    ))}
+                  </div>
+                );
+              })()}
+
               {/* Proposed changes — shared component with /pm. The
                   detail page has more vertical room than the inline
-                  chat card, so we ask for the full list (no fold). */}
-              {proposal.proposed_changes.length > 0 && (
-                <ProposalDiffsList
-                  diffs={proposal.proposed_changes}
-                  showAll
-                  className="px-4 py-3 border-b border-amber-500/20 space-y-1"
-                  resolveInitiativeTitle={resolveInitiativeTitle}
-                />
-              )}
+                  chat card, so we ask for the full list (no fold).
+                  Convoy diffs are rendered above; filter them out here
+                  to avoid double-rendering. */}
+              {(() => {
+                const nonConvoy = proposal.proposed_changes.filter(
+                  (d) => d.kind !== 'create_convoy_under_initiative',
+                );
+                if (nonConvoy.length === 0) return null;
+                return (
+                  <ProposalDiffsList
+                    diffs={nonConvoy}
+                    showAll
+                    className="px-4 py-3 border-b border-amber-500/20 space-y-1"
+                    resolveInitiativeTitle={resolveInitiativeTitle}
+                  />
+                );
+              })()}
 
               {/* Actions. Refine is allowed on draft, superseded, and
                   rejected — the DB only blocks accepted (refineProposal
@@ -366,7 +407,16 @@ export default function ProposalDetailPage({
                           <RefreshCw className="w-3 h-3" /> Refine
                         </button>
                       )}
-                      {proposal.status === 'draft' && (
+                      {proposal.status === 'draft' && (() => {
+                        const convoyDiffs = pickConvoyDiffs(
+                          proposal.proposed_changes,
+                        );
+                        const sliceCount = convoyDiffs.reduce((n, d) => n + d.slices.length, 0);
+                        const acceptLabel =
+                          convoyDiffs.length > 0
+                            ? `Plan and dispatch convoy (${sliceCount} slice${sliceCount === 1 ? '' : 's'})`
+                            : 'Accept';
+                        return (
                         <>
                           <button
                             type="button"
@@ -374,7 +424,7 @@ export default function ProposalDetailPage({
                             disabled={acting !== null}
                             className="text-xs px-2 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-200 rounded-sm hover:bg-emerald-500/30 flex items-center gap-1 disabled:opacity-50"
                           >
-                            <Check className="w-3 h-3" /> {acting === 'accept' ? 'Accepting…' : 'Accept'}
+                            <Check className="w-3 h-3" /> {acting === 'accept' ? 'Accepting…' : acceptLabel}
                           </button>
                           <button
                             type="button"
@@ -385,7 +435,8 @@ export default function ProposalDetailPage({
                             <X className="w-3 h-3" /> {acting === 'reject' ? 'Rejecting…' : 'Reject'}
                           </button>
                         </>
-                      )}
+                        );
+                      })()}
                       <button
                         type="button"
                         onClick={() => setPendingDelete(true)}

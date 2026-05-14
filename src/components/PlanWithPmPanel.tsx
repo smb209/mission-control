@@ -25,6 +25,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, X, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { parseSuggestionsFromImpactMd as parseSharedSuggestions } from '@/lib/pm/planSuggestionsSidecar';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
+import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
 
 export interface PlanInitiativeDraft {
   title: string;
@@ -106,6 +107,11 @@ export default function PlanWithPmPanel({
   const [proposalCreatedAt, setProposalCreatedAt] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
   const [suggestions, setSuggestions] = useState<PlanInitiativeSuggestions | null>(null);
+  // Convoy mandate (slice 4): plan_initiative proposals may carry a
+  // create_convoy_under_initiative diff (when the PM emits one in
+  // proposed_changes) alongside the suggestions sidecar. Track them so
+  // the panel can render the DAG preview above the suggestions block.
+  const [convoyDiffs, setConvoyDiffs] = useState<ConvoyDiff[]>([]);
   const [dispatchState, setDispatchState] = useState<'pending_agent' | 'agent_complete' | 'synth_only' | null>(null);
   const [loading, setLoading] = useState(false);
   const [refining, setRefining] = useState(false);
@@ -136,6 +142,7 @@ export default function PlanWithPmPanel({
       setProposalCreatedAt(null);
       setImpactMd('');
       setSuggestions(null);
+      setConvoyDiffs([]);
       setDispatchState(null);
       setErr(null);
       setRefineText('');
@@ -163,6 +170,9 @@ export default function PlanWithPmPanel({
               setProposalCreatedAt(resumeBody.proposal.created_at ?? null);
               setImpactMd(resumeBody.proposal.impact_md ?? '');
               setSuggestions(resumeBody.suggestions);
+              setConvoyDiffs(
+                pickConvoyDiffs((resumeBody.proposal.proposed_changes ?? [])),
+              );
               setDispatchState(resumeBody.proposal.dispatch_state ?? null);
               return; // Skip the POST — we resumed an existing draft.
             }
@@ -185,6 +195,9 @@ export default function PlanWithPmPanel({
         setProposalCreatedAt(body.proposal?.created_at ?? null);
         setImpactMd(body.proposal?.impact_md ?? '');
         setSuggestions(body.suggestions ?? null);
+        setConvoyDiffs(
+          pickConvoyDiffs((body.proposal?.proposed_changes ?? [])),
+        );
         setDispatchState(body.proposal?.dispatch_state ?? null);
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : 'Plan failed');
@@ -222,6 +235,9 @@ export default function PlanWithPmPanel({
         setProposalCreatedAt(body.proposal?.created_at ?? null);
         setImpactMd(body.proposal?.impact_md ?? '');
         setSuggestions(body.suggestions ?? null);
+        setConvoyDiffs(
+          pickConvoyDiffs((body.proposal?.proposed_changes ?? [])),
+        );
         setDispatchState(body.proposal?.dispatch_state ?? null);
       } catch {
         // Best-effort — leaves the panel as-is and the operator can refresh manually.
@@ -275,6 +291,9 @@ export default function PlanWithPmPanel({
         (newProposal.plan_suggestions as PlanInitiativeSuggestions | null) ??
         parseSuggestionsFromImpactMd(newProposal.impact_md);
       if (refined) setSuggestions(refined);
+      setConvoyDiffs(
+        pickConvoyDiffs((newProposal.proposed_changes ?? [])),
+      );
       setRefineText('');
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Refine failed');
@@ -373,6 +392,16 @@ export default function PlanWithPmPanel({
         />
       ) : suggestions ? (
         <>
+          {/* Convoy mandate (slice 4): if the proposal carries a
+              create_convoy_under_initiative diff, surface its DAG +
+              parent ACs above the plan_initiative suggestions block. */}
+          {convoyDiffs.length > 0 && (
+            <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3">
+              {convoyDiffs.map((d, i) => (
+                <ConvoyDiffPreview key={i} diff={d} className="space-y-3" />
+              ))}
+            </div>
+          )}
           <div className="rounded border border-mc-border bg-mc-bg-secondary p-3 mb-3 text-xs space-y-2">
             <div>
               <div className="text-mc-text-secondary uppercase tracking-wide text-[10px]">Refined description</div>

@@ -32,6 +32,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
+import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
 
 interface InitiativeLite {
   id: string;
@@ -52,12 +53,21 @@ interface ChildDiff {
   depends_on_initiative_ids?: string[];
 }
 
+/**
+ * Convoy mandate (slice 4): a decompose-initiative proposal may carry
+ * a create_convoy_under_initiative diff alongside (or instead of) the
+ * legacy create_child_initiative diffs. Convoy diffs render read-only
+ * through ConvoyDiffPreview; child-initiative diffs keep their inline
+ * editor.
+ */
+type AnyDiff = ChildDiff | ConvoyDiff;
+
 interface ProposalRow {
   id: string;
   trigger_text: string;
   trigger_kind: string;
   impact_md: string;
-  proposed_changes: ChildDiff[];
+  proposed_changes: AnyDiff[];
   status: string;
   dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
   created_at: string;
@@ -84,7 +94,7 @@ export default function DecomposeWithPmModal({
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [proposalCreatedAt, setProposalCreatedAt] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
-  const [children, setChildren] = useState<ChildDiff[]>([]);
+  const [children, setChildren] = useState<AnyDiff[]>([]);
   const [hint, setHint] = useState('');
   const [loading, setLoading] = useState(false);
   const [refining, setRefining] = useState(false);
@@ -275,7 +285,11 @@ export default function DecomposeWithPmModal({
   };
 
   const updateChild = (i: number, patch: Partial<ChildDiff>) => {
-    setChildren(prev => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+    setChildren(prev =>
+      prev.map((c, idx) =>
+        idx === i && c.kind === 'create_child_initiative' ? { ...c, ...patch } : c,
+      ),
+    );
   };
 
   const removeChild = (i: number) => {
@@ -373,7 +387,16 @@ export default function DecomposeWithPmModal({
                 setDispatchState('synth_only');
               }}
             />
-          ) : (
+          ) : (() => {
+            // Convoy mandate (slice 4): split convoy DAGs from
+            // create_child_initiative diffs. Convoy diffs render
+            // read-only through the shared preview; child-initiative
+            // diffs keep their inline editor.
+            const convoyDiffs = pickConvoyDiffs(children);
+            const childInitiatives = children.filter(
+              (c): c is ChildDiff => c.kind === 'create_child_initiative',
+            );
+            return (
             <>
               {displayMd && (
                 <div className="shrink-0 max-h-32 overflow-y-auto text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
@@ -381,24 +404,40 @@ export default function DecomposeWithPmModal({
                 </div>
               )}
 
+              {convoyDiffs.length > 0 && (
+                <div className="shrink-0 max-h-[40vh] overflow-y-auto pr-1">
+                  {convoyDiffs.map((d, i) => (
+                    <ConvoyDiffPreview key={i} diff={d} className="space-y-3 mb-3" />
+                  ))}
+                </div>
+              )}
+
               <div className="flex-1 min-h-0 flex flex-col">
                 <div className="shrink-0 flex items-center gap-2 mb-2">
                   <h3 className="text-sm font-medium text-mc-text">
-                    Proposed children ({children.length})
+                    {convoyDiffs.length > 0 && childInitiatives.length === 0
+                      ? `Convoy plan (${convoyDiffs.reduce((n, d) => n + d.slices.length, 0)} slices)`
+                      : `Proposed children (${childInitiatives.length})`}
                   </h3>
-                  <button
-                    onClick={addChild}
-                    className="ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
-                  >
-                    <Plus className="w-3 h-3" /> Add child
-                  </button>
+                  {!(convoyDiffs.length > 0 && childInitiatives.length === 0) && (
+                    <button
+                      onClick={addChild}
+                      className="ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
+                    >
+                      <Plus className="w-3 h-3" /> Add child
+                    </button>
+                  )}
                 </div>
 
                 {children.length === 0 ? (
                   <p className="text-sm text-mc-text-secondary">No children proposed. Add one manually above or refine below.</p>
+                ) : childInitiatives.length === 0 ? (
+                  <p className="text-sm text-mc-text-secondary">Convoy plan is read-only here — use Refine to revise.</p>
                 ) : (
                   <ul className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
-                    {children.map((c, i) => (
+                    {children.map((c, i) => {
+                      if (c.kind !== 'create_child_initiative') return null;
+                      return (
                       <li
                         key={i}
                         className="rounded border border-mc-border bg-mc-bg p-3 space-y-2"
@@ -467,7 +506,8 @@ export default function DecomposeWithPmModal({
                           aria-label={`Description for child ${i + 1}`}
                         />
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -504,7 +544,8 @@ export default function DecomposeWithPmModal({
                 </label>
               </div>
             </>
-          )}
+            );
+          })()}
         </div>
 
         <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2">
@@ -524,7 +565,19 @@ export default function DecomposeWithPmModal({
             }
             className="px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {accepting ? 'Creating…' : `Accept (${children.length} children)`}
+            {accepting
+              ? 'Creating…'
+              : (() => {
+                  const convoyDiffs = pickConvoyDiffs(
+                    children,
+                  );
+                  const sliceCount = convoyDiffs.reduce((n, d) => n + d.slices.length, 0);
+                  if (convoyDiffs.length > 0 && sliceCount > 0) {
+                    return `Plan and dispatch convoy (${sliceCount} slice${sliceCount === 1 ? '' : 's'})`;
+                  }
+                  const childCount = children.filter((c) => c.kind === 'create_child_initiative').length;
+                  return `Accept (${childCount} children)`;
+                })()}
           </button>
         </footer>
       </div>
@@ -532,7 +585,10 @@ export default function DecomposeWithPmModal({
   );
 }
 
-/** Re-stamp sort_order to the operator's current display order. */
-function normalizedChildren(children: ChildDiff[]): ChildDiff[] {
-  return children.map((c, i) => ({ ...c, sort_order: i }));
+/** Re-stamp sort_order to the operator's current display order.
+ *  Convoy diffs pass through untouched (no sort_order column on them). */
+function normalizedChildren(children: AnyDiff[]): AnyDiff[] {
+  return children.map((c, i) =>
+    c.kind === 'create_child_initiative' ? { ...c, sort_order: i } : c,
+  );
 }
