@@ -360,7 +360,9 @@ export default function PlanWithPmPanel({
           sessionKey={null}
           sentAt={proposalCreatedAt ?? new Date().toISOString()}
           onCancel={() => {
-            fetch(`/api/pm/proposals/${proposalId}`, { method: 'DELETE' }).catch(() => {});
+            // Flip dispatch_state to 'cancelled' so the dispatcher
+            // short-circuits its poll loop. The card hides via SSE.
+            fetch(`/api/pm/proposals/${proposalId}/cancel`, { method: 'POST' }).catch(() => {});
             onClose();
           }}
           onUseSynthFallback={() => {

@@ -20,6 +20,7 @@ import {
   listProposals,
   acceptProposal,
   rejectProposal,
+  cancelProposal,
   refineProposal,
   supersedeWithAgentProposal,
   validateProposedChanges,
@@ -1242,6 +1243,141 @@ test("tryAdoptOrphanedPlaceholder skips placeholders outside the time window", (
   // A wider window finds it.
   const widerAdoptedId = tryAdoptOrphanedPlaceholder(agentRow.id, 2 * 60 * 60 * 1000);
   assert.equal(widerAdoptedId, placeholder.id);
+});
+
+// ─── Cancel ────────────────────────────────────────────────────────
+
+test('cancelProposal: cancels a draft with dispatch_state=pending_agent', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: 'synth placeholder',
+    impact_md: '.',
+    proposed_changes: [{ kind: 'set_initiative_status', initiative_id: init.id, status: 'at_risk' }],
+    dispatch_state: 'pending_agent',
+  });
+  const result = cancelProposal(p.id);
+  assert.equal(result.dispatch_state, 'cancelled');
+  assert.equal(result.status, 'draft'); // status stays draft
+});
+
+test('cancelProposal: cancels a draft with dispatch_state=synth_only', () => {
+  const ws = freshWorkspace();
+  createProposal({
+    workspace_id: ws,
+    trigger_text: 'synth placeholder',
+    impact_md: '.',
+    proposed_changes: [],
+    dispatch_state: 'synth_only',
+  });
+  // Find the synth_only proposal.
+  const proposals = listProposals({ workspace_id: ws, status: 'draft' });
+  const synthOnly = proposals.find(p => p.dispatch_state === 'synth_only');
+  assert.ok(synthOnly, 'expected a synth_only proposal');
+  const result = cancelProposal(synthOnly.id);
+  assert.equal(result.dispatch_state, 'cancelled');
+});
+
+test('cancelProposal: throws on non-existent proposal', () => {
+  assert.throws(
+    () => cancelProposal('non-existent-id'),
+    PmProposalValidationError,
+  );
+});
+
+test('cancelProposal: throws on already-accepted proposal', () => {
+  const ws = freshWorkspace();
+  const init = createInitiative({ workspace_id: ws, kind: 'story', title: 'S' });
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: '.',
+    impact_md: '.',
+    proposed_changes: [{ kind: 'set_initiative_status', initiative_id: init.id, status: 'at_risk' }],
+  });
+  acceptProposal(p.id);
+  assert.throws(
+    () => cancelProposal(p.id),
+    PmProposalValidationError,
+  );
+});
+
+test('cancelProposal: idempotent — cancelling already-cancelled is a no-op', () => {
+  const ws = freshWorkspace();
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: '.',
+    impact_md: '.',
+    proposed_changes: [],
+    dispatch_state: 'pending_agent',
+  });
+  const first = cancelProposal(p.id);
+  assert.equal(first.dispatch_state, 'cancelled');
+  // Second call should be a no-op.
+  const second = cancelProposal(p.id);
+  assert.equal(second.dispatch_state, 'cancelled');
+  assert.equal(second.id, first.id);
+});
+
+test('cancelProposal: emits pm_proposal_dispatch_state_changed event', async () => {
+  // Capture broadcasts by registering a fake SSE client with the
+  // events module. The broadcaster serializes to `data: <json>\n\n`
+  // and enqueues onto the controller, so we decode the chunks back to
+  // JSON to verify the event shape.
+  const { registerClient, unregisterClient } = await import('@/lib/events');
+  const captured: Array<{ type?: string; payload?: Record<string, unknown> }> = [];
+  const decoder = new TextDecoder();
+  const fakeController = {
+    enqueue: (chunk: Uint8Array) => {
+      const text = decoder.decode(chunk);
+      // Strip the `data: ` prefix and trailing `\n\n`.
+      const match = text.match(/^data: (.+)\n\n$/);
+      if (match) {
+        try {
+          captured.push(JSON.parse(match[1]));
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  } as unknown as ReadableStreamDefaultController;
+  registerClient(fakeController);
+  try {
+    const ws = freshWorkspace();
+    const p = createProposal({
+      workspace_id: ws,
+      trigger_text: '.',
+      impact_md: '.',
+      proposed_changes: [],
+      dispatch_state: 'pending_agent',
+    });
+    cancelProposal(p.id);
+    const match = captured.find(
+      e =>
+        e.type === 'pm_proposal_dispatch_state_changed' &&
+        e.payload?.proposal_id === p.id,
+    );
+    assert.ok(match, 'expected pm_proposal_dispatch_state_changed broadcast');
+    assert.equal(match!.payload!.dispatch_state, 'cancelled');
+    assert.equal(match!.payload!.workspace_id, ws);
+  } finally {
+    unregisterClient(fakeController);
+  }
+});
+
+test('cancelProposal: throws on agent_complete dispatch_state', () => {
+  const ws = freshWorkspace();
+  const p = createProposal({
+    workspace_id: ws,
+    trigger_text: '.',
+    impact_md: '.',
+    proposed_changes: [],
+    dispatch_state: 'agent_complete',
+  });
+  assert.throws(
+    () => cancelProposal(p.id),
+    PmProposalValidationError,
+  );
 });
 
 test("sweepOrphanedPlaceholders links eligible pairs in bulk", () => {

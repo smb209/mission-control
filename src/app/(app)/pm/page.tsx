@@ -65,7 +65,7 @@ interface PmProposal {
   target_initiative_id: string | null;
   /** Async dispatch state machine: pending_agent → agent_complete | synth_only.
    *  Used to gate the in-flight card render on /pm and /pm/proposals/[id]. */
-  dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
+  dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | 'cancelled' | null;
   created_at: string;
 }
 
@@ -983,6 +983,15 @@ export default function PmChatPage() {
               if (proposal && proposal.status === 'superseded') {
                 return null;
               }
+              // Hide chat entries whose proposal was cancelled by the
+              // operator. The InFlightProposalCard already rendered a
+              // "Proposal cancelled" confirmation banner and faded out;
+              // re-rendering the placeholder's chat row after the SSE
+              // event would resurrect a stale "PM agent is working"
+              // card from the operator's perspective.
+              if (proposal && proposal.dispatch_state === 'cancelled') {
+                return null;
+              }
               return (
                 <ChatMessageRow
                   key={m.id}
@@ -1656,8 +1665,10 @@ function ChatMessageRow({
           sessionKey={null}
           sentAt={proposal.created_at}
           onCancel={() => {
-            // Cancel the placeholder by deleting it (same as dismiss).
-            fetch(`/api/pm/proposals/${proposal.id}`, { method: 'DELETE' }).catch(() => {});
+            // Flip the placeholder's dispatch_state to 'cancelled' so
+            // the dispatcher short-circuits its poll loop and the
+            // in-flight card hides via SSE.
+            fetch(`/api/pm/proposals/${proposal.id}/cancel`, { method: 'POST' }).catch(() => {});
           }}
           onUseSynthFallback={() => {
             // Accept the synth fallback — no-op for now, operator can

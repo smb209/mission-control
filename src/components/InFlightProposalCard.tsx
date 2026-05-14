@@ -23,7 +23,7 @@ import { RefreshCw, X, Loader, AlertTriangle } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type InFlightState = 'pending' | 'replaced' | 'synth_only';
+export type InFlightState = 'pending' | 'replaced' | 'synth_only' | 'cancelled';
 
 export interface InFlightProposalCardProps {
   /** Placeholder proposal id created by the async dispatch path. */
@@ -114,12 +114,17 @@ export function InFlightProposalCard({
         }
       }
 
-      // pm_proposal_dispatch_state_changed: synth_only fallback.
+      // pm_proposal_dispatch_state_changed: synth_only fallback or cancelled.
       if (parsed.type === 'pm_proposal_dispatch_state_changed') {
         const id = parsed.payload?.proposal_id as string | undefined;
         const next = parsed.payload?.dispatch_state as string | undefined;
         if (id === proposalId && next === 'synth_only') {
           setState('synth_only');
+        }
+        if (id === proposalId && next === 'cancelled') {
+          // Operator cancelled the dispatch — fade out like replaced.
+          setFadeOut(true);
+          setState('cancelled');
         }
       }
     };
@@ -147,6 +152,34 @@ export function InFlightProposalCard({
 
   const pendingStyle = `${cardStyle} border-amber-500/40 bg-amber-500/5`;
   const synthStyle = `${cardStyle} border-red-500/40 bg-red-500/5`;
+  const cancelledStyle = `${cardStyle} border-slate-400/40 bg-slate-400/5`;
+
+  // Cancelled state: fade out like replaced.
+  if (state === 'cancelled' && fadeOut) {
+    return (
+      <div className={cancelledStyle} aria-label="Proposal cancelled">
+        <div className="px-3 py-2 bg-slate-400/10 border-b border-slate-400/30 flex items-center gap-2">
+          <X className="w-4 h-4 text-slate-400 shrink-0" />
+          <span className="text-sm font-semibold text-slate-300">Proposal cancelled</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Cancelled state (pre-fade): show confirmation banner.
+  if (state === 'cancelled' && !fadeOut) {
+    return (
+      <div className={cancelledStyle}>
+        <div className="px-3 py-2 bg-slate-400/10 border-b border-slate-400/30 flex items-center gap-2">
+          <X className="w-4 h-4 text-slate-400 shrink-0" />
+          <span className="text-sm font-semibold text-slate-300">Proposal cancelled</span>
+        </div>
+        <div className="p-3">
+          <div className="text-xs text-slate-400">The dispatch was cancelled — MC will no longer wait for the agent reply.</div>
+        </div>
+      </div>
+    );
+  }
 
   if (state === 'replaced' && fadeOut) {
     // Render a minimal placeholder so the parent can handle the swap.
