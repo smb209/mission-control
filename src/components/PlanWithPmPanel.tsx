@@ -24,7 +24,7 @@ import { formatApiError } from '@/lib/format-api-error';
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Sparkles, Send, X, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { Sparkles, Send, X, RefreshCw, RotateCw, ChevronDown, ChevronRight } from 'lucide-react';
 import { parseSuggestionsFromImpactMd as parseSharedSuggestions } from '@/lib/pm/planSuggestionsSidecar';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
@@ -118,6 +118,7 @@ export default function PlanWithPmPanel({
   const [loading, setLoading] = useState(false);
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
+  const [regenerating, setRegenerating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
   // Snapshot the draft at open-time so React-driven re-renders of the
@@ -304,6 +305,57 @@ export default function PlanWithPmPanel({
     }
   };
 
+  /**
+   * Discard the current draft and ask the agent to start over. Rejects
+   * the existing proposal so the resume-by-GET path can't find it, then
+   * POSTs a fresh plan-initiative call. Mirrors
+   * DecomposeStoryToTasksModal.regenerate and DecomposeWithPmModal.regenerate.
+   */
+  const regenerate = async () => {
+    if (!proposalId || regenerating) return;
+    setRegenerating(true);
+    setErr(null);
+    setRefineText('');
+    try {
+      try {
+        await fetch(`/api/pm/proposals/${proposalId}/reject`, { method: 'POST' });
+      } catch {
+        /* best-effort */
+      }
+      setProposalId(null);
+      setProposalCreatedAt(null);
+      setImpactMd('');
+      setSuggestions(null);
+      setConvoyDiffs([]);
+      setDispatchState(null);
+      setLoading(true);
+
+      const res = await fetch('/api/pm/plan-initiative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          target_initiative_id: targetInitiativeId ?? null,
+          guidance: initialGuidance ?? null,
+          draft: draftRef.current,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(formatApiError(body, `Regenerate failed (${res.status})`));
+      setProposalId(body.proposal_id);
+      setProposalCreatedAt(body.proposal?.created_at ?? null);
+      setImpactMd(body.proposal?.impact_md ?? '');
+      setSuggestions(body.suggestions ?? null);
+      setConvoyDiffs(pickConvoyDiffs((body.proposal?.proposed_changes ?? [])));
+      setDispatchState(body.proposal?.dispatch_state ?? null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Regenerate failed');
+    } finally {
+      setRegenerating(false);
+      setLoading(false);
+    }
+  };
+
   const apply = () => {
     if (suggestions && proposalId) onApply(suggestions, { proposalId });
   };
@@ -473,7 +525,21 @@ export default function PlanWithPmPanel({
             </label>
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={regenerate}
+              disabled={regenerating || loading || !proposalId}
+              title={
+                proposalId
+                  ? 'Discard the current draft and ask the agent to start over from scratch.'
+                  : 'No draft to regenerate yet.'
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-mc-border text-mc-text-secondary text-xs hover:text-mc-text disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RotateCw className={`w-3 h-3 ${regenerating ? 'animate-spin' : ''}`} />
+              {regenerating ? 'Regenerating…' : 'Discard & regenerate'}
+            </button>
+            <div className="flex-1" />
             <button
               onClick={rejectAndClose}
               className="px-3 py-1.5 rounded border border-mc-border text-mc-text-secondary text-xs"
@@ -482,7 +548,7 @@ export default function PlanWithPmPanel({
             </button>
             <button
               onClick={apply}
-              disabled={dispatchState === 'pending_agent'}
+              disabled={dispatchState === 'pending_agent' || regenerating}
               title={
                 dispatchState === 'pending_agent'
                   ? 'PM agent is still composing — wait for it to land or click Discard if you want to start over.'

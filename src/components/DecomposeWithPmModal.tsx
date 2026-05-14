@@ -32,7 +32,7 @@ import { formatApiError } from '@/lib/format-api-error';
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { Sparkles, Send, RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { Sparkles, Send, RefreshCw, RotateCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
 import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
 
@@ -102,6 +102,7 @@ export default function DecomposeWithPmModal({
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
   const [accepting, setAccepting] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [dispatchState, setDispatchState] = useState<'pending_agent' | 'agent_complete' | 'synth_only' | null>(null);
 
@@ -238,6 +239,53 @@ export default function DecomposeWithPmModal({
       setErr(e instanceof Error ? e.message : 'Refine failed');
     } finally {
       setRefining(false);
+    }
+  };
+
+  /**
+   * Discard the current draft and ask the agent to start over. Rejects
+   * the existing proposal so the resume-by-GET path can't find it, then
+   * POSTs a fresh decompose. Mirrors DecomposeStoryToTasksModal.regenerate.
+   */
+  const regenerate = async () => {
+    if (!proposalId || regenerating) return;
+    setRegenerating(true);
+    setErr(null);
+    setRefineText('');
+    try {
+      try {
+        await fetch(`/api/pm/proposals/${proposalId}/reject`, { method: 'POST' });
+      } catch {
+        /* best-effort */
+      }
+      setProposalId(null);
+      setProposalCreatedAt(null);
+      setImpactMd('');
+      setChildren([]);
+      setDispatchState(null);
+      setLoading(true);
+
+      const res = await fetch('/api/pm/decompose-initiative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          initiative_id: initiative.id,
+          ...(hint ? { hint } : initialHint ? { hint: initialHint } : {}),
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(formatApiError(body, `Regenerate failed (${res.status})`));
+      const proposal = body.proposal as ProposalRow;
+      setProposalId(proposal.id);
+      setProposalCreatedAt(proposal.created_at);
+      setImpactMd(proposal.impact_md);
+      setChildren(proposal.proposed_changes);
+      setDispatchState(proposal.dispatch_state ?? null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Regenerate failed');
+    } finally {
+      setRegenerating(false);
+      setLoading(false);
     }
   };
 
@@ -550,7 +598,21 @@ export default function DecomposeWithPmModal({
           })()}
         </div>
 
-        <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2">
+        <footer className="border-t border-mc-border px-5 py-3 flex items-center gap-2">
+          <button
+            onClick={regenerate}
+            disabled={regenerating || loading || !proposalId || accepting}
+            title={
+              proposalId
+                ? 'Discard the current draft and ask the agent to start over from scratch.'
+                : 'No draft to regenerate yet.'
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm hover:text-mc-text disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${regenerating ? 'animate-spin' : ''}`} />
+            {regenerating ? 'Regenerating…' : 'Discard & regenerate'}
+          </button>
+          <div className="flex-1" />
           <button
             onClick={onClose}
             className="px-3 py-2 rounded border border-mc-border text-mc-text-secondary text-sm"
@@ -559,7 +621,7 @@ export default function DecomposeWithPmModal({
           </button>
           <button
             onClick={accept}
-            disabled={accepting || loading || children.length === 0 || !proposalId || dispatchState === 'pending_agent'}
+            disabled={accepting || loading || regenerating || children.length === 0 || !proposalId || dispatchState === 'pending_agent'}
             title={
               dispatchState === 'pending_agent'
                 ? 'PM agent is still composing — wait for its decomposition or click Cancel.'
