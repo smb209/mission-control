@@ -34,7 +34,12 @@ import { formatApiError } from '@/lib/format-api-error';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Sparkles, Send, RefreshCw, RotateCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
-import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
+import {
+  ConvoyDiffPreview,
+  pickConvoyDiffs,
+  type ConvoyDiff,
+  type ConvoySliceInput,
+} from '@/components/ConvoyDiffPreview';
 
 interface InitiativeLite {
   id: string;
@@ -155,6 +160,30 @@ export default function DecomposeWithPmModal({
       cancelled = true;
     };
   }, [initiative.id, initiative.workspace_id, initialHint]);
+
+  /**
+   * Apply a per-slice edit (currently just `role`) to whichever
+   * `create_convoy_under_initiative` diff in `children` owns the slice.
+   * The modal's existing accept flow persists `children` via PUT /diffs
+   * before POSTing accept, so this just needs to mutate local state.
+   */
+  const editConvoySlice = useCallback(
+    (sliceId: string, patch: Partial<ConvoySliceInput>) => {
+      setChildren((prev) =>
+        prev.map((diff) => {
+          if (diff.kind !== 'create_convoy_under_initiative') return diff;
+          const convoy = diff as ConvoyDiff;
+          return {
+            ...convoy,
+            slices: convoy.slices.map((s) =>
+              s.id === sliceId ? { ...s, ...patch } : s,
+            ),
+          } as typeof diff;
+        }),
+      );
+    },
+    [],
+  );
 
   /**
    * Fetch a specific proposal by id and hydrate modal state. Called by
@@ -473,7 +502,12 @@ export default function DecomposeWithPmModal({
               {convoyDiffs.length > 0 && (
                 <div className="shrink-0 max-h-[40vh] overflow-y-auto pr-1">
                   {convoyDiffs.map((d, i) => (
-                    <ConvoyDiffPreview key={i} diff={d} className="space-y-3 mb-3" />
+                    <ConvoyDiffPreview
+                      key={i}
+                      diff={d}
+                      onSliceEdit={editConvoySlice}
+                      className="space-y-3 mb-3"
+                    />
                   ))}
                 </div>
               )}
@@ -498,7 +532,7 @@ export default function DecomposeWithPmModal({
                 {children.length === 0 ? (
                   <p className="text-sm text-mc-text-secondary">No children proposed. Add one manually above or refine below.</p>
                 ) : childInitiatives.length === 0 ? (
-                  <p className="text-sm text-mc-text-secondary">Convoy plan is read-only here — use Refine to revise.</p>
+                  <p className="text-sm text-mc-text-secondary">Click a slice&apos;s role badge to reassign; use Refine for deeper changes.</p>
                 ) : (
                   <ul className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
                     {children.map((c, i) => {
