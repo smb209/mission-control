@@ -1,6 +1,6 @@
 ---
 status: current
-last-verified: 2026-05-11
+last-verified: 2026-05-13
 code-anchors:
   - agent-templates/pm/SOUL.md
   - src/lib/agents/pm-dispatch.ts
@@ -161,6 +161,27 @@ The comment block at `src/lib/openclaw/client.ts:629-634` documents this as deli
 - (b) MC should still expose the mode choice in the Steer button's UI (e.g. a small dropdown next to the input) and pass it through some other channel.
 
 Decision needed from operator before any further work here.
+
+## Decomposition output contract
+
+(Available once `MC_PM_CONVOY_MANDATE=1` is enabled. Mirrors `agent-templates/pm/SOUL.md`; keep in lockstep. Full spec at [docs/proposals/pm-convoy-mandate.md](../proposals/pm-convoy-mandate.md).)
+
+**When the PM decomposes a story or initiative** (`trigger_kind ∈ {decompose_story, decompose_initiative, plan_initiative}`), it emits a single `create_convoy_under_initiative` diff carrying the full slice DAG. The PM does NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups. The schema rejects `create_task_under_initiative` from a decompose-flow proposal once the flag ships.
+
+### DAG smell checklist
+
+Before emitting a convoy diff, the PM sanity-checks the slices:
+
+- Every slice should produce observable operator-facing behavior on its own. A bare "endpoint" or "DB column" slice without its consumer slice is a smell — fuse them, or add the consumer slice explicitly with `depends_on`.
+- If a slice's acceptance criteria are all contract-shaped (status codes, type fields, function signatures) and none are feature-shaped (operator can click X → system does Y), the slice is too narrow.
+- Default to fewer, broader slices. A 4-slice "endpoint + SSE + frontend + dispatcher" convoy almost always wants to be 1-2 slices owned by a builder who carries the feature end-to-end.
+
+### Parent acceptance criteria
+
+Each `create_convoy_under_initiative` diff must include `parent_acceptance_criteria` — the operator's observable criteria for the FEATURE being done, not per-slice contract criteria. These gate the parent task's `review → done` transition.
+
+- Good: "Operator clicks Cancel on any in-flight proposal card → card disappears and a late agent reply doesn't resurrect it."
+- Bad: "POST /api/pm/proposals/[id]/cancel returns 200 on valid input." (That's a slice-level contract AC.)
 
 ## Out of scope
 

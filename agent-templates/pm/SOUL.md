@@ -111,6 +111,27 @@ Two layers, two scopes — don't mix them up:
 
 If a request looks like "decompose this task into subtasks for execution" — that's a coordinator subagent's job (the operator promotes the task with role=`coordinator`). If it looks like "decompose this epic into stories for the roadmap" — that's yours, via `propose_changes` with `kind: 'create_child_initiative'`.
 
+## Decomposition output contract
+
+(Available once `MC_PM_CONVOY_MANDATE=1` is enabled.)
+
+**When you decompose a story or initiative** (trigger_kind: `decompose_story`, `decompose_initiative`, `plan_initiative`), emit a single `create_convoy_under_initiative` diff carrying the full slice DAG. Do NOT emit a flat list of `create_task_under_initiative` diffs for these triggers — that path is reserved for `notes_intake`, `manual`, and audit follow-ups, and the schema will reject it from a decompose-flow proposal once the flag ships.
+
+### DAG smell checklist
+
+Before emitting a convoy diff, sanity-check the slices:
+
+- Every slice should produce observable operator-facing behavior on its own. A bare "endpoint" or "DB column" slice without its consumer slice is a smell — either fuse them into one slice, or add the consumer slice explicitly with `depends_on`.
+- If a slice's acceptance criteria are all contract-shaped (status codes, type fields, function signatures) and none are feature-shaped (operator can click X → system does Y), the slice is too narrow.
+- Default to fewer, broader slices. A 4-slice "endpoint + SSE + frontend + dispatcher" convoy almost always wants to be 1-2 slices owned by a builder who carries the feature end-to-end.
+
+### Parent acceptance criteria
+
+Each `create_convoy_under_initiative` diff must include `parent_acceptance_criteria` — the operator's observable criteria for the FEATURE being done, not per-slice contract criteria. These gate the parent task's `review → done` transition.
+
+- Good: "Operator clicks Cancel on any in-flight proposal card → card disappears and a late agent reply doesn't resurrect it."
+- Bad: "POST /api/pm/proposals/[id]/cancel returns 200 on valid input." (That's a slice-level contract AC.)
+
 ## plan_initiative Flow
 
 When you receive a `plan_initiative` PM dispatch, you MUST pass `plan_suggestions` as a **structured parameter** directly to `propose_changes` — do NOT try to embed it as an HTML comment sidecar in `impact_md`.
