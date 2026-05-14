@@ -11,6 +11,7 @@ import { TaskModal } from './TaskModal';
 import { BlockedBadge } from './BlockedBadge';
 import { Time } from '@/components/Time';
 import { AcAckModal, type AcStatus } from './AcAckModal';
+import { filterTasksForBoard, convoyBadgeText } from '@/lib/convoy-board-render';
 
 interface MissionQueueProps {
   workspaceId?: string;
@@ -115,15 +116,21 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   // synchronously while the modal also revalidates on open.
   const [acGate, setAcGate] = useState<{ task: Task; acs: AcStatus[] } | null>(null);
 
+  // PM convoy mandate slice 7/7: filter out subtasks of 1-slice convoys so
+  // single-slice decompositions present as a plain parent task on the board.
+  // Multi-slice convoy subtasks are kept (first-class rows in their status
+  // columns) and the parent row picks up a "Convoy · N · M done" badge.
+  const visibleTasks = filterTasksForBoard(tasks);
+
   const getTasksByStatus = (status: TaskStatus) =>
-    tasks.filter(
+    visibleTasks.filter(
       (task) =>
         task.status === status &&
         (showArchived || !task.is_archived),
     );
 
   const getTasksForColumn = (column: Column) =>
-    tasks.filter(
+    visibleTasks.filter(
       (task) =>
         column.matches.includes(task.status) &&
         (showArchived || !task.is_archived),
@@ -671,7 +678,13 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
         {isConvoyActive && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-cyan-500/10 rounded-md border border-cyan-500/20`}>
             <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse shrink-0" />
-            <span className="text-xs text-cyan-300 font-medium">Convoy active — sub-tasks running</span>
+            <span className="text-xs text-cyan-300 font-medium">
+              {/* PM convoy mandate slice 7/7: show slice progress when the
+                  convoy has more than one slice. 1-slice convoys never
+                  reach this branch — they're collapsed by filterTasksForBoard
+                  upstream, so we'd be rendering the parent alone. */}
+              {convoyBadgeText(task) ?? 'Convoy active — sub-tasks running'}
+            </span>
           </div>
         )}
 

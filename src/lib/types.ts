@@ -155,6 +155,28 @@ export interface Task {
   // Joined fields
   assigned_agent?: Agent;
   created_by_agent?: Agent;
+  /**
+   * PM convoy mandate slice 7/7: when this task is the PARENT of an active
+   * convoy, this aggregate lets the board render a "Convoy · N · M done"
+   * badge without a second fetch. NULL when the task has no active convoy.
+   */
+  convoy_summary?: ConvoyBoardSummary | null;
+  /**
+   * PM convoy mandate slice 7/7: when this task IS a convoy subtask
+   * (`is_subtask === 1`), this is the total slice count of the owning convoy.
+   * Used to collapse 1-slice convoys on the Task Board — operators see only
+   * the parent, the lone subtask is hidden as ceremony. NULL when the task
+   * isn't a subtask or its convoy disappeared.
+   */
+  convoy_total_subtasks?: number | null;
+}
+
+export interface ConvoyBoardSummary {
+  convoy_id: string;
+  total_subtasks: number;
+  completed_subtasks: number;
+  failed_subtasks: number;
+  status: string;
 }
 
 export interface TaskImage {

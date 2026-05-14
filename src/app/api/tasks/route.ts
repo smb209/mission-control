@@ -17,6 +17,13 @@ export async function GET(request: NextRequest) {
     const workspaceId = searchParams.get('workspace_id');
     const assignedAgentId = searchParams.get('assigned_agent_id');
 
+    // PM convoy mandate slice 7/7: also join the convoy aggregates so the
+    // Task Board can render the parent-row badge ("Convoy · N · M done") and
+    // collapse 1-slice convoys without a second round-trip per task.
+    //   - `parent_convoy_*` columns are populated when this task IS a parent
+    //     with an active convoy underneath.
+    //   - `child_convoy_total` is populated when this task is itself a
+    //     subtask; it's the slice count of the owning convoy.
     let sql = `
       SELECT
         t.*,
@@ -24,10 +31,18 @@ export async function GET(request: NextRequest) {
         aa.avatar_emoji as assigned_agent_emoji,
         aa.status as assigned_agent_status,
         aa.role as assigned_agent_role,
-        ca.name as created_by_agent_name
+        ca.name as created_by_agent_name,
+        pc.id as parent_convoy_id,
+        pc.total_subtasks as parent_convoy_total,
+        pc.completed_subtasks as parent_convoy_completed,
+        pc.failed_subtasks as parent_convoy_failed,
+        pc.status as parent_convoy_status,
+        cc.total_subtasks as child_convoy_total
       FROM tasks t
       LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
       LEFT JOIN agents ca ON t.created_by_agent_id = ca.id
+      LEFT JOIN convoys pc ON pc.parent_task_id = t.id AND pc.status = 'active'
+      LEFT JOIN convoys cc ON cc.id = t.convoy_id
       WHERE 1=1
     `;
     const params: unknown[] = [];
@@ -64,6 +79,12 @@ export async function GET(request: NextRequest) {
       assigned_agent_status?: string;
       assigned_agent_role?: string;
       created_by_agent_name?: string;
+      parent_convoy_id?: string | null;
+      parent_convoy_total?: number | null;
+      parent_convoy_completed?: number | null;
+      parent_convoy_failed?: number | null;
+      parent_convoy_status?: string | null;
+      child_convoy_total?: number | null;
     }>(sql, params);
 
     // Transform to include nested agent info. `status` and `role` are needed
@@ -80,6 +101,16 @@ export async function GET(request: NextRequest) {
             role: task.assigned_agent_role,
           }
         : undefined,
+      convoy_summary: task.parent_convoy_id
+        ? {
+            convoy_id: task.parent_convoy_id,
+            total_subtasks: task.parent_convoy_total ?? 0,
+            completed_subtasks: task.parent_convoy_completed ?? 0,
+            failed_subtasks: task.parent_convoy_failed ?? 0,
+            status: task.parent_convoy_status ?? 'active',
+          }
+        : null,
+      convoy_total_subtasks: task.is_subtask ? task.child_convoy_total ?? null : null,
     }));
 
     return NextResponse.json(transformedTasks);
