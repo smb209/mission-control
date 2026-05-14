@@ -7,12 +7,17 @@ code-anchors:
   - src/lib/db/pm-proposals.ts
   - src/lib/agents/pm-agent.ts
   - src/lib/convoy.ts
+  - src/lib/convoy-board-render.ts
   - src/lib/mcp/groups/work.ts:1565-1872
   - src/lib/services/task-status.ts:78-192
   - src/app/api/pm/proposals/[id]/accept/route.ts
+  - src/app/api/tasks/route.ts
   - src/components/DecomposeWithPmModal.tsx
   - src/components/DecomposeStoryToTasksModal.tsx
   - src/components/PlanWithPmPanel.tsx
+  - src/components/MissionQueue.tsx
+  - agent-templates/coordinator/SOUL.md
+  - agent-templates/coordinator/AGENTS.md
 mcp-tools: [propose_changes, plan_convoy, spawn_subtask]
 db-tables: [pm_proposals, convoys, convoy_subtasks, tasks, initiatives]
 related-specs:
@@ -27,9 +32,9 @@ related-specs:
 
 ## Status
 
-Current. Phases 1 and 2 have shipped across PRs #353–#357 (slices 1–6 of 7). The mandate replaces the previous `decompose_story` / `decompose_initiative` / `plan_initiative` output shape (an array of `create_task_under_initiative` diffs) with a `create_convoy_under_initiative` diff carrying a slice DAG. The wholistic fix to two locality bugs we kept re-hitting.
+Current. All 7 slices have shipped (PRs #353–#357 + this PR). The mandate replaces the previous `decompose_story` / `decompose_initiative` / `plan_initiative` output shape (an array of `create_task_under_initiative` diffs) with a `create_convoy_under_initiative` diff carrying a slice DAG. The wholistic fix to two locality bugs we kept re-hitting.
 
-Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) is queued as slice 7.
+Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) has shipped as slice 7 — the final piece of the mandate.
 
 ## Shipped state (as of 2026-05-14)
 
@@ -38,7 +43,8 @@ Phase 3 (Task Board collapse for 1-slice convoys, coordinator SOUL shrink) is qu
 - Slice 3 (PR #353) — PM SOUL + [`docs/reference/pm-chat-prompt.md`](pm-chat-prompt.md) updated with the decompose-flow output contract and DAG smell checklist.
 - Slice 4 (PR #356) — DAG approval UX in [`src/components/ConvoyDiffPreview.tsx`](../../src/components/ConvoyDiffPreview.tsx) and the three decompose modals.
 - Slice 5 — AC gate at parent `review → done` + migration 096 (`task_ac_acknowledgements`) + `AcAckModal`. Endpoint: `GET/POST /api/tasks/[id]/ac-ack`.
-- Slice 6 (this PR) — the `MC_PM_CONVOY_MANDATE=1` flag now causes [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) to REJECT `create_task_under_initiative` diffs from `decompose_story` / `decompose_initiative` / `plan_initiative` proposals, and to require at least one `create_convoy_under_initiative` in those flows. Carve-outs preserved for `notes_intake`, `manual`, and other tactical kinds. Proposal promoted to `docs/reference/`. Reference-spec edits land in the same PR.
+- Slice 6 — the `MC_PM_CONVOY_MANDATE=1` flag now causes [`validateProposedChanges`](../../src/lib/db/pm-proposals.ts) to REJECT `create_task_under_initiative` diffs from `decompose_story` / `decompose_initiative` / `plan_initiative` proposals, and to require at least one `create_convoy_under_initiative` in those flows. Carve-outs preserved for `notes_intake`, `manual`, and other tactical kinds. Proposal promoted to `docs/reference/`. Reference-spec edits land in the same PR.
+- Slice 7 (this PR) — Task Board ([`MissionQueue.tsx`](../../src/components/MissionQueue.tsx)) collapses 1-slice convoys via [`filterTasksForBoard`](../../src/lib/convoy-board-render.ts) so single-slice decompositions present as a plain parent task. Multi-slice convoy parents pick up a "Convoy · N slices · M done" badge. GET /api/tasks now joins `convoys` so the per-card aggregates land without a second fetch. Coordinator [`SOUL.md`](../../agent-templates/coordinator/SOUL.md) + [`AGENTS.md`](../../agent-templates/coordinator/AGENTS.md) shrink to monitor + accept + escalate; `spawn_subtask` / `plan_convoy` remain as fallback for mid-flight slice appends.
 
 ### Flag default
 

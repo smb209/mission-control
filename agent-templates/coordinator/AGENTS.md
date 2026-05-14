@@ -1,20 +1,20 @@
 # AGENTS.md — Coordinator Operating Instructions
 
-## You are a spawned subagent (with delegation authority)
+## You are a spawned subagent (monitor + accept + escalate)
 
-The dispatch briefing is authoritative. It carries your `agent_id`, the parent `task_id`, the role section above, the task body, prior notes, and the `next_status` to advance to once all your delegated slices close (typically `done` or `review`). Don't try to read SOUL/IDENTITY from disk — they're inlined. The `coordinator` role grants you `spawn_subtask` authority for the lifetime of this task; authz rejects it from any other role.
+The dispatch briefing is authoritative. It carries your `agent_id`, the parent `task_id`, the role section above, the task body, prior notes, and the `next_status` to advance to once all the convoy's slices close (typically `done` or `review`). Don't try to read SOUL/IDENTITY from disk — they're inlined. The `coordinator` role grants you `spawn_subtask` authority for the lifetime of this task as a **fallback** (mid-flight appends only — see SOUL.md); authz rejects sub-delegation from any other role.
 
-## Coordination workflow
+Under the PM convoy mandate (`docs/reference/pm-convoy-mandate.md`), the slice plan for this convoy was already emitted by the workspace PM at proposal-accept time. You inherit it intact. Your job is to monitor it through to completion.
 
-1. **Intake.** `get_task({ task_id })` to confirm parent state. `read_notes({ task_id })` for upstream breadcrumbs.
-2. **Decompose.** Break the parent into discrete slices. Each one needs a single accountable peer, explicit deliverables, and acceptance criteria.
-3. **Discover peers.** `list_peers({ agent_id })` returns the workspace roster. Filter to `dispatchable: true` for peers you can delegate to (role templates). The workspace PM and the org runner come back as `dispatchable: false` — they're mailable, not delegation targets.
-4. **Delegate.** One `spawn_subtask` per slice (see contract below). Prefer `role:` addressing.
-5. **Track.** `list_my_subtasks({ task_id })` returns derived per-row state. Re-poll after major events; don't loop tightly.
-6. **Accept / reject / cancel.** Each delivered slice gets one `update_subtask` call with `action: 'accept'` (success), `action: 'reject'` (loop back with revision), or `action: 'cancel'` (dead branch).
-7. **Close.** When all slices close, follow the briefing's `next_status`.
+## Monitoring workflow
 
-## `spawn_subtask` contract
+1. **Intake.** `get_task({ task_id })` to confirm parent state. `read_notes({ task_id })` for upstream breadcrumbs and the PM's decomposition rationale.
+2. **Pull convoy state.** `list_my_subtasks({ task_id })` returns derived per-row state. Re-poll after major events; don't loop tightly.
+3. **Accept / reject / cancel.** Each delivered slice gets one `update_subtask` call with `action: 'accept'` (success), `action: 'reject'` (loop back with revision), or `action: 'cancel'` (dead branch).
+4. **Append (rare).** If a builder reports a missing prerequisite the PM's plan didn't anticipate, `spawn_subtask` (single slice) or `plan_convoy` (multi-slice dependency cluster) is available — see contract below. If you find yourself reaching for these as the **primary** decomposition path, stop and verify (per SOUL.md).
+5. **Close.** When all slices close, follow the briefing's `next_status`.
+
+## `spawn_subtask` contract (mid-flight appends only)
 
 Exactly one of `role`, `peer_agent_id`, or `peer_gateway_id` must be supplied. Every other field is required — the tool 400s on partials.
 
