@@ -169,13 +169,21 @@ export default function DecomposeStoryToTasksModal({
     }
   }, []);
 
-  // SSE: listen for `pm_proposal_dispatch_state_changed` so the named-
-  // agent timeout (synth_only fallback) flips the modal out of the
-  // in-flight render path. Replacement events arrive through
-  // InFlightProposalCard's onReplaced callback (see render below) —
-  // single source of truth for the agent-finished signal.
+  // SSE listener:
+  //   - `pm_proposal_dispatch_state_changed` → flips the modal out of
+  //     the in-flight render path on synth_only timeout.
+  //   - `pm_proposal_replaced` → belt-and-suspenders fallback to the
+  //     InFlightProposalCard's onReplaced callback. The card-driven path
+  //     should fire first; if the card has unmounted, churned its
+  //     EventSource between cleanup and resubscribe, or otherwise missed
+  //     the frame, this independent listener still triggers fetchById.
+  //
+  // proposalIdRef avoids re-running the effect every time proposalId
+  // changes — otherwise we'd churn the EventSource and risk missing the
+  // very replace frame we're listening for.
+  const proposalIdRef = useRef<string | null>(null);
+  proposalIdRef.current = proposalId;
   useEffect(() => {
-    if (!proposalId) return;
     const es = new EventSource('/api/events/stream');
     let cancelled = false;
     es.onmessage = (ev) => {
@@ -183,17 +191,25 @@ export default function DecomposeStoryToTasksModal({
       let parsed: { type?: string; payload?: Record<string, unknown> } | null = null;
       try { parsed = JSON.parse(ev.data); } catch { return; }
       if (!parsed || !parsed.type) return;
+      const currentId = proposalIdRef.current;
+      if (!currentId) return;
       if (parsed.type === 'pm_proposal_dispatch_state_changed') {
         const id = parsed.payload?.proposal_id as string | undefined;
         const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
-        if (id === proposalId && next) setDispatchState(next);
+        if (id === currentId && next) setDispatchState(next);
+      } else if (parsed.type === 'pm_proposal_replaced') {
+        const oldId = parsed.payload?.old_id as string | undefined;
+        const newId = parsed.payload?.new_id as string | undefined;
+        if (oldId === currentId && newId) {
+          void fetchById(newId);
+        }
       }
     };
     return () => {
       cancelled = true;
       es.close();
     };
-  }, [proposalId]);
+  }, [fetchById]);
 
   // Stash onClose in a ref so the keydown subscription doesn't churn
   // on every parent render — same fix as Drawer.tsx.

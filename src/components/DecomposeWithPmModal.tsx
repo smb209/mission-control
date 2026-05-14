@@ -182,13 +182,14 @@ export default function DecomposeWithPmModal({
     }
   }, []);
 
-  // SSE: listen for `pm_proposal_dispatch_state_changed` so the named-
-  // agent timeout (synth_only fallback) flips the modal out of the
-  // in-flight render path. Replacement events arrive through
-  // InFlightProposalCard's onReplaced callback — single source of
-  // truth for the agent-finished signal.
+  // SSE listener: same belt-and-suspenders pattern as
+  // DecomposeStoryToTasksModal — handle both dispatch_state_changed and
+  // pm_proposal_replaced here as a fallback to the card's onReplaced.
+  // proposalIdRef avoids effect churn that would otherwise risk missing
+  // the replace frame.
+  const proposalIdRef = useRef<string | null>(null);
+  proposalIdRef.current = proposalId;
   useEffect(() => {
-    if (!proposalId) return;
     const es = new EventSource('/api/events/stream');
     let cancelled = false;
     es.onmessage = (ev) => {
@@ -196,17 +197,25 @@ export default function DecomposeWithPmModal({
       let parsed: { type?: string; payload?: Record<string, unknown> } | null = null;
       try { parsed = JSON.parse(ev.data); } catch { return; }
       if (!parsed || !parsed.type) return;
+      const currentId = proposalIdRef.current;
+      if (!currentId) return;
       if (parsed.type === 'pm_proposal_dispatch_state_changed') {
         const id = parsed.payload?.proposal_id as string | undefined;
         const next = parsed.payload?.dispatch_state as 'pending_agent' | 'agent_complete' | 'synth_only' | undefined;
-        if (id === proposalId && next) setDispatchState(next);
+        if (id === currentId && next) setDispatchState(next);
+      } else if (parsed.type === 'pm_proposal_replaced') {
+        const oldId = parsed.payload?.old_id as string | undefined;
+        const newId = parsed.payload?.new_id as string | undefined;
+        if (oldId === currentId && newId) {
+          void fetchById(newId);
+        }
       }
     };
     return () => {
       cancelled = true;
       es.close();
     };
-  }, [proposalId]);
+  }, [fetchById]);
 
   // Esc to close. Stash onClose in a ref so the keydown subscription
   // doesn't churn on every parent render (caller-supplied onClose is
