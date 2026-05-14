@@ -19,6 +19,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Send, RefreshCw, Plus, Trash2, ArrowUp, ArrowDown, X } from 'lucide-react';
 import { InFlightProposalCard } from '@/components/InFlightProposalCard';
+import { ConvoyDiffPreview, pickConvoyDiffs, type ConvoyDiff } from '@/components/ConvoyDiffPreview';
 
 interface InitiativeLite {
   id: string;
@@ -37,12 +38,22 @@ interface TaskDiff {
   status_check_md?: string | null;
 }
 
+/**
+ * Convoy mandate (slice 4): a decompose-story proposal may now carry one
+ * or more `create_convoy_under_initiative` diffs instead of (or alongside)
+ * the legacy flat task list. The modal renders both shapes — flat tasks
+ * keep their existing per-row editor; convoy diffs render read-only
+ * through ConvoyDiffPreview and ship as-is on accept (no inline editing
+ * in V1; operator uses Refine to revise the plan).
+ */
+type AnyDiff = TaskDiff | ConvoyDiff;
+
 interface ProposalRow {
   id: string;
   trigger_text: string;
   trigger_kind: string;
   impact_md: string;
-  proposed_changes: TaskDiff[];
+  proposed_changes: AnyDiff[];
   status: string;
   dispatch_state?: 'pending_agent' | 'agent_complete' | 'synth_only' | null;
   created_at: string;
@@ -70,7 +81,7 @@ export default function DecomposeStoryToTasksModal({
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [proposalCreatedAt, setProposalCreatedAt] = useState<string | null>(null);
   const [impactMd, setImpactMd] = useState<string>('');
-  const [tasks, setTasks] = useState<TaskDiff[]>([]);
+  const [tasks, setTasks] = useState<AnyDiff[]>([]);
   const [loading, setLoading] = useState(false);
   const [refining, setRefining] = useState(false);
   const [refineText, setRefineText] = useState('');
@@ -236,6 +247,13 @@ export default function DecomposeStoryToTasksModal({
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || `Accept failed (${res.status})`);
+      // Convoy mandate (slice 4): on a successful apply the backend
+      // mutates each create_convoy_under_initiative diff in place with
+      // `created_convoy_id` + `created_parent_task_id`. We expose that to
+      // the host so it can navigate to the parent task page where the
+      // operator can monitor dispatch instead of bouncing back to the
+      // roadmap. Hosts that don't care still get the existing onAccepted
+      // ping.
       onAccepted();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Accept failed');
@@ -253,7 +271,11 @@ export default function DecomposeStoryToTasksModal({
   };
 
   const updateTask = (i: number, patch: Partial<TaskDiff>) => {
-    setTasks(prev => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+    setTasks(prev =>
+      prev.map((c, idx) =>
+        idx === i && c.kind === 'create_task_under_initiative' ? { ...c, ...patch } : c,
+      ),
+    );
   };
 
   const removeTask = (i: number) => {
@@ -335,7 +357,16 @@ export default function DecomposeStoryToTasksModal({
                 setDispatchState('synth_only');
               }}
             />
-          ) : (
+          ) : (() => {
+            // Convoy mandate (slice 4): split diffs by kind so convoy DAGs
+            // render through the shared preview while flat task diffs
+            // (notes-intake style, or legacy decompose output) still get
+            // the inline editor.
+            const convoyDiffs = pickConvoyDiffs(tasks);
+            const flatTasks = tasks.filter(
+              (t): t is TaskDiff => t.kind === 'create_task_under_initiative',
+            );
+            return (
             <>
               {displayMd && (
                 <div className="shrink-0 max-h-32 overflow-y-auto text-xs text-mc-text-secondary whitespace-pre-wrap rounded border border-mc-border bg-mc-bg p-3">
@@ -343,24 +374,40 @@ export default function DecomposeStoryToTasksModal({
                 </div>
               )}
 
+              {convoyDiffs.length > 0 && (
+                <div className="shrink-0 max-h-[40vh] overflow-y-auto pr-1">
+                  {convoyDiffs.map((d, i) => (
+                    <ConvoyDiffPreview key={i} diff={d} className="space-y-3 mb-3" />
+                  ))}
+                </div>
+              )}
+
               <div className="flex-1 min-h-0 flex flex-col">
                 <div className="shrink-0 flex items-center gap-2 mb-2">
                   <h3 className="text-sm font-medium text-mc-text">
-                    Proposed tasks ({tasks.length})
+                    {convoyDiffs.length > 0 && flatTasks.length === 0
+                      ? `Convoy plan (${convoyDiffs.reduce((n, d) => n + d.slices.length, 0)} slices)`
+                      : `Proposed tasks (${flatTasks.length})`}
                   </h3>
-                  <button
-                    onClick={addTask}
-                    className="ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
-                  >
-                    <Plus className="w-3 h-3" /> Add task
-                  </button>
+                  {!(convoyDiffs.length > 0 && flatTasks.length === 0) && (
+                    <button
+                      onClick={addTask}
+                      className="ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-mc-border text-mc-text-secondary hover:text-mc-text hover:border-mc-accent/40"
+                    >
+                      <Plus className="w-3 h-3" /> Add task
+                    </button>
+                  )}
                 </div>
 
                 {tasks.length === 0 ? (
                   <p className="text-sm text-mc-text-secondary">No tasks proposed. Add one manually above or refine below.</p>
+                ) : flatTasks.length === 0 ? (
+                  <p className="text-sm text-mc-text-secondary">Convoy plan is read-only here — use Refine to revise.</p>
                 ) : (
                   <ul className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
-                    {tasks.map((c, i) => (
+                    {tasks.map((c, i) => {
+                      if (c.kind !== 'create_task_under_initiative') return null;
+                      return (
                       <li
                         key={i}
                         className="rounded border border-mc-border bg-mc-bg p-3 space-y-2"
@@ -417,7 +464,8 @@ export default function DecomposeStoryToTasksModal({
                           aria-label={`Description for task ${i + 1}`}
                         />
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -454,7 +502,8 @@ export default function DecomposeStoryToTasksModal({
                 </label>
               </div>
             </>
-          )}
+            );
+          })()}
         </div>
 
         <footer className="border-t border-mc-border px-5 py-3 flex justify-end gap-2">
@@ -474,7 +523,19 @@ export default function DecomposeStoryToTasksModal({
             }
             className="px-3 py-2 rounded bg-mc-accent text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {accepting ? 'Creating…' : `Accept (${tasks.length} draft task${tasks.length === 1 ? '' : 's'})`}
+            {accepting
+              ? 'Creating…'
+              : (() => {
+                  const convoyDiffs = pickConvoyDiffs(
+                    tasks,
+                  );
+                  const sliceCount = convoyDiffs.reduce((n, d) => n + d.slices.length, 0);
+                  if (convoyDiffs.length > 0 && sliceCount > 0) {
+                    return `Plan and dispatch convoy (${sliceCount} slice${sliceCount === 1 ? '' : 's'})`;
+                  }
+                  const taskCount = tasks.filter((t) => t.kind === 'create_task_under_initiative').length;
+                  return `Accept (${taskCount} draft task${taskCount === 1 ? '' : 's'})`;
+                })()}
           </button>
         </footer>
       </div>
