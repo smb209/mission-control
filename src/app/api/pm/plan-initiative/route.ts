@@ -142,11 +142,10 @@ export async function POST(request: NextRequest) {
       trigger_kind: 'plan_initiative',
       target_initiative_id: parsed.data.target_initiative_id ?? null,
       planSessionKey,
-      // plan_initiative prompts are large (description + guidance + roadmap
-      // snapshot summary) and the PM agent often takes 60-90s to compose a
-      // structured rewrite. Default 60s is too tight; observed cold-session
-      // round trips at ~70s in the wild.
-      timeoutMs: 120_000,
+      // No timeoutMs — inherits the env-tunable default in
+      // pm-dispatch.ts (MC_PM_NAMED_AGENT_TIMEOUT_MS, currently 10min).
+      // Operators preferred a longer wait over seeing the low-info
+      // synth placeholder while the LLM is still producing.
       synth: { impact_md: synth.impact_md, changes: synth.changes, plan_suggestions: synth.suggestions as unknown as Record<string, unknown> },
       chat_context: {
         target_initiative_id: parsed.data.target_initiative_id ?? null,

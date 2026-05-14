@@ -121,8 +121,30 @@ export class PmDispatchGatewayUnavailableError extends Error {
 /**
  * Default time we wait for the named PM agent to respond (i.e. land a
  * row via `propose_changes`) before falling back to the synth path.
+ *
+ * Resolved from `MC_PM_NAMED_AGENT_TIMEOUT_MS` if set (operator-tunable
+ * via container env). Default = 10 minutes — generous because the
+ * synth fallback is intentionally a low-information placeholder
+ * (template slices with generic ACs); operators have made clear they'd
+ * rather wait for the real agent than see synth output. The fallback
+ * exists as a floor for gateway-down scenarios, not as a routine UX.
+ *
+ * Per-call overrides via `timeoutMs:` on the dispatch input are still
+ * honored, but the three decompose-flow routes deliberately do NOT
+ * override — they take the env default so an operator can tune the
+ * synth-visibility threshold globally from `.claude/launch.json`.
  */
-const NAMED_AGENT_TIMEOUT_MS = 120_000;
+const DEFAULT_NAMED_AGENT_TIMEOUT_MS = 10 * 60 * 1000;
+
+function resolveNamedAgentTimeoutDefault(): number {
+  const raw = process.env.MC_PM_NAMED_AGENT_TIMEOUT_MS;
+  if (!raw) return DEFAULT_NAMED_AGENT_TIMEOUT_MS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_NAMED_AGENT_TIMEOUT_MS;
+  return n;
+}
+
+const NAMED_AGENT_TIMEOUT_MS = resolveNamedAgentTimeoutDefault();
 
 /**
  * In-memory registry of active PM dispatches keyed by workspace_id.

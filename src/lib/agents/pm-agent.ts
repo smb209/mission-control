@@ -393,18 +393,38 @@ export function synthesizeDecompose(
 // ─── Story → tasks decomposition ─────────────────────────────────────
 //
 // Sibling of `synthesizeDecompose`, but the parent is a story-kind
-// initiative and the children are draft tasks (not initiatives). One
-// `create_task_under_initiative` diff per task, all targeting the
-// story's id directly — no placeholders since the story already exists.
+// initiative and the output is a convoy DAG (not a flat task list).
+// Per the PM convoy mandate (docs/reference/pm-convoy-mandate.md), all
+// decompose-flow proposals route through `create_convoy_under_initiative`
+// so dep + AC gates apply at the task-graph level.
 //
-// LLM swap-in seam: the named PM agent can replace this with a richer
-// implementation-level breakdown via `propose_changes` with
-// trigger_kind='decompose_story'. The synth keeps working as the
-// offline floor and the deterministic placeholder.
+// LLM swap-in seam: the named PM agent supersedes this synth with a
+// richer slice DAG via `propose_changes` with trigger_kind='decompose_story'.
+// The synth here is the deterministic offline floor and the placeholder
+// the operator sees while the agent runs.
 
 export interface SynthesizeStoryTasksResult {
   impact_md: string;
   changes: PmDiff[];
+}
+
+interface SliceTemplate {
+  id: string;
+  role: 'builder' | 'tester' | 'reviewer';
+  title: string;
+  /** 1-indexed positions in the titles array that this slice depends on. */
+  depsOn?: number[];
+  /** Per-slice expected duration. */
+  minutes: number;
+}
+
+function slugifySliceId(title: string, fallback: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30);
+  return slug || fallback;
 }
 
 export function synthesizeStoryToTasks(
@@ -417,64 +437,117 @@ export function synthesizeStoryToTasks(
   const isFix = /^(fix|repair|debug)\b/i.test(parent.title);
   const isRefactor = /^(refactor|rewrite|migrate|clean\s*up)\b/i.test(lowerTitle);
 
-  let titles: string[];
+  // Pick a template. Each entry chains to the previous slice (depsOn:
+  // [i-1]) by default — the synth fallback is intentionally a linear
+  // pipeline. The named PM agent emits richer DAGs.
+  let template: SliceTemplate[];
+  let templateLabel: string;
   if (isFix) {
-    titles = [
-      `Reproduce: ${x}`,
-      `Patch: ${x}`,
-      `Regression test for ${x}`,
+    templateLabel = 'fix template';
+    template = [
+      { id: 'reproduce',  role: 'builder', title: `Reproduce: ${x}`,                   minutes: 30 },
+      { id: 'patch',      role: 'builder', title: `Patch: ${x}`,                       minutes: 60, depsOn: [1] },
+      { id: 'regression', role: 'tester',  title: `Regression test for ${x}`,          minutes: 30, depsOn: [2] },
     ];
   } else if (isRefactor) {
-    titles = [
-      `Inventory current behavior for ${x}`,
-      `Land the refactor for ${x}`,
-      `Verify no behavior change in ${x}`,
+    templateLabel = 'refactor template';
+    template = [
+      { id: 'inventory',  role: 'builder', title: `Inventory current behavior for ${x}`, minutes: 30 },
+      { id: 'refactor',   role: 'builder', title: `Land the refactor for ${x}`,          minutes: 90, depsOn: [1] },
+      { id: 'verify',     role: 'tester',  title: `Verify no behavior change in ${x}`,   minutes: 30, depsOn: [2] },
     ];
   } else if (isBuild) {
-    titles = [
-      `Scaffold the data + types for ${x}`,
-      `Implement the core logic for ${x}`,
-      `Wire ${x} into the UI`,
-      `Add tests for ${x}`,
+    templateLabel = 'build template';
+    template = [
+      { id: 'scaffold',   role: 'builder', title: `Scaffold the data + types for ${x}`, minutes: 30 },
+      { id: 'core',       role: 'builder', title: `Implement the core logic for ${x}`,  minutes: 60, depsOn: [1] },
+      { id: 'ui',         role: 'builder', title: `Wire ${x} into the UI`,              minutes: 60, depsOn: [2] },
+      { id: 'tests',      role: 'tester',  title: `Add tests for ${x}`,                 minutes: 30, depsOn: [3] },
     ];
   } else {
-    titles = [
-      `Plan ${x}`,
-      `Implement ${x}`,
-      `Verify ${x}`,
+    templateLabel = 'generic template';
+    template = [
+      { id: 'plan',       role: 'builder', title: `Plan ${x}`,      minutes: 30 },
+      { id: 'implement',  role: 'builder', title: `Implement ${x}`, minutes: 60, depsOn: [1] },
+      { id: 'verify',     role: 'tester',  title: `Verify ${x}`,    minutes: 30, depsOn: [2] },
     ];
   }
+
+  // Resolve slice ids (slugged from title with disambiguation), then
+  // resolve depsOn-by-index into depends_on slice-id arrays.
+  const seenIds = new Set<string>();
+  const sliceIds: string[] = template.map((t, i) => {
+    const base = t.id || slugifySliceId(t.title, `slice-${i + 1}`);
+    let candidate = base;
+    let n = 2;
+    while (seenIds.has(candidate)) {
+      candidate = `${base}-${n++}`;
+    }
+    seenIds.add(candidate);
+    return candidate;
+  });
 
   const baseDesc = parent.description?.trim() ?? '';
   const hintBlock = hint ? `\n\n_Operator hint: ${hint.trim()}_` : '';
 
-  const changes: PmDiff[] = titles.map(t => ({
-    kind: 'create_task_under_initiative',
-    initiative_id: parent.id,
-    title: t,
-    description:
-      `${t}\n\nFor story "${x}".` +
-      (baseDesc ? `\n\nStory context:\n${baseDesc}` : '') +
-      hintBlock,
-    priority: 'normal' as const,
-  }));
+  const slices = template.map((t, i) => {
+    const dependsOn = (t.depsOn ?? []).map(d => sliceIds[d - 1]).filter(Boolean);
+    return {
+      id: sliceIds[i],
+      role: t.role,
+      slice: t.title,
+      message:
+        `${t.title}\n\nFor story "${x}".` +
+        (baseDesc ? `\n\nStory context:\n${baseDesc}` : '') +
+        hintBlock,
+      expected_deliverables: [
+        // Single placeholder deliverable; the agent supersedes with the
+        // real shape (file paths, deliverable kinds).
+        { title: `${t.title} — primary deliverable`, kind: 'file' as const },
+      ],
+      acceptance_criteria: [
+        // One generic, operator-readable AC per slice. Spec section
+        // "DAG smell checklist" calls these contract-shaped, which is
+        // the smell — the named PM agent should supersede with
+        // feature-shaped ACs.
+        `${t.title} ships per the parent story's intent.`,
+      ],
+      expected_duration_minutes: t.minutes,
+      ...(dependsOn.length > 0 ? { depends_on: dependsOn } : {}),
+    };
+  });
+
+  const changes: PmDiff[] = [
+    {
+      kind: 'create_convoy_under_initiative',
+      initiative_id: parent.id,
+      parent_acceptance_criteria: [
+        // Generic operator-facing parent AC. The named PM supersedes
+        // with feature-level criteria.
+        `Story "${x}" is shippable end-to-end and meets the parent's stated intent.`,
+      ],
+      slices,
+    } as PmDiff,
+  ];
 
   const lines: string[] = [
-    `### Task breakdown for "${x}"`,
+    `### Convoy plan for story "${x}"`,
     ``,
-    `Proposed ${changes.length} draft task${changes.length === 1 ? '' : 's'}` +
-      ` (${isFix ? 'fix template' : isRefactor ? 'refactor template' : isBuild ? 'build template' : 'generic template'}):`,
+    `Proposed ${slices.length}-slice convoy (${templateLabel}):`,
     ``,
-    ...changes.map(c =>
-      c.kind === 'create_task_under_initiative' ? `- ${c.title}` : '',
-    ),
+    ...slices.map(s => {
+      const deps = (s as { depends_on?: string[] }).depends_on;
+      return `- \`${s.id}\` · ${s.role} · ~${s.expected_duration_minutes}min` +
+        (deps && deps.length > 0 ? ` · depends on ${deps.map(d => `\`${d}\``).join(', ')}` : '') +
+        ` — ${s.slice}`;
+    }),
   ];
   if (hint) {
     lines.push(``, `_Operator hint applied: "${hint.trim()}"._`);
   }
   lines.push(
     ``,
-    `Apply to insert these as draft tasks under this story. Drafts land in the Draft column on the task board — promote to Inbox when ready.`,
+    `Accept to materialize the convoy: parent task auto-created with \`status=convoy_active\`, slices dispatched in topological order.`,
   );
 
   return { impact_md: lines.join('\n'), changes };

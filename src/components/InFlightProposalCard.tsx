@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, X, Loader, AlertTriangle } from 'lucide-react';
+import { RefreshCw, X, Loader, AlertTriangle, Wrench } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,12 @@ export function InFlightProposalCard({
   const [state, setState] = useState<InFlightState>('pending');
   const [elapsed, setElapsed] = useState(elapsedSince(sentAt));
   const [fadeOut, setFadeOut] = useState(false);
+  // Live activity from the pm-dispatch SSE tap: tool calls + the
+  // current streaming-text tail. Cleared when the proposal transitions
+  // to replaced / synth_only / cancelled. Helps operators see what the
+  // PM is doing during long (up to 10 min) waits.
+  const [toolCalls, setToolCalls] = useState<Array<{ tool: string; phase?: string; note?: string; at: number }>>([]);
+  const [livePreview, setLivePreview] = useState<{ text: string; length: number } | null>(null);
 
   // Live elapsed counter — tick every second.
   useEffect(() => {
@@ -120,11 +126,42 @@ export function InFlightProposalCard({
         const next = parsed.payload?.dispatch_state as string | undefined;
         if (id === proposalId && next === 'synth_only') {
           setState('synth_only');
+          setLivePreview(null);
+          setToolCalls([]);
         }
         if (id === proposalId && next === 'cancelled') {
           // Operator cancelled the dispatch — fade out like replaced.
           setFadeOut(true);
           setState('cancelled');
+          setLivePreview(null);
+          setToolCalls([]);
+        }
+      }
+
+      // pm_dispatch_in_flight: tool calls + streaming text deltas from
+      // the PM agent. Matches the /pm page's live-preview subscription,
+      // filtered by placeholder_id so this card only renders activity
+      // for its own dispatch.
+      if (parsed.type === 'pm_dispatch_in_flight') {
+        const pid = parsed.payload?.placeholder_id as string | undefined;
+        if (pid !== proposalId) return;
+        const kind = parsed.payload?.kind as string | undefined;
+        if (kind === 'delta') {
+          const preview = typeof parsed.payload?.preview === 'string' ? parsed.payload.preview : '';
+          const length = typeof parsed.payload?.length === 'number' ? parsed.payload.length : preview.length;
+          setLivePreview({ text: preview, length });
+        } else if (kind === 'tool_call') {
+          const tool = typeof parsed.payload?.tool === 'string' ? parsed.payload.tool : '';
+          if (!tool) return;
+          const phase = typeof parsed.payload?.phase === 'string' ? parsed.payload.phase : undefined;
+          const note = typeof parsed.payload?.note === 'string' ? parsed.payload.note : undefined;
+          // Cap the trail at the last 6 — older calls become noise.
+          setToolCalls(prev => [...prev, { tool, phase, note, at: Date.now() }].slice(-6));
+        } else if (kind === 'control') {
+          // Final / aborted — clear preview + tool trail; the real
+          // proposal will land via pm_proposal_replaced.
+          setLivePreview(null);
+          setToolCalls([]);
         }
       }
     };
@@ -235,6 +272,49 @@ export function InFlightProposalCard({
         {sessionKey && (
           <div className="text-xs font-mono text-mc-text-secondary/80">
             Session: {sessionKey.slice(0, 32)}{sessionKey.length > 32 ? '…' : ''}
+          </div>
+        )}
+
+        {/* Live activity — tool calls + streaming text tail.
+            Only rendered in pending state; cleared on terminal
+            transition (synth_only / replaced / cancelled). */}
+        {state === 'pending' && (toolCalls.length > 0 || livePreview) && (
+          <div className="mt-2 rounded border border-amber-500/20 bg-amber-500/5 p-2 space-y-1.5">
+            <div className="text-[10px] uppercase tracking-wide text-amber-300/70 font-semibold flex items-center gap-1.5">
+              <Wrench className="w-3 h-3" /> Agent activity
+            </div>
+            {toolCalls.length > 0 && (
+              <ul className="space-y-0.5">
+                {toolCalls.map((tc, i) => (
+                  <li key={`${tc.at}-${i}`} className="text-xs text-mc-text-secondary flex items-baseline gap-1.5">
+                    <span className="text-amber-300/80">→</span>
+                    <span className="font-mono text-amber-200/90 truncate">
+                      {tc.tool.replace(/^.*__/, '')}
+                    </span>
+                    {tc.phase && (
+                      <span className="text-mc-text-secondary/70 text-[10px]">
+                        ({tc.phase})
+                      </span>
+                    )}
+                    {tc.note && (
+                      <span className="text-mc-text-secondary/80 truncate" title={tc.note}>
+                        — {tc.note}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {livePreview && livePreview.text && (
+              <div className="text-xs text-mc-text-secondary/90 italic font-mono whitespace-pre-wrap break-words max-h-24 overflow-y-auto border-t border-amber-500/10 pt-1.5 mt-1.5">
+                …{livePreview.text}
+                {livePreview.length > livePreview.text.length && (
+                  <span className="text-mc-text-secondary/50 not-italic">
+                    {' '}({livePreview.length.toLocaleString()} chars)
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 
