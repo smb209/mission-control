@@ -36,6 +36,7 @@ import { queryAll, run } from '@/lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import {
   createProposal,
+  getProposal,
   listProposals,
   setDispatchState,
   deleteProposal,
@@ -1110,9 +1111,27 @@ async function runNamedAgentDispatchInBackground(
     }
   }
 
-  // 4. No agent row arrived. Mark the placeholder as the operator's final
-  //    draft so the UI can stop showing the "PM agent is working" indicator
-  //    and re-enable Accept.
+  // 4. No agent row arrived. If the operator cancelled the dispatch
+  //    while we were polling, the placeholder is already in its final
+  //    state (`dispatch_state='cancelled'`) — don't overwrite that with
+  //    `synth_only` (the timeout path), since that would resurrect the
+  //    placeholder as an actionable draft after the operator cancelled.
+  const currentPlaceholder = getProposal(placeholder.id);
+  if (currentPlaceholder?.dispatch_state === 'cancelled') {
+    console.log(
+      `[pm-dispatch] reconciler bailed early — placeholder ${placeholder.id} ` +
+        `was cancelled by the operator during dispatch ` +
+        `(workspace=${input.workspace_id}, trigger_kind=${input.trigger_kind})`,
+    );
+    return {
+      final: currentPlaceholder,
+      used_named_agent: false,
+      used_synthesize_fallback: false,
+    };
+  }
+  // Otherwise: real timeout. Mark the placeholder as the operator's
+  // final draft so the UI can stop showing the "PM agent is working"
+  // indicator and re-enable Accept.
   console.log(
     `[pm-dispatch] reconciler timed out waiting for agent reply on placeholder ${placeholder.id} ` +
       `(workspace=${input.workspace_id}, trigger_kind=${input.trigger_kind}); marking synth_only`,
@@ -1157,12 +1176,20 @@ async function pollForAgentProposal(
   // either agent row landed. See §2.3 cross-supersede finding.
   const isAgentRow = (p: PmProposal) => p.id !== placeholderId && p.dispatch_state !== 'pending_agent';
   do {
+    // Operator cancelled the dispatch while we were polling — bail
+    // immediately so we don't keep scanning for an agent row that
+    // would supersede a placeholder the operator already retired.
+    const placeholder = getProposal(placeholderId);
+    if (placeholder?.dispatch_state === 'cancelled') return null;
     const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
     const hit = drafts.find(isAgentRow);
     if (hit) return hit;
     if (Date.now() >= deadline) return null;
     await new Promise(resolve => setTimeout(resolve, RECONCILER_POLL_MS));
   } while (Date.now() < deadline);
+  // One last cancel check before the final scan.
+  const placeholder = getProposal(placeholderId);
+  if (placeholder?.dispatch_state === 'cancelled') return null;
   const drafts = listProposals({ workspace_id: workspaceId, status: 'draft', since: sinceIso });
   return drafts.find(isAgentRow) ?? null;
 }

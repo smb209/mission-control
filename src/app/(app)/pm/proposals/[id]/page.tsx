@@ -228,8 +228,9 @@ export default function ProposalDetailPage({
                 sessionKey={null}
                 sentAt={proposal.created_at}
                 onCancel={() => {
-                  // Cancel the placeholder by deleting it.
-                  fetch(`/api/pm/proposals/${proposal.id}`, { method: 'DELETE' }).catch(() => {});
+                  // Flip dispatch_state to 'cancelled' so the dispatcher
+                  // short-circuits its poll loop. The card hides via SSE.
+                  fetch(`/api/pm/proposals/${proposal.id}/cancel`, { method: 'POST' }).catch(() => {});
                   router.push('/pm');
                 }}
                 onUseSynthFallback={() => {

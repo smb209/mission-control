@@ -30,11 +30,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb, queryAll, queryOne, run } from '@/lib/db';
 import { createTaskFromInitiative } from './promotion';
 import { transitionTaskStatus } from '@/lib/services/task-status';
+import { broadcast } from '@/lib/events';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
 export type PmProposalStatus = 'draft' | 'accepted' | 'rejected' | 'superseded';
-export type PmProposalDispatchState = 'pending_agent' | 'agent_complete' | 'synth_only';
+export type PmProposalDispatchState = 'pending_agent' | 'agent_complete' | 'synth_only' | 'cancelled';
 export type PmProposalTriggerKind =
   | 'manual'
   | 'scheduled_drift_scan'
@@ -1653,6 +1654,59 @@ export function rejectProposal(id: string): PmProposal {
     );
   }
   run(`UPDATE pm_proposals SET status = 'rejected' WHERE id = ?`, [id]);
+  return getProposal(id)!;
+}
+
+/**
+ * Cancel a draft proposal by setting dispatch_state to 'cancelled'.
+ *
+ * This is the inverse of the synth-placeholder path: when the operator
+ * wants to stop MC from waiting for an agent reply (e.g. they changed
+ * their mind about the proposal), cancelling the dispatch_state tells
+ * the frontend SSE handler to hide the in-flight card without
+ * applying any changes.
+ *
+ * Cancellable states: draft + dispatch_state === 'pending_agent' or
+ * 'synth_only'. Same gate as acceptProposal's status check — only
+ * draft proposals are cancellable.
+ *
+ * Idempotent: cancelling an already-cancelled proposal is a no-op
+ * (returns the existing row without error).
+ */
+export function cancelProposal(id: string): PmProposal {
+  const existing = getProposal(id);
+  if (!existing) throw new PmProposalValidationError(`proposal ${id} not found`);
+  if (existing.status === 'accepted' || existing.status === 'superseded') {
+    throw new PmProposalValidationError(
+      `proposal ${id} cannot be cancelled from status=${existing.status}`,
+    );
+  }
+  if (existing.status !== 'draft') {
+    throw new PmProposalValidationError(
+      `proposal ${id} cannot be cancelled from status=${existing.status}`,
+    );
+  }
+  // Already cancelled — idempotent no-op.
+  if (existing.dispatch_state === 'cancelled') return existing;
+  // Only cancellable when dispatch_state is pending_agent or synth_only.
+  if (existing.dispatch_state !== 'pending_agent' && existing.dispatch_state !== 'synth_only') {
+    throw new PmProposalValidationError(
+      `proposal ${id} cannot be cancelled: dispatch_state=${existing.dispatch_state} (must be pending_agent or synth_only)`,
+    );
+  }
+  run(`UPDATE pm_proposals SET dispatch_state = 'cancelled' WHERE id = ?`, [id]);
+  // Broadcast so the in-flight card hides via SSE (and any other
+  // listener — e.g. the dispatcher's poll loop — can short-circuit).
+  // Emitting from this helper rather than the API route keeps the
+  // event firing for any other call site that may invoke cancel.
+  broadcast({
+    type: 'pm_proposal_dispatch_state_changed',
+    payload: {
+      workspace_id: existing.workspace_id,
+      proposal_id: id,
+      dispatch_state: 'cancelled',
+    },
+  });
   return getProposal(id)!;
 }
 

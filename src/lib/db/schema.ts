@@ -991,7 +991,7 @@ CREATE TABLE IF NOT EXISTS pm_proposals (
   target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE,
   plan_suggestions TEXT,
   dispatch_state TEXT NOT NULL DEFAULT 'agent_complete'
-    CHECK (dispatch_state IN ('pending_agent','agent_complete','synth_only'))
+    CHECK (dispatch_state IN ('pending_agent','agent_complete','synth_only','cancelled'))
 );
 
 -- Defer-and-replay queue for propose_from_notes requests that arrive

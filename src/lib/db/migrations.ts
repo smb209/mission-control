@@ -4798,6 +4798,90 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: '094',
+    name: 'pm_proposals_dispatch_state_cancelled',
+    up: (db) => {
+      // The cancel endpoint (POST /api/pm/proposals/[id]/cancel) flips
+      // dispatch_state to 'cancelled'. The schema CHECK constraint was
+      // added without this value — SQLite can't ALTER CHECK constraints,
+      // so we recreate the table.
+      //
+      // Existing dispatch_state values: pending_agent, agent_complete,
+      // synth_only, cancelled (new). All are valid.
+
+      const cols = db.prepare(`PRAGMA table_info(pm_proposals)`).all() as Array<{ name: string; type?: string; notnull?: number; dflt_value?: string }>;
+      const hasDispatchState = cols.some(c => c.name === 'dispatch_state');
+
+      // Already has the updated CHECK — no-op.
+      const tableSql = db
+        .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='pm_proposals'`)
+        .get() as { sql?: string } | undefined;
+      const alreadyHasCancelled =
+        typeof tableSql?.sql === 'string' && tableSql.sql.includes("'cancelled'");
+      if (alreadyHasCancelled) {
+        console.log('[Migration 094] pm_proposals.dispatch_state already includes cancelled; skipping.');
+        return;
+      }
+
+      // Build the new schema from the current table_info, ensuring
+      // dispatch_state includes 'cancelled' in its CHECK.
+      // We use a hand-rolled column list from the schema constant to
+      // avoid PRAGMA table_info quirks (empty types, parenthesized
+      // defaults that break CREATE TABLE syntax).
+      const colDefs: string[] = [
+        'id TEXT PRIMARY KEY',
+        'workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE',
+        'trigger_text TEXT NOT NULL',
+        'trigger_kind TEXT NOT NULL DEFAULT \'manual\' CHECK (trigger_kind IN (\'manual\', \'scheduled_drift_scan\', \'disruption_event\', \'status_check_investigation\', \'plan_initiative\', \'decompose_initiative\', \'decompose_story\', \'notes_intake\', \'revert\'))',
+        'impact_md TEXT NOT NULL',
+        'proposed_changes TEXT NOT NULL',
+        'status TEXT NOT NULL DEFAULT \'draft\' CHECK (status IN (\'draft\', \'accepted\', \'rejected\', \'superseded\'))',
+        'applied_at TEXT',
+        'applied_by_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL',
+        'parent_proposal_id TEXT REFERENCES pm_proposals(id) ON DELETE SET NULL',
+        'created_at TEXT DEFAULT (datetime(\'now\'))',
+        'target_initiative_id TEXT REFERENCES initiatives(id) ON DELETE CASCADE',
+        'plan_suggestions TEXT',
+        'dispatch_state TEXT NOT NULL DEFAULT \'agent_complete\' CHECK (dispatch_state IN (\'pending_agent\', \'agent_complete\', \'synth_only\', \'cancelled\'))',
+        'reverts_proposal_id TEXT',
+      ];
+
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.exec(`PRAGMA legacy_alter_table = ON`);
+
+      // Recreate with updated CHECK.
+      db.exec(`
+        CREATE TABLE pm_proposals_new (
+          ${colDefs.join(',\n          ')}
+        )
+      `);
+
+      // Copy data — dispatch_state may be NULL on pre-migration-055 rows,
+      // so COALESCE it to 'agent_complete'.
+      const allCols = cols.map(c => c.name);
+      const selectCols = allCols.join(', ');
+      // Replace dispatch_state in SELECT with COALESCE(dispatch_state, 'agent_complete')
+      const dispatchIdx = allCols.indexOf('dispatch_state');
+      const selectColsSafe = dispatchIdx >= 0
+        ? [...allCols.slice(0, dispatchIdx), "COALESCE(dispatch_state, 'agent_complete')", ...allCols.slice(dispatchIdx + 1)].join(', ')
+        : selectCols;
+      db.exec(`
+        INSERT INTO pm_proposals_new (${selectCols})
+        SELECT ${selectColsSafe} FROM pm_proposals
+      `);
+
+      db.exec('DROP TABLE pm_proposals');
+      db.exec('ALTER TABLE pm_proposals_new RENAME TO pm_proposals');
+
+      // Recreate indexes.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_pm_proposals_status ON pm_proposals(status, created_at DESC)
+      `);
+
+      console.log('[Migration 094] pm_proposals.dispatch_state CHECK updated to include cancelled.');
+    },
+  },
 ];
 
 /** Escape a string for inclusion as a literal in a RegExp source. */
