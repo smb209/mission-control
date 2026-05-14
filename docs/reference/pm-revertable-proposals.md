@@ -16,7 +16,7 @@ related-specs:
   - pm-diff-conventions.md — PmDiff kinds enumerated here are inverted
   - audit-action-recommended.md — audit-spawned proposals flow through this revert surface
   - roadmap-and-pm-spec.md — broader PM mutation model
-  - pm-convoy-mandate.md — adds create_convoy_under_initiative (revert support deferred — see §"create_convoy_under_initiative — current revert state" below)
+  - pm-convoy-mandate.md — adds create_convoy_under_initiative and its cancel_convoy inverse
 ---
 
 # PM action audit log + revertable proposals
@@ -78,35 +78,59 @@ Add a `revert_proposal` action: given an accepted proposal, synthesize the inver
 | `create_child_initiative` | `set_initiative_status: 'cancelled'` on the created row (we don't delete). The created child's id must be captured back into the diff record at apply time so revert can target it. |
 | `create_task_under_initiative` | `set_task_status: 'cancelled'` (if that diff kind exists; if not, add it). Same id-capture pattern. |
 | `add_availability` | Mark the row inactive or mirror with a removal diff. Audit current `add_availability` apply path; choose the cleanest inverse. |
-| `create_convoy_under_initiative` | **Limited (deferred — see below).** Planned inverse: cancel the convoy + delete unscheduled child tasks; refuse revert if any slice has reached `done`. |
+| `create_convoy_under_initiative` | `cancel_convoy` — see [`§ create_convoy_under_initiative → cancel_convoy`](#create_convoy_under_initiative--cancel_convoy) below for the full apply-time behavior. Refuses revert if any subtask has reached `done`. |
 
-### `create_convoy_under_initiative` — current revert state
+### `create_convoy_under_initiative` → `cancel_convoy`
 
-The PM convoy mandate ([pm-convoy-mandate.md](pm-convoy-mandate.md))
-added `create_convoy_under_initiative` as a new diff kind. Its
-`invertDiff` case at
-[`src/lib/pm/invertDiff.ts`](../../src/lib/pm/invertDiff.ts) (~line
-251) currently returns the `limited` marker — the UI shows "Revert
-(limited)" with a tooltip and no actionable inverse.
+The inverse of `create_convoy_under_initiative` is a synthesized
+`cancel_convoy` diff (revert-only kind; the schema validator rejects
+it on any non-revert proposal). On apply — wrapped in the outer
+`acceptProposal` SQLite transaction so any step that throws rolls back
+the whole revert atomically — the diff performs:
 
-**Planned semantics for the follow-up** (not yet implemented; tracked
-as part of slice 7 / a separate follow-up PR):
+1. **Refuse if any subtask is `done`.** Throws
+   `PmProposalValidationError` naming the blocker(s). The convoy and
+   its tasks stay exactly as they were; the operator must unwind
+   per-slice manually before a revert is meaningful.
+2. **Mark the convoy `failed`.** Idempotent — if another path already
+   cancelled the convoy, the UPDATE is skipped.
+3. **Per subtask child task:** `inbox` rows are `DELETE`d (never
+   dispatched, safe to remove; FK cascade also drops their
+   `convoy_subtasks` row). Any other non-`done` status is set to
+   `cancelled` so in-flight agent work has a clean terminus instead
+   of disappearing mid-flight.
+4. **Delete `task_ac_acknowledgements` rows for the parent task.**
+   The acks were scoped to the now-revoked parent ACs; FK cascade
+   would only run if we deleted the parent (we don't — see below),
+   so we delete the rows explicitly here. Safe no-op when none exist.
 
-- If no slice has reached `done`: emit a `set_task_status: 'cancelled'`
-  on the parent task plus tombstones for any subtasks that are still
-  in `inbox` / `assigned`. The convoy row stays for audit; its status
-  flips to `failed`.
-- If any slice has reached `done`: refuse the revert at validation
-  time with a structured error pointing the operator to per-slice
-  manual rollback. The "all-or-nothing" inverse is unsafe once
-  downstream artifacts may exist.
-- Capture state required at apply time (already populated by slice 2):
-  `convoy_id`, `parent_task_id`, `subtask_id_map`. No new capture
-  fields needed.
+**Parent task preservation (decision).** The revert deliberately does
+**not** delete or cancel the parent task — even when the original
+convoy apply auto-created it from a story initiative. Reasoning:
 
-Until the follow-up lands, operators revert convoy-shaped proposals by
-cancelling the parent task manually (the dependency / cascade rules
-already handle the rest).
+- Tracking "did this proposal auto-create the parent" requires a
+  marker column on `tasks` and threading state through both apply
+  and revert paths.
+- The orphaned parent is highly visible (it sits in `convoy_active` /
+  `review` with zero live subtasks) and the operator can repurpose,
+  re-decompose, or cancel it manually in one click.
+- The audit story is cleaner: the proposal timeline still anchors
+  against an existing task row.
+
+If experience shows operators routinely want the parent gone too,
+revisit this in a follow-up — the simplest extension is a new
+`auto_created_for_convoy_id` column on `tasks` populated at apply
+time and a conditional `DELETE` in the `cancel_convoy` branch.
+
+**Deliverables.** Out of scope. Deliverables outlive task cancellation
+by design (audit trail). Reverts don't touch them.
+
+**Capture state required at apply time** (already populated by the
+slice-2 apply path on the source diff, no new fields needed):
+`created_convoy_id`, `created_parent_task_id`,
+`created_subtasks[].child_task_id`. When any of these are missing
+(pre-capture proposal), the UI surfaces "Revert (limited)" with a
+tooltip and the diff is omitted from the synthesized revert.
 
 **The "captured at apply time" pattern is critical:** each forward apply should persist enough state into the diff record (or a sibling table) that the inverse is a pure function of the diff row alone. Don't recompute from current DB state at revert time — it'll have drifted.
 

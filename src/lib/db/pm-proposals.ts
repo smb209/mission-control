@@ -239,6 +239,35 @@ export type PmDiff =
       audit_proposal_id?: string;
       commit_sha?: string;
       pr_url?: string;
+    } & PmDiffCapture)
+  | ({
+      // PM convoy mandate — full invertDiff for create_convoy_under_initiative.
+      // Synthesized by `invertProposalDiffs` when a convoy-shaped proposal
+      // is reverted. Forward-only on revert proposals (trigger_kind='revert'):
+      // the schema validator rejects this kind in any other context.
+      //
+      // Apply semantics (single SQLite transaction):
+      //   1. Refuse if any subtask child task has reached 'done' — return
+      //      a structured PmProposalValidationError naming the blocker.
+      //   2. UPDATE convoys SET status='failed' (idempotent if already
+      //      cancelled/failed by another path).
+      //   3. For each subtask child task:
+      //        - 'inbox' → DELETE (never dispatched, safe to remove).
+      //        - any other non-done status → set status='cancelled'.
+      //   4. DELETE FROM task_ac_acknowledgements WHERE task_id = parent_task_id
+      //      (the acks are scoped to the now-revoked convoy ACs).
+      //
+      // Parent task preservation: we do NOT delete or cancel the parent
+      // task — even if it was auto-created by the original convoy apply.
+      // Operators see the orphaned parent in 'convoy_active' / 'review'
+      // and decide what to do (re-decompose, cancel manually, repurpose).
+      // Saves a marker column and complex bookkeeping; the operator
+      // judgement is cheap and the parent stays auditable. Documented in
+      // docs/reference/pm-revertable-proposals.md.
+      kind: 'cancel_convoy';
+      convoy_id: string;
+      parent_task_id: string;
+      subtask_child_task_ids: string[];
     } & PmDiffCapture);
 
 export interface PmProposal {
@@ -757,6 +786,30 @@ export function validateProposedChanges(
             errors.push(`changes[${i}]: pr_url must be a valid URL`);
           }
         }
+        break;
+      }
+      case 'cancel_convoy': {
+        // Revert-only: synthesized by `invertProposalDiffs` for an
+        // accepted create_convoy_under_initiative diff. Forward proposals
+        // are never allowed to emit this kind directly.
+        if (options.trigger_kind !== 'revert') {
+          errors.push(
+            `changes[${i}]: cancel_convoy is revert-only (trigger_kind must be 'revert', got '${options.trigger_kind ?? 'manual'}')`,
+          );
+        }
+        if (!c.convoy_id || typeof c.convoy_id !== 'string') {
+          errors.push(`changes[${i}]: convoy_id required`);
+        }
+        if (!c.parent_task_id || typeof c.parent_task_id !== 'string') {
+          errors.push(`changes[${i}]: parent_task_id required`);
+        }
+        if (!Array.isArray(c.subtask_child_task_ids)) {
+          errors.push(`changes[${i}]: subtask_child_task_ids must be an array`);
+        }
+        // We don't assert the convoy still exists at validation time —
+        // the apply path is idempotent and treats a missing convoy as a
+        // no-op, so this stays cleanly revertable even if another path
+        // already cancelled the convoy.
         break;
       }
       default: {
@@ -1798,6 +1851,74 @@ function applyDiff(diff: PmDiff, now: string): void {
       // Out-of-band: needs the placeholder map AND fires DAG validation
       // + spawnDelegationSubtask via applyCreateConvoyUnderInitiative.
       throw new Error('create_convoy_under_initiative must be applied via acceptProposal pass-2');
+    }
+    case 'cancel_convoy': {
+      // PM convoy mandate — inverse of create_convoy_under_initiative.
+      // Runs inside the outer acceptProposal transaction, so any throw
+      // rolls back the whole revert atomically.
+      //
+      // Step 1 — refuse if any subtask child task is 'done'. Surface a
+      // structured error naming the blockers so the operator can decide
+      // whether to manually unwind or accept the partial completion.
+      if (diff.subtask_child_task_ids.length > 0) {
+        const placeholders = diff.subtask_child_task_ids.map(() => '?').join(',');
+        const done = queryAll<{ id: string; title: string }>(
+          `SELECT id, title FROM tasks WHERE id IN (${placeholders}) AND status = 'done'`,
+          diff.subtask_child_task_ids,
+        );
+        if (done.length > 0) {
+          const names = done.map((t) => `"${t.title}" (${t.id})`).join(', ');
+          throw new PmProposalValidationError(
+            `cancel_convoy refused: ${done.length} subtask${done.length === 1 ? '' : 's'} already reached 'done' — ${names}. Revert would corrupt downstream state; unwind manually if needed.`,
+          );
+        }
+      }
+
+      // Step 2 — mark the convoy 'failed' (idempotent). Missing convoy
+      // is treated as a no-op so this stays safely re-runnable.
+      const convoy = queryOne<{ id: string; status: string }>(
+        `SELECT id, status FROM convoys WHERE id = ?`,
+        [diff.convoy_id],
+      );
+      if (convoy && convoy.status !== 'failed' && convoy.status !== 'done') {
+        run(
+          `UPDATE convoys SET status = 'failed', updated_at = ? WHERE id = ?`,
+          [now, diff.convoy_id],
+        );
+      }
+
+      // Step 3 — for each subtask child task: inbox → DELETE, non-done →
+      // cancel. Done is impossible here (we'd have refused above).
+      // Deleting a task also cascades convoy_subtasks (FK ON DELETE
+      // CASCADE) so audit trail for never-dispatched slices is clean.
+      for (const childId of diff.subtask_child_task_ids) {
+        const t = queryOne<{ id: string; status: string }>(
+          `SELECT id, status FROM tasks WHERE id = ?`,
+          [childId],
+        );
+        if (!t) continue; // already gone — idempotent
+        if (t.status === 'inbox') {
+          run(`DELETE FROM tasks WHERE id = ?`, [childId]);
+        } else if (t.status !== 'cancelled' && t.status !== 'done') {
+          run(
+            `UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE id = ?`,
+            [now, childId],
+          );
+        }
+      }
+
+      // Step 4 — delete parent-AC acknowledgements. The ACs were the
+      // convoy's; with the convoy revoked, the acks are meaningless.
+      // task_ac_acknowledgements is FK-cascaded from tasks, but since
+      // we deliberately do NOT delete the parent task (lean approach —
+      // operators decide), we delete the ack rows explicitly here.
+      // Safe no-op when no acks exist (slice-5-predating convoy, or
+      // never-acked).
+      run(
+        `DELETE FROM task_ac_acknowledgements WHERE task_id = ?`,
+        [diff.parent_task_id],
+      );
+      return;
     }
     case 'set_task_status': {
       const prev = queryOne<{ status: string }>(

@@ -249,15 +249,40 @@ function invertOne(diff: PmDiff, index: number): InvertedDiff {
     }
 
     case 'create_convoy_under_initiative': {
-      // PM convoy mandate slice 2: revert semantics for this diff kind
-      // are out of scope here — they land in slice 7 alongside the
-      // updated pm-revertable-proposals spec ("cancel the convoy +
-      // delete unscheduled child tasks; refuse revert if any slice has
-      // reached done"). Surface a limited marker so the chain renders
-      // without claiming a false inverse.
+      // PM convoy mandate — full revert. Capture state populated by
+      // applyCreateConvoyUnderInitiative gives us everything we need:
+      // convoy_id, parent_task_id, and the symbolic → real subtask map.
+      // The synthesized cancel_convoy diff runs atomically inside
+      // acceptProposal's outer transaction — refusal on any 'done'
+      // subtask rolls the whole revert back. See
+      // docs/reference/pm-revertable-proposals.md for the apply rules.
+      if (!diff.created_convoy_id || !diff.created_parent_task_id) {
+        return limited(
+          index,
+          'pre-capture proposal: convoy_id or parent_task_id was not recorded',
+        );
+      }
+      const subtaskChildTaskIds = (diff.created_subtasks ?? []).map((s) => s.child_task_id);
+      return {
+        original_index: index,
+        status: 'inverted',
+        inverse: {
+          kind: 'cancel_convoy',
+          convoy_id: diff.created_convoy_id,
+          parent_task_id: diff.created_parent_task_id,
+          subtask_child_task_ids: subtaskChildTaskIds,
+        },
+      };
+    }
+
+    case 'cancel_convoy': {
+      // Reverting a revert: we don't synthesize an "uncancel" because
+      // the forward cancel already deleted inbox children and cascaded
+      // their convoy_subtasks rows. A clean re-decomposition is the
+      // right operator move, not a synthetic reinstate.
       return limited(
         index,
-        'create_convoy_under_initiative revert not yet implemented (slice 7 of pm-convoy-mandate)',
+        'cancel_convoy revert is not modeled — re-decompose the parent task to re-spawn the convoy',
       );
     }
 
