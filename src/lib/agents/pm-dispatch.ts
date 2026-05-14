@@ -766,21 +766,37 @@ function extractAgentReplyText(
 function summariseAgentEvent(
   event: AgentEvent,
 ): { tool: string; phase?: string; note?: string } | null {
-  const pickStr = (...keys: string[]): string | undefined => {
+  // openclaw's tool events carry the canonical shape:
+  //   { runId, stream: 'tool', sessionKey, data: { phase, name, toolCallId, args } }
+  // …so peek into `data` first. Older / non-tool agent_events may have
+  // these fields at the top level, which we still honor as a fallback.
+  const data = (event as { data?: Record<string, unknown> }).data ?? {};
+  const pickStrFrom = (
+    source: Record<string, unknown>,
+    ...keys: string[]
+  ): string | undefined => {
     for (const k of keys) {
-      const v = event[k];
+      const v = source[k];
       if (typeof v === 'string' && v.trim()) return v.trim();
     }
     return undefined;
   };
-  const tool = pickStr('tool', 'name', 'function', 'event', 'kind');
+
+  const tool =
+    pickStrFrom(data, 'name', 'tool', 'function') ??
+    pickStrFrom(event as Record<string, unknown>, 'tool', 'name', 'function', 'event', 'kind');
   if (!tool) return null;
 
-  const phase = pickStr('phase', 'step', 'state', 'status');
+  const phase =
+    pickStrFrom(data, 'phase', 'step', 'state', 'status') ??
+    pickStrFrom(event as Record<string, unknown>, 'phase', 'step', 'state', 'status');
 
   // Pull a short note from anything resembling a body / message /
-  // text field. Capped so we never broadcast a huge payload.
-  const noteRaw = pickStr('note', 'message', 'text', 'body', 'summary', 'description');
+  // text field. Tool-end events carry the result text in `data.text`
+  // or `data.summary`. Capped so we never broadcast a huge payload.
+  const noteRaw =
+    pickStrFrom(data, 'note', 'summary', 'text', 'message', 'body', 'description') ??
+    pickStrFrom(event as Record<string, unknown>, 'note', 'message', 'text', 'body', 'summary', 'description');
   const note = noteRaw ? noteRaw.slice(0, 200) : undefined;
 
   return { tool, phase, note };

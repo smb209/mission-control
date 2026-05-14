@@ -326,6 +326,24 @@ export class OpenClawClient extends EventEmitter {
                 metadata: { seq: data.seq, event: data.event },
               });
             }
+            // Tool lifecycle frames are broadcast on a dedicated channel
+            // when the gateway has session.* subscribers (we register
+            // via `sessions.subscribe` post-auth). The payload shape
+            // mirrors the `agent` channel so we re-emit it as the same
+            // `agent_event` for downstream consumers (pm-dispatch's
+            // onAgentEvent tap, etc.).
+            if (data.type === 'event' && data.event === 'session.tool' && data.payload) {
+              this.emit('agent_event', data.payload);
+              const sessionKey = (data.payload as { sessionKey?: string })?.sessionKey ?? null;
+              logDebugEvent({
+                type: 'agent.event',
+                direction: 'inbound',
+                taskId: extractTaskIdFromSessionKey(sessionKey),
+                sessionKey,
+                responseBody: data.payload,
+                metadata: { seq: data.seq, event: data.event, channel: 'session.tool' },
+              });
+            }
             if (data.type === 'event' && data.event === 'chat' && data.payload) {
               this.emit('chat_event', data.payload);
               const sessionKey = (data.payload as { sessionKey?: string })?.sessionKey ?? null;
@@ -420,6 +438,22 @@ export class OpenClawClient extends EventEmitter {
                       device_id: this.deviceIdentity?.deviceId ?? null,
                     },
                   });
+                  // Subscribe to session.* events (incl. session.tool) so
+                  // the gateway forwards live tool-call frames. Without
+                  // this, only the generic `agent` channel arrives —
+                  // which the gateway routes ONLY to clients that
+                  // registered as run-scoped tool recipients or session
+                  // subscribers (see openclaw server-chat.ts ~line 656).
+                  // Fire-and-forget: if it fails we still get chat
+                  // deltas via the unconditional `chat` broadcast.
+                  this.call('sessions.subscribe').then(
+                    () => {
+                      console.log('[OpenClaw] Subscribed to session events (tool calls + results)');
+                    },
+                    (err) => {
+                      console.warn('[OpenClaw] sessions.subscribe failed (tool events will be missing):', err instanceof Error ? err.message : err);
+                    },
+                  );
                   resolve();
                 },
                 reject: (error: Error) => {
