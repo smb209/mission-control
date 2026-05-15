@@ -37,6 +37,7 @@ import {
   getRunnerAgent,
   isScopeKeyedDispatchEnabled,
   isSubagentSpawnEnabled,
+  mcpToolPrefix,
   nextWorkerAttempt,
 } from '@/lib/agents/runner';
 import { getPmAgent } from '@/lib/agents/pm-resolver';
@@ -652,21 +653,32 @@ Role templates have no gateway id; address them by \`role\` (preferred) or
       ? `~/.openclaw/workspaces/${gatewayIdForContext}/MC-CONTEXT.json`
       : null;
 
-    const callHomeSection = `\n---
-**🔒 CALL-HOME: use the \`sc-mission-control\` MCP tools**
+    // Resolve which MCP server namespace the dispatched agent's tool
+    // catalog will use. Scope-keyed dispatch (Phase F default-on) routes
+    // through the runner — its `gateway_agent_id` is what determines the
+    // namespace prefix. For role-template agents (gateway_agent_id NULL,
+    // e.g. the per-workspace builder/tester rows), the runner is the
+    // actual executor; falling back to `agent.gateway_agent_id` would
+    // resolve to the empty default and the LLM would call bare tool
+    // names that don't exist in its catalog.
+    const dispatchExecutor = getRunnerAgent() ?? agent;
+    const MC_TOOL_PREFIX = mcpToolPrefix(dispatchExecutor);
 
-Every MC interaction goes through the \`sc-mission-control\` tool server. Preferred calls by action:
+    const callHomeSection = `\n---
+**🔒 CALL-HOME: use the \`${MC_TOOL_PREFIX}\` MCP tools**
+
+Every MC interaction goes through the \`${MC_TOOL_PREFIX}\` tool server. Tools in your catalog are namespaced — call \`${MC_TOOL_PREFIX}__<tool>\`, NOT the bare name. Preferred calls by action:
 
 | When you want to... | Call tool |
 |---|---|
-| Learn your own \`agent_id\` + peers | \`whoami({ agent_id: … })\` |
-| Register a deliverable | \`register_deliverable(...)\` |
-| Log a progress / completion note | \`log_activity(...)\` |
-| Move the task to the next stage | \`update_task_status(...)\` |
-| Fail a stage (tester/reviewer) | \`fail_task(...)\` |
-| Save a checkpoint | \`save_checkpoint(...)\` |
-| Mail a peer | \`send_mail(...)\` (use \`list_peers\` to find ids) |
-| Delegate a slice (coordinator) | \`delegate(...)\` — auto-logs the audit activity |
+| Learn your own \`agent_id\` + peers | \`${MC_TOOL_PREFIX}__whoami({ agent_id: … })\` |
+| Register a deliverable | \`${MC_TOOL_PREFIX}__register_deliverable(...)\` |
+| Log a progress / completion note | \`${MC_TOOL_PREFIX}__log_activity(...)\` |
+| Move the task to the next stage | \`${MC_TOOL_PREFIX}__update_task_status(...)\` |
+| Fail a stage (tester/reviewer) | \`${MC_TOOL_PREFIX}__fail_task(...)\` |
+| Save a checkpoint | \`${MC_TOOL_PREFIX}__save_checkpoint(...)\` |
+| Mail a peer | \`${MC_TOOL_PREFIX}__send_mail(...)\` (use \`${MC_TOOL_PREFIX}__list_peers\` to find ids) |
+| Delegate a slice (coordinator) | \`${MC_TOOL_PREFIX}__delegate(...)\` — auto-logs the audit activity |
 
 Every state-changing tool takes \`agent_id\` as the first argument. **Your \`agent_id\` is:** \`${agent.id}\`  \\
 ${gatewayIdForContext ? `Your \`gateway_id\` is: \`${gatewayIdForContext}\`  \\\n` : ''}Task id: \`${task.id}\`
@@ -692,7 +704,7 @@ If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the 
           : '(no structured spec — one deliverable call is enough)';
 
       if (isCoordinator) {
-        return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`spawn_subtask\` MCP tool. Every delegation must declare deliverables, acceptance criteria, duration, and cadence — no declarations, no spawn.
+        return `**YOUR ROLE: COORDINATOR** — Delegate to peers using the \`${MC_TOOL_PREFIX}__spawn_subtask\` MCP tool. Every delegation must declare deliverables, acceptance criteria, duration, and cadence — no declarations, no spawn.
 
 **First decide the shape of the flow.** The task workflow defaults to a single builder step — you are responsible for shaping anything richer. For each task, ask:
 - Does a single builder slice cover this end-to-end, or does it split cleanly across roles (research → write, build → test, draft → review)?
@@ -701,9 +713,9 @@ If a tool returns \`MCP endpoint is disabled\` (HTTP 503), the operator has the 
 
 If the answer to all three is "no", spawn one builder subtask and accept it when delivered. If any is "yes", spawn the additional slices explicitly — typically a tester or reviewer subtask gated on the builder's deliverable. Skip ceremony when it isn't earned; add gates when the work needs them.
 
-**For a multi-slice fan-out, use \`plan_convoy\` (single tool call, full DAG):**
+**For a multi-slice fan-out, use \`${MC_TOOL_PREFIX}__plan_convoy\` (single tool call, full DAG):**
 \`\`\`
-plan_convoy({
+${MC_TOOL_PREFIX}__plan_convoy({
   agent_id: "${agentId}",
   task_id: "${taskIdForMcp}",
   slices: [
@@ -732,9 +744,9 @@ plan_convoy({
 
 \`plan_convoy\` validates the DAG (no cycles, all peers resolvable) BEFORE any briefing fires. Dependent slices stay queued (\`inbox\`, no chat.send) until their prerequisites are \`accept\`ed — the system enforces ordering. Prose like "wait for the builder" in a \`message\` field is NOT enforced; only \`depends_on\` is.
 
-**For a single slice OR a follow-up after monitoring, use \`spawn_subtask\`:**
+**For a single slice OR a follow-up after monitoring, use \`${MC_TOOL_PREFIX}__spawn_subtask\`:**
 \`\`\`
-spawn_subtask({
+${MC_TOOL_PREFIX}__spawn_subtask({
   agent_id: "${agentId}",
   task_id: "${taskIdForMcp}",
   role: "<builder | tester | reviewer | …>",
@@ -750,27 +762,27 @@ spawn_subtask({
 
 **While peers are working, check on them:**
 \`\`\`
-list_my_subtasks({ agent_id: "${agentId}", task_id: "${taskIdForMcp}" })
+${MC_TOOL_PREFIX}__list_my_subtasks({ agent_id: "${agentId}", task_id: "${taskIdForMcp}" })
 \`\`\`
 Each row has a \`state_derived\` (dispatched / in_progress / drifting / overdue / delivered / blocked / timed_out / accepted / rejected / cancelled).
 
 **When a peer delivers** (state_derived = "delivered"):
 \`\`\`
-update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "accept" })
+${MC_TOOL_PREFIX}__update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "accept" })
 # or if the work doesn't meet acceptance criteria:
-update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "reject", reason: "<specific>", new_acceptance_criteria: [ ... ] })
+${MC_TOOL_PREFIX}__update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "reject", reason: "<specific>", new_acceptance_criteria: [ ... ] })
 \`\`\`
 
 **If a peer is stuck and the slice was wrong,** cancel and re-spawn with a better brief:
 \`\`\`
-update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "cancel", reason: "<why>" })
-spawn_subtask({ ... })   # fresh slice
+${MC_TOOL_PREFIX}__update_subtask({ agent_id: "${agentId}", subtask_id: "<id>", action: "cancel", reason: "<why>" })
+${MC_TOOL_PREFIX}__spawn_subtask({ ... })   # fresh slice
 \`\`\`
 
 **When all subtasks are accepted:**
 \`\`\`
-register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
-update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+${MC_TOOL_PREFIX}__register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
+${MC_TOOL_PREFIX}__update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\`
 
 Reply with \`TASK_COMPLETE: [one line per delegated subtask]\`.`;
@@ -781,15 +793,15 @@ Reply with \`TASK_COMPLETE: [one line per delegated subtask]\`.`;
           normalizedSpec && normalizedSpec.deliverables.length > 0,
         );
         const deliverablesStep = hasStructuredSpec
-          ? `**Step 1 — produce every deliverable in the checklist.** For each spec id (${deliverableExampleIds}), call \`register_deliverable\` with its \`spec_deliverable_id\`:
+          ? `**Step 1 — produce every deliverable in the checklist.** For each spec id (${deliverableExampleIds}), call \`${MC_TOOL_PREFIX}__register_deliverable\` with its \`spec_deliverable_id\`:
 
 \`\`\`
-register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "<path>", spec_deliverable_id: "<id>" })
+${MC_TOOL_PREFIX}__register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "<path>", spec_deliverable_id: "<id>" })
 \`\`\``
           : `**Step 1 — produce and register the deliverable(s).**
 
 \`\`\`
-register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
+${MC_TOOL_PREFIX}__register_deliverable({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", deliverable_type: "file", title: "<title>", path: "${deliverablesDir}/<filename>" })
 \`\`\``;
 
         return `**✅ DEFINITION OF DONE** — every deliverable registered, completion logged, status moved.
@@ -798,15 +810,15 @@ ${deliverablesStep}
 
 **Step 2 — log completion:**
 \`\`\`
-log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "<what you built, one line>" })
+${MC_TOOL_PREFIX}__log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "<what you built, one line>" })
 \`\`\`
 
 **Step 3 — transition the task:**
 \`\`\`
-update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+${MC_TOOL_PREFIX}__update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\`
 
-If \`update_task_status\` returns \`evidence_gate\` with \`missing_deliverable_ids\`, you didn't register enough — produce the missing ones and retry. Do NOT try to force the transition.
+If \`${MC_TOOL_PREFIX}__update_task_status\` returns \`evidence_gate\` with \`missing_deliverable_ids\`, you didn't register enough — produce the missing ones and retry. Do NOT try to force the transition.
 
 Reply with \`TASK_COMPLETE: [deliverables registered]\`.`;
       }
@@ -823,13 +835,13 @@ Reply with \`TASK_COMPLETE: [deliverables registered]\`.`;
 
 **On PASS (all criteria):**
 \`\`\`
-log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "All criteria passed: [<sc-1> ok; <sc-2> ok; …]" })
-update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+${MC_TOOL_PREFIX}__log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "All criteria passed: [<sc-1> ok; <sc-2> ok; …]" })
+${MC_TOOL_PREFIX}__update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\`
 
 **On FAIL (any criterion):**
 \`\`\`
-fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
+${MC_TOOL_PREFIX}__fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
 \`\`\`
 
 Reply with \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed by criterion id]\`.`;
@@ -840,13 +852,13 @@ Reply with \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed by criterion id
 
 **On PASS:**
 \`\`\`
-log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "Verification passed: <summary; criteria verified: [<ids>]>" })
-update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+${MC_TOOL_PREFIX}__log_activity({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", activity_type: "completed", message: "Verification passed: <summary; criteria verified: [<ids>]>" })
+${MC_TOOL_PREFIX}__update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\`
 
 **On FAIL:**
 \`\`\`
-fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
+${MC_TOOL_PREFIX}__fail_task({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", reason: "Failed criteria: <sc-id1>: <what you observed>; …" })
 \`\`\`
 
 Reply with \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed by criterion id]\`.`;
@@ -855,7 +867,7 @@ Reply with \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed by criterio
       // Fallback for unknown roles
       return `**When your work is done:**
 \`\`\`
-update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
+${MC_TOOL_PREFIX}__update_task_status({ agent_id: "${agentId}", task_id: "${taskIdForMcp}", status: "${nextStatus}" })
 \`\`\``;
     }
 
