@@ -52,6 +52,7 @@ import PlanWithPmPanel, { type PlanInitiativeSuggestions } from '@/components/Pl
 import DecomposeWithPmModal from '@/components/DecomposeWithPmModal';
 import { showAlertDialog } from '@/lib/show-alert';
 import { useCurrentWorkspaceId } from '@/components/shell/workspace-context';
+import { CompletionPercentageBar } from '@/components/CompletionPercentageBar';
 
 // Local types (kept separate from src/lib/types.ts so Phase 1 doesn't touch
 // the central type module — Phase 2 can promote these once the broader API
@@ -1407,6 +1408,13 @@ function InitiativeRow({
                 <ClipboardList className="w-3 h-3" />
                 {node.pending_proposal_count} pending
               </span>
+            )}
+            {isContainer && (
+              <CompletionPercentageBar
+                initiativeId={node.id}
+                variant="compact"
+                size="sm"
+              />
             )}
           </div>
           <div
