@@ -116,3 +116,48 @@ export function nextWorkerAttempt(taskId: string, role: string): number {
   );
   return (rows[0]?.n ?? 0) + 1;
 }
+
+/**
+ * Resolve the MCP server namespace prefix that appears in front of every
+ * mission-control tool name in the dispatched agent's catalog.
+ *
+ * Background: the agent's tool catalog enumerates tools as
+ * `<server>__<tool>` (e.g. `sc-mission-control-dev__register_deliverable`)
+ * because openclaw mounts each MCP server under its declared name from
+ * `~/.openclaw/openclaw.json` and namespaces all of its tools. If the
+ * dispatch briefing emits the bare tool name (`register_deliverable(...)`),
+ * the LLM looks for an exact match in the catalog, doesn't find one, and
+ * either falls back to built-in shell tools or silently no-ops. Observed
+ * symptom: 30 tool calls of `exec`/`read`/`write`/`edit` and zero MC tools,
+ * task stuck `in_progress` because `register_deliverable` was never
+ * called → autobouncer marks the session `failed` after the no-progress
+ * timeout.
+ *
+ * The mapping mirrors the per-agent `tools.alsoAllow` rules in
+ * `~/.openclaw/openclaw.json`:
+ *   - `mc-runner-dev`         → `sc-mission-control-dev`
+ *   - `mc-runner`             → `sc-mission-control`
+ *   - `mc-pm-*-dev`           → `sc-mission-control-pm-dev`
+ *   - `mc-pm-*`               → `sc-mission-control-pm`
+ *   - anything else           → defaults to the dev namespace, since
+ *                               unknown gateways in dev environments are
+ *                               expected to mount the dev MCP server.
+ *
+ * Pass the agent that will actually execute the dispatch — for
+ * scope-keyed dispatch that's the runner (`getRunnerAgent()`); legacy
+ * direct dispatch passes the assigned agent.
+ */
+export function mcpToolPrefix(agent: { gateway_agent_id?: string | null } | null | undefined): string {
+  const gw = agent?.gateway_agent_id ?? '';
+  if (gw === 'mc-runner-dev') return 'sc-mission-control-dev';
+  if (gw === 'mc-runner') return 'sc-mission-control';
+  if (gw.startsWith('mc-pm-') && gw.endsWith('-dev')) return 'sc-mission-control-pm-dev';
+  if (gw.startsWith('mc-pm-')) return 'sc-mission-control-pm';
+  // Sensible default for dev environments where the runner hasn't been
+  // resolved yet (e.g. the assigned agent is a role-template row with
+  // `gateway_agent_id = NULL`). Production would flip this to
+  // `sc-mission-control` via NODE_ENV — see the runner-resolution logic
+  // in `getRunnerAgent` for the same pattern.
+  const isDev = process.env.NODE_ENV === 'development' || process.env.MC_ENV === 'dev';
+  return isDev ? 'sc-mission-control-dev' : 'sc-mission-control';
+}
