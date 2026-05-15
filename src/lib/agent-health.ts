@@ -49,14 +49,51 @@ export function checkAgentHealth(agentId: string): AgentHealthState {
     if (!anySession) return 'zombie';
   }
 
-  // Check last REAL activity (exclude health check logs — they reset the clock and prevent stuck detection)
-  const lastActivity = queryOne<{ created_at: string }>(
-    `SELECT created_at FROM task_activities WHERE task_id = ? AND message NOT LIKE 'Agent health:%' ORDER BY created_at DESC LIMIT 1`,
+  // Check last REAL activity. "Real" means the agent did something
+  // operator-visible since the last health-check tick — anything that
+  // proves the LLM is mid-run, not just the heartbeat ping cadence.
+  //
+  // Sources we consider proof-of-life (max timestamp across all):
+  //   1. task_activities (excluding our own 'Agent health: …' log lines
+  //      and the heartbeat-ping rows, which would reset the clock and
+  //      hide a real stall)
+  //   2. task_deliverables — every register_deliverable MCP call lands
+  //      a row here. Without including this, an agent that's actively
+  //      registering deliverables (the most concrete proof-of-life
+  //      signal we have) gets misclassified as `stalled`/`stuck` and
+  //      stomped by a stall-watcher re-dispatch.
+  //   3. agent_notes — take_note MCP calls write breadcrumbs here;
+  //      same "agent is alive and progressing" signal.
+  //
+  // The check is `MAX(created_at)` across the three tables; we then
+  // compare to the threshold the same way as before.
+  const lastActivityRow = queryOne<{ created_at: string }>(
+    `SELECT created_at FROM task_activities
+       WHERE task_id = ?
+         AND message NOT LIKE 'Agent health:%'
+       ORDER BY created_at DESC LIMIT 1`,
     [activeTask.id]
   );
+  const lastDeliverableRow = queryOne<{ created_at: string }>(
+    `SELECT created_at FROM task_deliverables
+       WHERE task_id = ?
+       ORDER BY created_at DESC LIMIT 1`,
+    [activeTask.id]
+  );
+  const lastNoteRow = queryOne<{ created_at: string }>(
+    `SELECT created_at FROM agent_notes
+       WHERE task_id = ?
+         AND archived_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`,
+    [activeTask.id]
+  );
+  const candidates = [lastActivityRow, lastDeliverableRow, lastNoteRow]
+    .map((r) => (r ? new Date(r.created_at).getTime() : 0))
+    .filter((t) => t > 0);
+  const lastActivityAt = candidates.length > 0 ? Math.max(...candidates) : null;
 
-  if (lastActivity) {
-    const minutesSince = (Date.now() - new Date(lastActivity.created_at).getTime()) / 60000;
+  if (lastActivityAt !== null) {
+    const minutesSince = (Date.now() - lastActivityAt) / 60000;
     if (minutesSince > STUCK_THRESHOLD_MINUTES) return 'stuck';
     if (minutesSince > STALL_THRESHOLD_MINUTES) return 'stalled';
   } else {
