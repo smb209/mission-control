@@ -513,7 +513,26 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const isBuilder = !isCoordinator && (!currentStage || currentStage.role === 'builder' || task.status === 'assigned');
     const isTester = !isCoordinator && currentStage?.role === 'tester';
     const isVerifier = !isCoordinator && (currentStage?.role === 'verifier' || currentStage?.role === 'reviewer');
-    const nextStatus = nextStage?.status || 'review';
+    // Convoy-child detection. When workflow_template_id is NULL (PR #346
+    // strips it on convoy children) the task lifecycle is owned by the
+    // convoy machinery, not a stage template. The slice completes by
+    // transitioning straight to `done`; checkConvoyCompletion in
+    // src/lib/convoy.ts auto-promotes the parent task to `review` when
+    // every sibling subtask is `done`. If the briefing says `review` (the
+    // null-workflow fallback) the agent might transition there
+    // prematurely, breaking the auto-promote rail. Worse, observed in
+    // dogfood: the LLM can ignore the briefing entirely and guess
+    // `testing` from generic SDLC intuition — which has no consumer in a
+    // convoy and leaves the task pinging the same builder forever.
+    const isConvoyChild = Boolean(
+      queryOne<{ task_id: string }>(
+        `SELECT task_id FROM convoy_subtasks WHERE task_id = ? LIMIT 1`,
+        [id],
+      ),
+    );
+    const nextStatus = isConvoyChild
+      ? 'done'
+      : nextStage?.status || 'review';
     const failEndpoint = `POST ${missionControlUrl}/api/tasks/${task.id}/fail`;
 
     // Prescribed verification commands (slice 2 of the autonomous-flow
@@ -996,6 +1015,7 @@ ${criteria.length > 0 ? criteria.map(c => `  - ${c}`).join('\n') : '  - (none de
 - **Expected duration:** ${contract.expected_duration_minutes} minutes (due at ${contract.due_at ?? 'unset'})
 - **Check-in cadence:** call \`log_activity\` at least every ${contract.checkin_interval_minutes ?? 15} minutes with a substantive note. Silence past 2\u00D7 cadence = drift alert to coordinator.
 - **Your \`subtask_id\`:** \`${contract.id}\` — referenced automatically by register_deliverable and fail_task.
+- **Terminal status for THIS slice is \`done\`** (NOT \`testing\`, NOT \`review\`). The convoy machinery (\`checkConvoyCompletion\` in src/lib/convoy.ts) auto-promotes the parent task to \`review\` once every sibling subtask is \`done\`. Step 3 of your closing sequence MUST use \`status: "done"\`.
 
 **If the slice is wrong:** do not sub-delegate, do not improvise. Call \`fail_task\` with \`reason: "redecompose: <specific ask>"\`, optionally mail the coordinator with suggestions, and stop. The coordinator will re-plan.
 `;
