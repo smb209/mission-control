@@ -62,6 +62,7 @@ import {
   InlineDate,
 } from '@/components/inline/InlineEdit';
 import { SplitToolbarButton } from '@/components/inline/SplitToolbarButton';
+import { CompletionPercentageBar } from '@/components/CompletionPercentageBar';
 // Reuse the action modals defined alongside the list page — Move / Convert /
 // AddDep / History still make sense as focused dialogs since they have
 // non-trivial side effects beyond a simple field write.
@@ -985,7 +986,14 @@ or "carve out the onboarding flow as its own story first"`}
 
         {/* Children */}
         {initiative.children && initiative.children.length > 0 && (
-          <Section id="children" title={`Children (${initiative.children.length})`}>
+          <Section id="children" title="Children">
+            <div className="mb-3">
+              <CompletionPercentageBar
+                initiativeId={initiative.id}
+                variant="full"
+                size="md"
+              />
+            </div>
             <ul className="space-y-1">
               {initiative.children.map(c => (
                 <li
