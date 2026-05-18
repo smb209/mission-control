@@ -12,16 +12,13 @@
  *   - `percentage`: integer 0–100 (0 when total === 0)
  *   - `label`: human-readable string like "3/7 done"
  *
- * Real-time updates: TODO. MC doesn't currently broadcast
- * `initiative_created` / `_updated` / `_deleted` SSE events, so the
- * hook can't subscribe to a live feed today. The label refreshes on
- * mount and whenever `initiativeId` changes; for in-place updates the
- * parent surface needs to re-key/re-mount, or this hook needs to
- * subscribe to a future initiative-level SSE channel. Either path is a
- * separate piece of work — track via the initiative-events build plan.
+ * Real-time updates: polls `/api/initiatives/:id?include=children`
+ * every 5 seconds so the bar stays current as children transition
+ * between statuses.  Uses an AbortController so the interval is
+ * cleanly cancelled on unmount or when `initiativeId` changes.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export interface CompletionResult {
   done: number;
@@ -29,6 +26,8 @@ export interface CompletionResult {
   percentage: number;
   label: string;
 }
+
+const POLL_MS = 5000;
 
 function computeLabel(done: number, total: number): string {
   if (total === 0) return '0/0';
@@ -40,31 +39,69 @@ function computePercentage(done: number, total: number): number {
   return Math.round((done / total) * 100);
 }
 
+function fetchChildrenData(id: string): Promise<{ done: number; total: number }> {
+  return fetch(`/api/initiatives/${encodeURIComponent(id)}?include=children`)
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((data) => {
+      const children = (data.children ?? []) as Array<{ id: string; status: string }>;
+      const total = children.length;
+      const done = children.filter((c) => c.status === 'done').length;
+      return { done, total };
+    });
+}
+
 export function useCompletionPercentage(initiativeId: string | null): CompletionResult {
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(false);
 
-  const fetchChildren = useCallback(async (id: string) => {
-    try {
-      const res = await fetch(`/api/initiatives/${encodeURIComponent(id)}?include=children`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const children = (data.children ?? []) as Array<{ id: string; status: string }>;
-      setTotal(children.length);
-      setDone(children.filter((c) => c.status === 'done').length);
-    } catch {
-      // Non-fatal — leave stale values until the next mount / id change.
-    }
-  }, []);
-
+  // One-shot fetch on mount / id change, then start polling.
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!initiativeId) {
-      setDone(0);
-      setTotal(0);
-      return;
+      // Use setTimeout to avoid synchronous setState-in-effect warning.
+      const timer = setTimeout(() => {
+        if (mountedRef.current) {
+          setDone(0);
+          setTotal(0);
+        }
+      }, 0);
+      return () => clearTimeout(timer);
     }
-    fetchChildren(initiativeId);
-  }, [initiativeId, fetchChildren]);
+
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const { done: d, total: t } = await fetchChildrenData(initiativeId);
+        if (!cancelled && mountedRef.current) {
+          setDone(d);
+          setTotal(t);
+        }
+      } catch {
+        // Non-fatal — leave stale values until the next tick.
+      }
+    };
+
+    // Initial fetch
+    tick();
+
+    // Poll every 5s
+    intervalRef.current = setInterval(tick, POLL_MS);
+
+    return () => {
+      cancelled = true;
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [initiativeId]);
 
   return {
     done,
